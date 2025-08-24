@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 // Manager handles SSL/TLS certificate loading and management
@@ -19,20 +21,38 @@ type Manager struct {
 	certCache     map[string]*tls.Certificate // Maps certificate file path to certificate
 	hostnameCache map[string]*tls.Certificate // Maps hostname to certificate
 	cacheMutex    sync.RWMutex
-	reloadTime    time.Duration
+	watcher       *fsnotify.Watcher
+	stopChan      chan struct{}
 }
 
 // New creates a new certificate manager
 func New(certPath string) *Manager {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("[certmanager] Warning: Failed to create file watcher: %v. Certificate updates will not be automatic.", err)
+	}
+
 	cm := &Manager{
 		certPath:      certPath,
 		certCache:     make(map[string]*tls.Certificate),
 		hostnameCache: make(map[string]*tls.Certificate),
-		reloadTime:    5 * time.Minute,
+		watcher:       watcher,
+		stopChan:      make(chan struct{}),
 	}
 
 	cm.loadAllCertificates(true)
-	go cm.periodicReload()
+
+	if watcher != nil {
+		err = watcher.Add(certPath)
+		if err != nil {
+			log.Printf("[certmanager] Warning: Failed to watch certificate directory %s: %v", certPath, err)
+			watcher.Close()
+			cm.watcher = nil
+		} else {
+			go cm.watchCertificates()
+			log.Printf("[certmanager] Watching certificate directory %s for changes", certPath)
+		}
+	}
 
 	return cm
 }
@@ -271,11 +291,62 @@ func (cm *Manager) GetTlsConfig() *tls.Config {
 	}
 }
 
-func (cm *Manager) periodicReload() {
-	ticker := time.NewTicker(cm.reloadTime)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		cm.loadAllCertificates(false)
+func (cm *Manager) watchCertificates() {
+	if cm.watcher == nil {
+		return
 	}
+
+	debounce := time.NewTimer(0)
+	<-debounce.C // Drain the initial timer
+	var pendingReload bool
+
+	for {
+		select {
+		case event, ok := <-cm.watcher.Events:
+			if !ok {
+				return
+			}
+
+			// Check if event is for a certificate file
+			if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename) != 0 {
+				fileName := filepath.Base(event.Name)
+				
+				// Ignore temporary files and directories
+				if strings.HasPrefix(fileName, ".") || strings.HasSuffix(fileName, "~") {
+					continue
+				}
+
+				log.Printf("[certmanager] Detected change in certificate file: %s (%v)", fileName, event.Op)
+				
+				// Use debouncing to avoid multiple reloads for rapid changes
+				if !pendingReload {
+					pendingReload = true
+					debounce.Reset(100 * time.Millisecond)
+				}
+			}
+
+		case err, ok := <-cm.watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Printf("[certmanager] File watcher error: %v", err)
+
+		case <-debounce.C:
+			if pendingReload {
+				pendingReload = false
+				cm.loadAllCertificates(false)
+			}
+
+		case <-cm.stopChan:
+			return
+		}
+	}
+}
+
+// Stop gracefully shuts down the certificate manager
+func (cm *Manager) Stop() {
+	if cm.watcher != nil {
+		cm.watcher.Close()
+	}
+	close(cm.stopChan)
 }

@@ -179,6 +179,12 @@ func (p *Manager) Shutdown() error {
 	}
 
 	wg.Wait()
+	
+	// Shutdown certificate manager
+	if p.certManager != nil {
+		p.certManager.Stop()
+	}
+	
 	log.Println("Proxy server shutdown complete")
 	return nil
 }
