@@ -2,20 +2,24 @@ package middleware
 
 import (
 	"bufio"
-	"context"
+	"bytes"
+	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"http-sec-proxy/cache"
 )
 
 // TrustedProxyManager manages dynamically loaded trusted proxy IP ranges
 type TrustedProxyManager struct {
 	urls            []string
 	userAgent       string
-	httpClient      *http.Client
+	cache           *cache.Cache
 	trustedNets     []*net.IPNet
 	refreshInterval time.Duration
 	stopCh          chan struct{}
@@ -24,19 +28,26 @@ type TrustedProxyManager struct {
 }
 
 // NewTrustedProxyManager creates a new trusted proxy manager
-func NewTrustedProxyManager(urls []string, refreshInterval time.Duration, userAgent string) *TrustedProxyManager {
+func NewTrustedProxyManager(urls []string, refreshInterval time.Duration, userAgent string, cacheDir string) *TrustedProxyManager {
 	if refreshInterval <= 0 {
 		refreshInterval = 12 * time.Hour
 	}
 
+	// Create cache instance
+	if cacheDir == "" {
+		log.Printf("[trustedproxy] No cache directory set, will run without caching")
+	}
+	cacheInstance, err := cache.NewCache(cacheDir, userAgent)
+	if err != nil {
+		log.Printf("[trustedproxy] Failed to create cache, will run without caching: %v", err)
+	}
+
 	return &TrustedProxyManager{
 		urls:            urls,
+		cache:           cacheInstance,
 		stopCh:          make(chan struct{}),
 		userAgent:       userAgent,
 		refreshInterval: refreshInterval,
-		httpClient: &http.Client{
-			Timeout: 15 * time.Second,
-		},
 	}
 }
 
@@ -135,24 +146,62 @@ func (tpm *TrustedProxyManager) refresh() error {
 
 // fetchIPList fetches an IP list from a URL
 func (tpm *TrustedProxyManager) fetchIPList(url string) ([]*net.IPNet, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+	var data []byte
+	var err error
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
+	if tpm.cache != nil {
+		data, err = tpm.cache.FetchWithCache(url, tpm.refreshInterval)
+		if err != nil {
+			log.Printf("[trustedproxy] Cache fetch failed for %s: %v", url, err)
+			return nil, err
+		}
+	} else {
+		data, _, err = tpm.fetchDirectly(url)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	req.Header.Set("User-Agent", tpm.userAgent)
+	return tpm.parseIPList(data)
+}
 
-	resp, err := tpm.httpClient.Do(req)
+// fetchDirectly fetches data directly without caching (fallback)
+func (tpm *TrustedProxyManager) fetchDirectly(url string) ([]byte, string, error) {
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+	}
+
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
+	}
+
+	if tpm.userAgent != "" {
+		req.Header.Set("User-Agent", tpm.userAgent)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return body, resp.Header.Get("ETag"), nil
+}
+
+// parseIPList parses IP list data into net.IPNet structs
+func (tpm *TrustedProxyManager) parseIPList(data []byte) ([]*net.IPNet, error) {
 	var nets []*net.IPNet
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())

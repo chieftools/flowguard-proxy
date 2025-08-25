@@ -20,7 +20,7 @@ func TestTrustedProxyManager(t *testing.T) {
 	defer ts.Close()
 
 	// Create manager with test server URL
-	mgr := NewTrustedProxyManager([]string{ts.URL}, 1*time.Hour)
+	mgr := NewTrustedProxyManager([]string{ts.URL}, 1*time.Hour, "test-agent", t.TempDir())
 
 	// Start the manager
 	if err := mgr.Start(); err != nil {
@@ -65,7 +65,7 @@ func TestIPFilterWithTrustedProxy(t *testing.T) {
 
 	// Create IP filter and trusted proxy manager
 	ipFilter := NewIPFilter("test_v4", "test_v6")
-	mgr := NewTrustedProxyManager([]string{ts.URL}, 1*time.Hour)
+	mgr := NewTrustedProxyManager([]string{ts.URL}, 1*time.Hour, "test-agent", t.TempDir())
 
 	if err := mgr.Start(); err != nil {
 		t.Fatalf("Failed to start manager: %v", err)

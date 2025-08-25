@@ -13,6 +13,7 @@ import (
 
 type Config struct {
 	CertPath            string
+	CacheDir            string
 	HTTPPort            string
 	HTTPSPort           string
 	BindAddrs           []string
@@ -40,7 +41,7 @@ func NewManager(config *Config) *Manager {
 	// Create trusted proxy manager if URLs are provided
 	var trustedProxyMgr *middleware.TrustedProxyManager
 	if len(config.TrustedProxyURLs) > 0 {
-		trustedProxyMgr = middleware.NewTrustedProxyManager(config.TrustedProxyURLs, config.TrustedProxyRefresh, config.UserAgent)
+		trustedProxyMgr = middleware.NewTrustedProxyManager(config.TrustedProxyURLs, config.TrustedProxyRefresh, config.UserAgent, config.CacheDir)
 		ipFilter.SetTrustedProxyManager(trustedProxyMgr)
 	}
 

@@ -34,6 +34,7 @@ func main() {
 		trustedProxyRefresh = flag.Duration("trusted-proxy-refresh", 12*time.Hour, "Refresh interval for trusted proxy IP lists")
 
 		// Behavior configuration
+		cacheDir  = flag.String("cache-dir", "/var/cache/http-sec-proxy", "Directory for caching external data")
 		userAgent = flag.String("user-agent", "Alboweb-Proxy/1.0", "The User-Agent & Server header value to use requests and responses")
 	)
 	flag.Parse()
@@ -46,6 +47,7 @@ func main() {
 	}
 
 	proxyManager := proxy.NewManager(&proxy.Config{
+		CacheDir:            *cacheDir,
 		CertPath:            *certPath,
 		HTTPPort:            *httpPort,
 		HTTPSPort:           *httpsPort,
