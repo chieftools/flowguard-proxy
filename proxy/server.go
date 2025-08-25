@@ -102,7 +102,7 @@ func (s *Server) SetupPortRedirect() error {
 		// INPUT rule to allow traffic to the redirection port
 		{iptablesCmd, "-I", "INPUT", "-p", "tcp", "--dport", s.config.bindPort, "-j", "ACCEPT", "-m", "comment", "--comment", "HTTP Security Proxy"},
 		// PREROUTING rule for external traffic - use DNAT for explicit destination
-		{iptablesCmd, "-t", "nat", "-A", "PREROUTING", "-i", iface, "-d", s.config.bindAddr, "-p", "tcp", "--dport", s.config.redirPort, "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", maybeFormatV6Addr(s.config.bindAddr), s.config.bindPort)},
+		{iptablesCmd, "-t", "nat", "-A", "PREROUTING", "-i", iface, "-d", s.config.bindAddr, "-p", "tcp", "--dport", s.config.redirPort, "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", maybeFormatV6Addr(s.config.bindAddr), s.config.bindPort), "-m", "comment", "--comment", "HTTP Security Proxy"},
 	}
 
 	// Execute all commands
@@ -143,7 +143,7 @@ func (s *Server) CleanupPortRedirect() {
 
 	commands := [][]string{
 		// Remove PREROUTING rule
-		{iptablesCmd, "-t", "nat", "-D", "PREROUTING", "-i", iface, "-d", s.config.bindAddr, "-p", "tcp", "--dport", s.config.redirPort, "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", maybeFormatV6Addr(s.config.bindAddr), s.config.bindPort)},
+		{iptablesCmd, "-t", "nat", "-D", "PREROUTING", "-i", iface, "-d", s.config.bindAddr, "-p", "tcp", "--dport", s.config.redirPort, "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", maybeFormatV6Addr(s.config.bindAddr), s.config.bindPort), "-m", "comment", "--comment", "HTTP Security Proxy"},
 		// Remove INPUT rule
 		{iptablesCmd, "-D", "INPUT", "-p", "tcp", "--dport", s.config.bindPort, "-j", "ACCEPT", "-m", "comment", "--comment", "HTTP Security Proxy"},
 	}
