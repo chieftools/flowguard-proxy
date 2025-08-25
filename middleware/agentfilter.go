@@ -5,6 +5,11 @@ import (
 	"net/http"
 )
 
+var blacklistedAgents = []string{
+	"",
+	"Typhoeus - https://github.com/typhoeus/typhoeus",
+}
+
 // AgentFilter implements User-Agent based filtering
 type AgentFilter struct{}
 
@@ -17,9 +22,11 @@ func NewAgentFilter() *AgentFilter {
 func (m *AgentFilter) Process(w http.ResponseWriter, r *http.Request) (bool, int, string) {
 	agent := r.Header.Get("User-Agent")
 
-	if agent == "" {
-		log.Printf("[middleware:agentfilter] blocked request with empty user agent for %s", r.Host)
-		return false, http.StatusBadRequest, "Bad Request"
+	for _, blocked := range blacklistedAgents {
+		if agent == blocked {
+			log.Printf("[middleware:agentfilter] blocked request with user agent '%s' for %s", agent, r.Host)
+			return false, http.StatusForbidden, "Forbidden"
+		}
 	}
 
 	return true, 0, ""
