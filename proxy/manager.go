@@ -15,11 +15,11 @@ type Config struct {
 	CertPath            string
 	HTTPPort            string
 	HTTPSPort           string
-	BindAddrs           []string // IP addresses to bind to
+	BindAddrs           []string
 	NoRedirect          bool
 	IPSetV4Name         string
 	IPSetV6Name         string
-	ServerHeader        string
+	UserAgent           string
 	TrustedProxyURLs    []string
 	TrustedProxyRefresh time.Duration
 }
@@ -40,7 +40,7 @@ func NewManager(config *Config) *Manager {
 	// Create trusted proxy manager if URLs are provided
 	var trustedProxyMgr *middleware.TrustedProxyManager
 	if len(config.TrustedProxyURLs) > 0 {
-		trustedProxyMgr = middleware.NewTrustedProxyManager(config.TrustedProxyURLs, config.TrustedProxyRefresh)
+		trustedProxyMgr = middleware.NewTrustedProxyManager(config.TrustedProxyURLs, config.TrustedProxyRefresh, config.UserAgent)
 		ipFilter.SetTrustedProxyManager(trustedProxyMgr)
 	}
 
@@ -95,7 +95,7 @@ func (p *Manager) Start() error {
 			bindPort:     p.config.HTTPPort,
 			redirPort:    httpRedirPort,
 			middleware:   p.middlewareChain,
-			serverHeader: p.config.ServerHeader,
+			serverHeader: p.config.UserAgent,
 		})
 		p.servers = append(p.servers, httpServer)
 
@@ -110,7 +110,7 @@ func (p *Manager) Start() error {
 			bindPort:     p.config.HTTPSPort,
 			redirPort:    httpsRedirPort,
 			middleware:   p.middlewareChain,
-			serverHeader: p.config.ServerHeader,
+			serverHeader: p.config.UserAgent,
 		})
 		p.servers = append(p.servers, httpsServer)
 
@@ -179,12 +179,12 @@ func (p *Manager) Shutdown() error {
 	}
 
 	wg.Wait()
-	
+
 	// Shutdown certificate manager
 	if p.certManager != nil {
 		p.certManager.Stop()
 	}
-	
+
 	log.Println("Proxy server shutdown complete")
 	return nil
 }

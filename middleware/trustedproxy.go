@@ -14,6 +14,7 @@ import (
 // TrustedProxyManager manages dynamically loaded trusted proxy IP ranges
 type TrustedProxyManager struct {
 	urls            []string
+	userAgent       string
 	httpClient      *http.Client
 	trustedNets     []*net.IPNet
 	refreshInterval time.Duration
@@ -23,7 +24,7 @@ type TrustedProxyManager struct {
 }
 
 // NewTrustedProxyManager creates a new trusted proxy manager
-func NewTrustedProxyManager(urls []string, refreshInterval time.Duration) *TrustedProxyManager {
+func NewTrustedProxyManager(urls []string, refreshInterval time.Duration, userAgent string) *TrustedProxyManager {
 	if refreshInterval <= 0 {
 		refreshInterval = 12 * time.Hour
 	}
@@ -31,6 +32,7 @@ func NewTrustedProxyManager(urls []string, refreshInterval time.Duration) *Trust
 	return &TrustedProxyManager{
 		urls:            urls,
 		stopCh:          make(chan struct{}),
+		userAgent:       userAgent,
 		refreshInterval: refreshInterval,
 		httpClient: &http.Client{
 			Timeout: 15 * time.Second,
@@ -140,6 +142,8 @@ func (tpm *TrustedProxyManager) fetchIPList(url string) ([]*net.IPNet, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	req.Header.Set("User-Agent", tpm.userAgent)
 
 	resp, err := tpm.httpClient.Do(req)
 	if err != nil {

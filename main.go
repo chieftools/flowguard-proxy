@@ -16,11 +16,10 @@ import (
 func main() {
 	var (
 		// Proxy configuration
-		bindAddrs    = flag.String("bind", "", "Comma-separated list of IP addresses to bind to (default: auto-detect public IPs)")
-		httpPort     = flag.String("http-port", "11080", "Port for HTTP proxy server")
-		httpsPort    = flag.String("https-port", "11443", "Port for HTTPS proxy server")
-		noRedirect   = flag.Bool("no-redirect", false, "Skip iptables port redirection setup")
-		serverHeader = flag.String("server", "Alboweb-Proxy/1.0", "The Server header value to use in responses")
+		bindAddrs  = flag.String("bind", "", "Comma-separated list of IP addresses to bind to (default: auto-detect public IPs)")
+		httpPort   = flag.String("http-port", "11080", "Port for HTTP proxy server")
+		httpsPort  = flag.String("https-port", "11443", "Port for HTTPS proxy server")
+		noRedirect = flag.Bool("no-redirect", false, "Skip iptables port redirection setup")
 
 		// Certificate configuration
 		certPath  = flag.String("cert-path", "/opt/psa/var/certificates", "Path to combined certificate files")
@@ -33,6 +32,9 @@ func main() {
 		// Trusted proxy configuration
 		trustedProxyURLs    = flag.String("trusted-proxy-urls", "https://www.cloudflare.com/ips-v4,https://www.cloudflare.com/ips-v6", "Comma-separated list of URLs to fetch trusted proxy IP ranges")
 		trustedProxyRefresh = flag.Duration("trusted-proxy-refresh", 12*time.Hour, "Refresh interval for trusted proxy IP lists")
+
+		// Behavior configuration
+		userAgent = flag.String("user-agent", "Alboweb-Proxy/1.0", "The User-Agent & Server header value to use requests and responses")
 	)
 	flag.Parse()
 
@@ -48,10 +50,10 @@ func main() {
 		HTTPPort:            *httpPort,
 		HTTPSPort:           *httpsPort,
 		BindAddrs:           parseBindAddrsList(*bindAddrs),
+		UserAgent:           *userAgent,
 		NoRedirect:          *noRedirect,
 		IPSetV4Name:         *ipsetV4Name,
 		IPSetV6Name:         *ipsetV6Name,
-		ServerHeader:        *serverHeader,
 		TrustedProxyURLs:    parseBindAddrsList(*trustedProxyURLs),
 		TrustedProxyRefresh: *trustedProxyRefresh,
 	})
