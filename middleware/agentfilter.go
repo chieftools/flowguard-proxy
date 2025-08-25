@@ -7,6 +7,8 @@ import (
 
 var blacklistedAgents = []string{
 	"",
+	"Go-http-client/1.1",
+	"Go-http-client/2.0",
 	"Typhoeus - https://github.com/typhoeus/typhoeus",
 	"Mozilla/5.0 (compatible; Let's Encrypt prevalidation check; +https://www.antagonist.nl)",
 }
