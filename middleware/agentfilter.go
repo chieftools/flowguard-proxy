@@ -8,6 +8,7 @@ import (
 var blacklistedAgents = []string{
 	"",
 	"Typhoeus - https://github.com/typhoeus/typhoeus",
+	"Mozilla/5.0 (compatible; Let's Encrypt prevalidation check; +https://www.antagonist.nl)",
 }
 
 // AgentFilter implements User-Agent based filtering
