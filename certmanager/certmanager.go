@@ -138,6 +138,14 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 			continue
 		}
 
+		// Check if certificate is expired
+		if cert.Leaf != nil && time.Now().After(cert.Leaf.NotAfter) {
+			if verbose {
+				log.Printf("[certmanager] Skipping expired certificate %s (expired %s)", certFile, cert.Leaf.NotAfter.Format("2006-01-02"))
+			}
+			continue
+		}
+
 		tempCertCache[certFile] = cert
 		successCount++
 
