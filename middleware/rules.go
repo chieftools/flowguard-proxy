@@ -39,7 +39,7 @@ func (rm *RulesMiddleware) Process(w http.ResponseWriter, r *http.Request) (bool
 				continue
 			}
 
-			log.Printf("[middleware:rules] Rule %s matched (action: %s) for %s from %s", rule.ID, rule.Action, r.URL.Hostname(), rm.getClientIP(r))
+			log.Printf("[middleware:rules] Rule %s matched (action: %s) for %s from %s", rule.ID, rule.Action, r.Host, rm.getClientIP(r))
 
 			if action.Action == "block" {
 				return false, action.Status, action.Message
