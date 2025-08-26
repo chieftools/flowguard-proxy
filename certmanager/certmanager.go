@@ -40,7 +40,7 @@ func New(certPath string) *Manager {
 		stopChan:      make(chan struct{}),
 	}
 
-	cm.loadAllCertificates(true)
+	cm.loadAllCertificates(false)
 
 	if watcher != nil {
 		err = watcher.Add(certPath)
@@ -318,14 +318,14 @@ func (cm *Manager) watchCertificates() {
 			// Check if event is for a certificate file
 			if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename) != 0 {
 				fileName := filepath.Base(event.Name)
-				
+
 				// Ignore temporary files and directories
 				if strings.HasPrefix(fileName, ".") || strings.HasSuffix(fileName, "~") {
 					continue
 				}
 
 				log.Printf("[certmanager] Detected change in certificate file: %s (%v)", fileName, event.Op)
-				
+
 				// Use debouncing to avoid multiple reloads for rapid changes
 				if !pendingReload {
 					pendingReload = true
