@@ -39,6 +39,7 @@ type Rule struct {
 	Action  string          `json:"action"`
 	Agents  []MatchCriteria `json:"agents,omitempty"`
 	Domains []MatchCriteria `json:"domains,omitempty"`
+	Paths   []MatchCriteria `json:"paths,omitempty"`
 	IPSet   []IPSetCriteria `json:"ipset,omitempty"`
 }
 

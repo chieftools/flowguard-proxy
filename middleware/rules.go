@@ -25,24 +25,21 @@ func NewRulesMiddleware(configMgr *config.Manager) *RulesMiddleware {
 // Process evaluates the request against all rules
 func (rm *RulesMiddleware) Process(w http.ResponseWriter, r *http.Request) (bool, int, string) {
 	rules := rm.configMgr.GetRules()
+
+	// No rules configured, allow by default
 	if rules == nil {
-		// No rules configured, allow by default
 		return true, 0, ""
 	}
 
-	// Evaluate each rule
 	for _, rule := range rules.Match {
 		if rm.matchesRule(r, rule) {
-			// Rule matched, get the action
 			action, exists := rules.Actions[rule.Action]
 			if !exists {
 				log.Printf("[middleware:rules] Rule %s references unknown action: %s", rule.ID, rule.Action)
 				continue
 			}
 
-			// Log the match
-			log.Printf("[middleware:rules] Rule %s matched (action: %s) for %s %s from %s",
-				rule.ID, rule.Action, r.Method, r.URL.Path, rm.getClientIP(r))
+			log.Printf("[middleware:rules] Rule %s matched (action: %s) for %s from %s", rule.ID, rule.Action, r.URL.Hostname(), rm.getClientIP(r))
 
 			if action.Action == "block" {
 				return false, action.Status, action.Message
@@ -72,6 +69,13 @@ func (rm *RulesMiddleware) matchesRule(r *http.Request, rule *config.Rule) bool 
 		}
 	}
 
+	// Check path criteria
+	if len(rule.Paths) > 0 {
+		if !rm.matchesPathCriteria(r, rule.Paths) {
+			return false
+		}
+	}
+
 	// Check IPSet criteria
 	if len(rule.IPSet) > 0 {
 		if !rm.matchesIPSetCriteria(r, rule.IPSet) {
@@ -80,7 +84,7 @@ func (rm *RulesMiddleware) matchesRule(r *http.Request, rule *config.Rule) bool 
 	}
 
 	// If we have at least one criteria type and all matched, return true
-	return len(rule.Agents) > 0 || len(rule.Domains) > 0 || len(rule.IPSet) > 0
+	return len(rule.Agents) > 0 || len(rule.Domains) > 0 || len(rule.Paths) > 0 || len(rule.IPSet) > 0
 }
 
 // matchesAgentCriteria checks if the User-Agent matches any of the criteria
@@ -103,6 +107,19 @@ func (rm *RulesMiddleware) matchesDomainCriteria(r *http.Request, criteria []con
 	// Any domain criteria can match (OR logic within domain criteria)
 	for _, criterion := range criteria {
 		if rm.matchesString(domain, criterion) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesPathCriteria checks if the path matches any of the criteria
+func (rm *RulesMiddleware) matchesPathCriteria(r *http.Request, criteria []config.MatchCriteria) bool {
+	path := r.URL.Path
+
+	// Any path criteria can match (OR logic within path criteria)
+	for _, criterion := range criteria {
+		if rm.matchesString(path, criterion) {
 			return true
 		}
 	}
