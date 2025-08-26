@@ -6,19 +6,25 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
-	
+
 	"http-sec-proxy/cache"
 )
 
 // Config represents the complete application configuration
 type Config struct {
 	Rules          *RulesConfig          `json:"rules"`
+	IPDatabase     *IPDatabaseConfig     `json:"ip_database"`
 	TrustedProxies *TrustedProxiesConfig `json:"trusted_proxies"`
+}
+
+// IPDatabaseConfig represents the IP database configuration
+type IPDatabaseConfig struct {
+	URL                    string `json:"url"`
+	RefreshIntervalSeconds int    `json:"refresh_interval_seconds"`
 }
 
 // TrustedProxiesConfig represents the trusted proxies configuration
@@ -45,7 +51,7 @@ type Rule struct {
 
 // MatchCriteria represents a matching criteria for strings
 type MatchCriteria struct {
-	Match           string `json:"match"`             // "exact", "starts-with", "contains"
+	Match           string `json:"match"` // "exact", "starts-with", "contains"
 	Value           string `json:"value"`
 	CaseInsensitive bool   `json:"case_insensitive,omitempty"` // Optional: perform case-insensitive matching
 }
@@ -84,14 +90,14 @@ func NewManager(configPath string, userAgent string, cacheDir string) (*Manager,
 		c, err = cache.NewCache(cacheDir, userAgent)
 		if err != nil {
 			log.Printf("[config] Failed to create cache: %v", err)
-			// Continue without cache
+			os.Exit(1)
 		}
 	}
 
 	m := &Manager{
+		cache:       c,
 		configPath:  configPath,
 		stopWatcher: make(chan struct{}),
-		cache:       c,
 	}
 
 	// Load initial configuration
@@ -226,50 +232,20 @@ func (m *Manager) fetchIPRangesFromURL(url string) ([]net.IPNet, error) {
 	m.mu.RUnlock()
 
 	// Use cache if available
-	if m.cache != nil {
-		data, err = m.cache.FetchWithCache(url, cacheTTL)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch %s: %w", url, err)
-		}
-	} else {
-		// Fallback to direct fetch without caching
-		log.Printf("[config] Cache not available, fetching %s directly", url)
-		data, err = m.fetchDirectly(url)
-		if err != nil {
-			return nil, err
-		}
+	data, err = m.cache.FetchWithCache(url, cacheTTL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch %s: %w", url, err)
 	}
 
 	// Parse the data (one CIDR per line)
 	return m.parseIPRanges(data, url)
 }
 
-// fetchDirectly fetches data from URL without caching
-func (m *Manager) fetchDirectly(url string) ([]byte, error) {
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-
-	var data []byte
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		data = append(data, scanner.Bytes()...)
-		data = append(data, '\n')
-	}
-	return data, scanner.Err()
-}
-
 // parseIPRanges parses IP ranges from raw data
 func (m *Manager) parseIPRanges(data []byte, source string) ([]net.IPNet, error) {
 	var result []net.IPNet
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	
+
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -312,11 +288,11 @@ func (m *Manager) GetRules() *RulesConfig {
 func (m *Manager) GetRefreshInterval() time.Duration {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	if m.config == nil || m.config.TrustedProxies == nil || m.config.TrustedProxies.RefreshIntervalSeconds <= 0 {
 		return 30 * time.Minute // default
 	}
-	
+
 	return time.Duration(m.config.TrustedProxies.RefreshIntervalSeconds) * time.Second
 }
 
@@ -405,18 +381,16 @@ func (m *Manager) RefreshTrustedProxies() error {
 	}
 
 	// Force cache refresh by clearing old entries for URLs
-	if m.cache != nil {
-		for _, proxy := range config.TrustedProxies.IPNets {
-			if strings.HasPrefix(proxy, "http://") || strings.HasPrefix(proxy, "https://") {
-				// Clear stale cache entries older than the configured TTL
-				if _, timestamp, err := m.cache.LoadFromCache(proxy); err == nil {
-					if time.Since(timestamp) > cacheTTL {
-						m.cache.ClearCacheEntry(proxy)
-						log.Printf("[config] Cleared stale cache entry for %s", proxy)
-					} else {
-						log.Printf("[config] Cache still fresh for %s (age: %v, TTL: %v)", 
-							proxy, time.Since(timestamp), cacheTTL)
-					}
+	for _, proxy := range config.TrustedProxies.IPNets {
+		if strings.HasPrefix(proxy, "http://") || strings.HasPrefix(proxy, "https://") {
+			// Clear stale cache entries older than the configured TTL
+			if _, timestamp, err := m.cache.LoadFromCache(proxy); err == nil {
+				if time.Since(timestamp) > cacheTTL {
+					m.cache.ClearCacheEntry(proxy)
+					log.Printf("[config] Cleared stale cache entry for %s", proxy)
+				} else {
+					log.Printf("[config] Cache still fresh for %s (age: %v, TTL: %v)",
+						proxy, time.Since(timestamp), cacheTTL)
 				}
 			}
 		}
@@ -433,4 +407,63 @@ func (m *Manager) RefreshTrustedProxies() error {
 
 	log.Printf("[config] Refreshed trusted proxy lists (%d networks)", len(trustedProxyIPs))
 	return nil
+}
+
+// GetIPDatabaseRefreshInterval returns the configured refresh interval for the IP database
+func (m *Manager) GetIPDatabaseRefreshInterval() time.Duration {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	
+	if m.config != nil && m.config.IPDatabase != nil && m.config.IPDatabase.RefreshIntervalSeconds > 0 {
+		return time.Duration(m.config.IPDatabase.RefreshIntervalSeconds) * time.Second
+	}
+	
+	// Default to 24 hours if not configured
+	return 24 * time.Hour
+}
+
+// GetIPDatabasePath downloads the IP database if configured and returns the local path
+func (m *Manager) GetIPDatabasePath() (string, error) {
+	m.mu.RLock()
+	var dbURL string
+	var refreshInterval time.Duration
+	if m.config != nil && m.config.IPDatabase != nil {
+		dbURL = m.config.IPDatabase.URL
+		if m.config.IPDatabase.RefreshIntervalSeconds > 0 {
+			refreshInterval = time.Duration(m.config.IPDatabase.RefreshIntervalSeconds) * time.Second
+		}
+	}
+	m.mu.RUnlock()
+	
+	if dbURL == "" {
+		// No database URL configured, use local file if exists
+		if _, err := os.Stat("ipinfo_lite.mmdb"); err == nil {
+			return "ipinfo_lite.mmdb", nil
+		}
+		return "", fmt.Errorf("no IP database configured or found")
+	}
+	
+	// Use cache to download and store the database file
+	if m.cache == nil {
+		return "", fmt.Errorf("cache not initialized")
+	}
+	
+	// Use configured TTL or default to 24 hours
+	cacheTTL := 24 * time.Hour
+	if refreshInterval > 0 {
+		cacheTTL = refreshInterval
+	}
+	
+	// Download/retrieve from cache
+	cachedPath, err := m.cache.FetchFileWithCache(dbURL, cacheTTL)
+	if err != nil {
+		// Fallback to local file if download fails
+		if _, err := os.Stat("ipinfo_lite.mmdb"); err == nil {
+			log.Printf("[config] Failed to download IP database, using local file: %v", err)
+			return "ipinfo_lite.mmdb", nil
+		}
+		return "", fmt.Errorf("failed to download IP database: %w", err)
+	}
+	
+	return cachedPath, nil
 }

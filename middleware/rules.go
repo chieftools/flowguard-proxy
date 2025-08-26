@@ -39,7 +39,8 @@ func (rm *RulesMiddleware) Process(w http.ResponseWriter, r *http.Request) (bool
 				continue
 			}
 
-			log.Printf("[middleware:rules] Rule %s matched (action: %s) for %s from %s", rule.ID, rule.Action, r.Host, rm.getClientIP(r))
+			clientIP := GetClientIP(r)
+			log.Printf("[middleware:rules] Rule %s matched (action: %s) for %s from %s", rule.ID, rule.Action, r.Host, clientIP)
 
 			if action.Action == "block" {
 				return false, action.Status, action.Message
@@ -128,7 +129,8 @@ func (rm *RulesMiddleware) matchesPathCriteria(r *http.Request, criteria []confi
 
 // matchesIPSetCriteria checks if the client IP is in any of the specified ipsets
 func (rm *RulesMiddleware) matchesIPSetCriteria(r *http.Request, criteria []config.IPSetCriteria) bool {
-	clientIP := rm.getClientIP(r)
+	clientIP := GetClientIP(r)
+
 	host, _, err := net.SplitHostPort(clientIP)
 	if err != nil {
 		host = clientIP
@@ -180,47 +182,4 @@ func (rm *RulesMiddleware) matchesString(value string, criterion config.MatchCri
 		log.Printf("[middleware:rules] Unknown match type: %s", criterion.Match)
 		return false
 	}
-}
-
-// getClientIP extracts the real client IP considering trusted proxies
-func (rm *RulesMiddleware) getClientIP(r *http.Request) string {
-	// Get the immediate remote address
-	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		remoteIP = r.RemoteAddr
-	}
-
-	// If the remote IP is from a trusted proxy,
-	// then we can trust the X-Forwarded-For or X-Real-IP headers
-	if rm.configMgr.IsTrustedProxy(remoteIP) {
-		// Check X-Forwarded-For header
-		xff := r.Header.Get("X-Forwarded-For")
-
-		if xff != "" {
-			// Get the rightmost non-trusted IP from the chain
-			ips := strings.Split(xff, ",")
-
-			// Traverse from right to left to find the first non-trusted IP
-			for i := len(ips) - 1; i >= 0; i-- {
-				ip := strings.TrimSpace(ips[i])
-				if !rm.configMgr.IsTrustedProxy(ip) {
-					return ip
-				}
-			}
-
-			// If all IPs in the chain are trusted, use the leftmost one
-			if len(ips) > 0 {
-				return strings.TrimSpace(ips[0])
-			}
-		}
-
-		// Check X-Real-IP header
-		xri := r.Header.Get("X-Real-IP")
-		if xri != "" {
-			return xri
-		}
-	}
-
-	// If not from a trusted proxy, or no headers present, use the remote address
-	return remoteIP
 }

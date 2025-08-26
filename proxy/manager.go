@@ -25,10 +25,11 @@ type Config struct {
 
 type Manager struct {
 	config          *Config
-	configMgr       *config.Manager
 	servers         []*Server
+	configMgr       *config.Manager
 	certManager     *certmanager.Manager
 	middlewareChain *middleware.Chain
+	ipLookup        *middleware.IPLookupMiddleware
 	mu              sync.RWMutex
 }
 
@@ -43,10 +44,20 @@ func NewManager(cfg *Config) *Manager {
 	// Start config file watcher for hot-reload
 	configMgr.StartWatcher(10 * time.Second)
 
+	// Add IP enrichment middleware first to enrich all requests with IP/ASN data
+	var ipLookup *middleware.IPLookupMiddleware
+	ipLookup, err = middleware.NewIPLookupMiddleware(configMgr)
+	if err != nil {
+		log.Printf("Failed to initialize IP enrichment middleware: %v", err)
+		os.Exit(1)
+	}
+
 	// Create middleware chain with config-based middleware
 	middlewareChain := middleware.NewChain()
-	rulesMiddleware := middleware.NewRulesMiddleware(configMgr)
-	middlewareChain.Add(rulesMiddleware)
+
+	// Add middlewares in order
+	middlewareChain.Add(ipLookup)
+	middlewareChain.Add(middleware.NewRulesMiddleware(configMgr))
 
 	// Determine bind addresses based on configuration
 	bindAddrs := cfg.BindAddrs
@@ -64,6 +75,7 @@ func NewManager(cfg *Config) *Manager {
 
 	return &Manager{
 		config:          cfg,
+		ipLookup:        ipLookup,
 		configMgr:       configMgr,
 		certManager:     certmanager.New(cfg.CertPath),
 		middlewareChain: middlewareChain,
@@ -71,32 +83,50 @@ func NewManager(cfg *Config) *Manager {
 }
 
 func (p *Manager) Start() error {
-	// Start trusted proxy refresh if using config manager
-	if p.configMgr != nil {
-		// Get refresh interval from config
-		refreshInterval := p.configMgr.GetRefreshInterval()
-		log.Printf("Starting trusted proxy refresh with interval: %v", refreshInterval)
-		
-		// Periodically refresh trusted proxy lists from URLs
-		go func() {
-			ticker := time.NewTicker(refreshInterval)
-			defer ticker.Stop()
+	trustedProxiesRefreshInterval := p.configMgr.GetRefreshInterval()
+	log.Printf("Starting trusted proxy refresh with interval: %v", trustedProxiesRefreshInterval)
 
-			for range ticker.C {
-				// Check if interval has changed in config
-				newInterval := p.configMgr.GetRefreshInterval()
-				if newInterval != refreshInterval {
-					log.Printf("Refresh interval changed from %v to %v", refreshInterval, newInterval)
-					ticker.Reset(newInterval)
-					refreshInterval = newInterval
-				}
-				
-				if err := p.configMgr.RefreshTrustedProxies(); err != nil {
-					log.Printf("Failed to refresh trusted proxy lists: %v", err)
-				}
+	// Periodically refresh trusted proxy lists from URLs
+	go func() {
+		ticker := time.NewTicker(trustedProxiesRefreshInterval)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			// Check if interval has changed in config
+			newInterval := p.configMgr.GetRefreshInterval()
+			if newInterval != trustedProxiesRefreshInterval {
+				log.Printf("Refresh interval changed from %v to %v", trustedProxiesRefreshInterval, newInterval)
+				ticker.Reset(newInterval)
+				trustedProxiesRefreshInterval = newInterval
 			}
-		}()
-	}
+
+			if err := p.configMgr.RefreshTrustedProxies(); err != nil {
+				log.Printf("Failed to refresh trusted proxy lists: %v", err)
+			}
+		}
+	}()
+
+	ipDbRefreshInterval := p.configMgr.GetIPDatabaseRefreshInterval()
+	log.Printf("Starting IP database refresh with interval: %v", ipDbRefreshInterval)
+
+	// Periodically refresh IP database
+	go func() {
+		ticker := time.NewTicker(ipDbRefreshInterval)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			// Check if interval has changed in config
+			newInterval := p.configMgr.GetIPDatabaseRefreshInterval()
+			if newInterval != ipDbRefreshInterval {
+				log.Printf("IP database refresh interval changed from %v to %v", ipDbRefreshInterval, newInterval)
+				ticker.Reset(newInterval)
+				ipDbRefreshInterval = newInterval
+			}
+
+			// Reload IP database (checks for updates)
+			p.ipLookup.ReloadDatabase()
+		}
+	}()
 
 	errChan := make(chan error, len(p.config.BindAddrs)*2)
 
@@ -168,15 +198,13 @@ func (p *Manager) Start() error {
 func (p *Manager) Shutdown() error {
 	log.Println("Shutting down proxy server...")
 
-	// Stop config watcher if running
-	if p.configMgr != nil {
-		p.configMgr.StopWatcher()
-	}
-
 	// Remove the port redirection rules to stop new incoming connections
 	for _, server := range p.servers {
 		server.CleanupPortRedirect()
 	}
+
+	// Stop config watcher if running
+	p.configMgr.StopWatcher()
 
 	// Small delay before we shutdown the servers
 	time.Sleep(100 * time.Millisecond)
@@ -198,10 +226,11 @@ func (p *Manager) Shutdown() error {
 
 	wg.Wait()
 
+	// Close IP lookup database if open
+	p.ipLookup.Close()
+
 	// Shutdown certificate manager
-	if p.certManager != nil {
-		p.certManager.Stop()
-	}
+	p.certManager.Stop()
 
 	log.Println("Proxy server shutdown complete")
 	return nil
