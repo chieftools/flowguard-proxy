@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"http-sec-proxy/certmanager"
 	"http-sec-proxy/proxy"
@@ -25,17 +24,10 @@ func main() {
 		certPath  = flag.String("cert-path", "/opt/psa/var/certificates", "Path to combined certificate files")
 		testCerts = flag.Bool("test-certs", false, "Test loading all certificates and exit")
 
-		// Middleware: ipfilter
-		ipsetV4Name = flag.String("ipset-v4", "abuseipdb_v4", "Name of the IPv4 ipset blocklist")
-		ipsetV6Name = flag.String("ipset-v6", "abuseipdb_v6", "Name of the IPv6 ipset blocklist")
-
-		// Trusted proxy configuration
-		trustedProxyURLs    = flag.String("trusted-proxy-urls", "https://www.cloudflare.com/ips-v4,https://www.cloudflare.com/ips-v6", "Comma-separated list of URLs to fetch trusted proxy IP ranges")
-		trustedProxyRefresh = flag.Duration("trusted-proxy-refresh", 12*time.Hour, "Refresh interval for trusted proxy IP lists")
-
 		// Behavior configuration
-		cacheDir  = flag.String("cache-dir", "/var/cache/http-sec-proxy", "Directory for caching external data")
-		userAgent = flag.String("user-agent", "Alboweb-Proxy/1.0", "The User-Agent & Server header value to use requests and responses")
+		cacheDir   = flag.String("cache-dir", "/var/cache/http-sec-proxy", "Directory for caching external data")
+		userAgent  = flag.String("user-agent", "Alboweb-Proxy/1.0", "The User-Agent & Server header value to use requests and responses")
+		configFile = flag.String("config", "config.json", "Path to the configuration file")
 	)
 	flag.Parse()
 
@@ -47,17 +39,14 @@ func main() {
 	}
 
 	proxyManager := proxy.NewManager(&proxy.Config{
-		CacheDir:            *cacheDir,
-		CertPath:            *certPath,
-		HTTPPort:            *httpPort,
-		HTTPSPort:           *httpsPort,
-		BindAddrs:           parseBindAddrsList(*bindAddrs),
-		UserAgent:           *userAgent,
-		NoRedirect:          *noRedirect,
-		IPSetV4Name:         *ipsetV4Name,
-		IPSetV6Name:         *ipsetV6Name,
-		TrustedProxyURLs:    parseBindAddrsList(*trustedProxyURLs),
-		TrustedProxyRefresh: *trustedProxyRefresh,
+		CacheDir:   *cacheDir,
+		CertPath:   *certPath,
+		HTTPPort:   *httpPort,
+		HTTPSPort:  *httpsPort,
+		BindAddrs:  parseBindAddrsList(*bindAddrs),
+		UserAgent:  *userAgent,
+		NoRedirect: *noRedirect,
+		ConfigFile: *configFile,
 	})
 
 	sigChan := make(chan os.Signal, 1)

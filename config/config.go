@@ -1,0 +1,426 @@
+package config
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"time"
+	
+	"http-sec-proxy/cache"
+)
+
+// Config represents the complete application configuration
+type Config struct {
+	Rules          *RulesConfig          `json:"rules"`
+	TrustedProxies *TrustedProxiesConfig `json:"trusted_proxies"`
+}
+
+// TrustedProxiesConfig represents the trusted proxies configuration
+type TrustedProxiesConfig struct {
+	IPNets                 []string `json:"ipnets"`
+	RefreshIntervalSeconds int      `json:"refresh_interval_seconds"`
+}
+
+// RulesConfig represents the rules configuration section
+type RulesConfig struct {
+	Match   []Rule             `json:"match"`
+	Actions map[string]*Action `json:"actions"`
+}
+
+// Rule represents a single matching rule
+type Rule struct {
+	Action  string          `json:"action"`
+	Agents  []MatchCriteria `json:"agents,omitempty"`
+	Domains []MatchCriteria `json:"domains,omitempty"`
+	IPSet   []IPSetCriteria `json:"ipset,omitempty"`
+}
+
+// MatchCriteria represents a matching criteria for strings
+type MatchCriteria struct {
+	Match string `json:"match"` // "exact", "starts-with", "contains"
+	Value string `json:"value"`
+}
+
+// IPSetCriteria represents an ipset matching criteria
+type IPSetCriteria struct {
+	Family int    `json:"family"` // 4 or 6
+	Value  string `json:"value"`  // ipset name
+}
+
+// Action represents an action to take when a rule matches
+type Action struct {
+	Action  string `json:"action"`  // "block"
+	Status  int    `json:"status"`  // HTTP status code
+	Message string `json:"message"` // Response message
+}
+
+// Manager manages the configuration with hot-reload support
+type Manager struct {
+	configPath      string
+	config          *Config
+	trustedProxyIPs []net.IPNet
+	mu              sync.RWMutex
+	lastModified    time.Time
+	onChange        func(*Config)
+	stopWatcher     chan struct{}
+	cache           *cache.Cache
+}
+
+// NewManager creates a new configuration manager
+func NewManager(configPath string, userAgent string, cacheDir string) (*Manager, error) {
+	// Create cache if cache directory is provided
+	var c *cache.Cache
+	if cacheDir != "" {
+		var err error
+		c, err = cache.NewCache(cacheDir, userAgent)
+		if err != nil {
+			log.Printf("[config] Failed to create cache: %v", err)
+			// Continue without cache
+		}
+	}
+
+	m := &Manager{
+		configPath:  configPath,
+		stopWatcher: make(chan struct{}),
+		cache:       c,
+	}
+
+	// Load initial configuration
+	if err := m.Load(); err != nil {
+		return nil, err
+	}
+
+	return m, nil
+}
+
+// Load loads or reloads the configuration from disk
+func (m *Manager) Load() error {
+	// Check file info
+	info, err := os.Stat(m.configPath)
+	if err != nil {
+		return fmt.Errorf("failed to stat config file: %w", err)
+	}
+
+	// Read file
+	data, err := os.ReadFile(m.configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Parse JSON
+	var config Config
+	if err := json.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("failed to parse config JSON: %w", err)
+	}
+
+	// Parse trusted proxy IPs and fetch from URLs
+	var trustedProxyIPs []net.IPNet
+	if config.TrustedProxies != nil {
+		trustedProxyIPs, err = m.parseTrustedProxies(config.TrustedProxies.IPNets)
+		if err != nil {
+			return fmt.Errorf("failed to parse trusted proxies: %w", err)
+		}
+	}
+
+	// Update configuration atomically
+	m.mu.Lock()
+	oldConfig := m.config
+	m.config = &config
+	m.trustedProxyIPs = trustedProxyIPs
+	m.lastModified = info.ModTime()
+	m.mu.Unlock()
+
+	// Notify change listener if configured and config changed
+	if m.onChange != nil && oldConfig != nil {
+		m.onChange(&config)
+	}
+
+	log.Printf("[config] Loaded configuration from %s (rules: %d, trusted proxies: %d networks)",
+		m.configPath, len(config.Rules.Match), len(trustedProxyIPs))
+
+	return nil
+}
+
+// parseTrustedProxies parses trusted proxy configuration
+func (m *Manager) parseTrustedProxies(proxies []string) ([]net.IPNet, error) {
+	var result []net.IPNet
+	seenNetworks := make(map[string]bool)
+
+	for _, proxy := range proxies {
+		if strings.HasPrefix(proxy, "http://") || strings.HasPrefix(proxy, "https://") {
+			// Fetch IP ranges from URL
+			ranges, err := m.fetchIPRangesFromURL(proxy)
+			if err != nil {
+				log.Printf("[config] Failed to fetch trusted proxies from %s: %v", proxy, err)
+				continue
+			}
+			for _, r := range ranges {
+				key := r.String()
+				if !seenNetworks[key] {
+					result = append(result, r)
+					seenNetworks[key] = true
+				}
+			}
+		} else {
+			// Parse as IP or CIDR
+			var ipNet net.IPNet
+			if strings.Contains(proxy, "/") {
+				// Parse as CIDR
+				_, network, err := net.ParseCIDR(proxy)
+				if err != nil {
+					return nil, fmt.Errorf("invalid CIDR %s: %w", proxy, err)
+				}
+				ipNet = *network
+			} else {
+				// Parse as single IP
+				ip := net.ParseIP(proxy)
+				if ip == nil {
+					return nil, fmt.Errorf("invalid IP address: %s", proxy)
+				}
+				// Create a /32 or /128 network for single IP
+				if ip.To4() != nil {
+					ipNet = net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}
+				} else {
+					ipNet = net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}
+				}
+			}
+
+			key := ipNet.String()
+			if !seenNetworks[key] {
+				result = append(result, ipNet)
+				seenNetworks[key] = true
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// fetchIPRangesFromURL fetches IP ranges from a URL with caching
+func (m *Manager) fetchIPRangesFromURL(url string) ([]net.IPNet, error) {
+	var data []byte
+	var err error
+
+	// Get cache TTL from config
+	cacheTTL := 24 * time.Hour // default
+	m.mu.RLock()
+	if m.config != nil && m.config.TrustedProxies != nil && m.config.TrustedProxies.RefreshIntervalSeconds > 0 {
+		cacheTTL = time.Duration(m.config.TrustedProxies.RefreshIntervalSeconds) * time.Second
+	}
+	m.mu.RUnlock()
+
+	// Use cache if available
+	if m.cache != nil {
+		data, err = m.cache.FetchWithCache(url, cacheTTL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch %s: %w", url, err)
+		}
+	} else {
+		// Fallback to direct fetch without caching
+		log.Printf("[config] Cache not available, fetching %s directly", url)
+		data, err = m.fetchDirectly(url)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Parse the data (one CIDR per line)
+	return m.parseIPRanges(data, url)
+}
+
+// fetchDirectly fetches data from URL without caching
+func (m *Manager) fetchDirectly(url string) ([]byte, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	var data []byte
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		data = append(data, scanner.Bytes()...)
+		data = append(data, '\n')
+	}
+	return data, scanner.Err()
+}
+
+// parseIPRanges parses IP ranges from raw data
+func (m *Manager) parseIPRanges(data []byte, source string) ([]net.IPNet, error) {
+	var result []net.IPNet
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		_, network, err := net.ParseCIDR(line)
+		if err != nil {
+			log.Printf("[config] Invalid CIDR from %s: %s", source, line)
+			continue
+		}
+		result = append(result, *network)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// GetConfig returns a copy of the current configuration
+func (m *Manager) GetConfig() *Config {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config
+}
+
+// GetRules returns the current rules configuration
+func (m *Manager) GetRules() *RulesConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.config == nil {
+		return nil
+	}
+	return m.config.Rules
+}
+
+// GetRefreshInterval returns the configured refresh interval for trusted proxies
+func (m *Manager) GetRefreshInterval() time.Duration {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	
+	if m.config == nil || m.config.TrustedProxies == nil || m.config.TrustedProxies.RefreshIntervalSeconds <= 0 {
+		return 30 * time.Minute // default
+	}
+	
+	return time.Duration(m.config.TrustedProxies.RefreshIntervalSeconds) * time.Second
+}
+
+// IsTrustedProxy checks if an IP is from a trusted proxy
+func (m *Manager) IsTrustedProxy(ip string) bool {
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		return false
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, network := range m.trustedProxyIPs {
+		if network.Contains(parsedIP) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// OnChange sets a callback to be called when configuration changes
+func (m *Manager) OnChange(callback func(*Config)) {
+	m.onChange = callback
+}
+
+// StartWatcher starts watching the configuration file for changes
+func (m *Manager) StartWatcher(interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				m.checkAndReload()
+			case <-m.stopWatcher:
+				return
+			}
+		}
+	}()
+}
+
+// checkAndReload checks if the config file has changed and reloads if necessary
+func (m *Manager) checkAndReload() {
+	info, err := os.Stat(m.configPath)
+	if err != nil {
+		log.Printf("[config] Failed to stat config file: %v", err)
+		return
+	}
+
+	m.mu.RLock()
+	lastMod := m.lastModified
+	m.mu.RUnlock()
+
+	if info.ModTime().After(lastMod) {
+		log.Printf("[config] Configuration file changed, reloading...")
+		if err := m.Load(); err != nil {
+			log.Printf("[config] Failed to reload configuration: %v", err)
+		} else {
+			log.Printf("[config] Configuration reloaded successfully")
+		}
+	}
+}
+
+// StopWatcher stops the configuration file watcher
+func (m *Manager) StopWatcher() {
+	close(m.stopWatcher)
+}
+
+// RefreshTrustedProxies refreshes trusted proxy lists from URLs
+func (m *Manager) RefreshTrustedProxies() error {
+	m.mu.RLock()
+	config := m.config
+	m.mu.RUnlock()
+
+	if config == nil || config.TrustedProxies == nil {
+		return nil
+	}
+
+	// Get cache TTL from config
+	cacheTTL := 24 * time.Hour // default
+	if config.TrustedProxies.RefreshIntervalSeconds > 0 {
+		cacheTTL = time.Duration(config.TrustedProxies.RefreshIntervalSeconds) * time.Second
+	}
+
+	// Force cache refresh by clearing old entries for URLs
+	if m.cache != nil {
+		for _, proxy := range config.TrustedProxies.IPNets {
+			if strings.HasPrefix(proxy, "http://") || strings.HasPrefix(proxy, "https://") {
+				// Clear stale cache entries older than the configured TTL
+				if _, timestamp, err := m.cache.LoadFromCache(proxy); err == nil {
+					if time.Since(timestamp) > cacheTTL {
+						m.cache.ClearCacheEntry(proxy)
+						log.Printf("[config] Cleared stale cache entry for %s", proxy)
+					} else {
+						log.Printf("[config] Cache still fresh for %s (age: %v, TTL: %v)", 
+							proxy, time.Since(timestamp), cacheTTL)
+					}
+				}
+			}
+		}
+	}
+
+	trustedProxyIPs, err := m.parseTrustedProxies(config.TrustedProxies.IPNets)
+	if err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	m.trustedProxyIPs = trustedProxyIPs
+	m.mu.Unlock()
+
+	log.Printf("[config] Refreshed trusted proxy lists (%d networks)", len(trustedProxyIPs))
+	return nil
+}

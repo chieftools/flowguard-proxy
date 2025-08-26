@@ -8,50 +8,48 @@ import (
 	"time"
 
 	"http-sec-proxy/certmanager"
+	"http-sec-proxy/config"
 	"http-sec-proxy/middleware"
 )
 
 type Config struct {
-	CertPath            string
-	CacheDir            string
-	HTTPPort            string
-	HTTPSPort           string
-	BindAddrs           []string
-	NoRedirect          bool
-	IPSetV4Name         string
-	IPSetV6Name         string
-	UserAgent           string
-	TrustedProxyURLs    []string
-	TrustedProxyRefresh time.Duration
+	CertPath   string
+	CacheDir   string
+	HTTPPort   string
+	HTTPSPort  string
+	BindAddrs  []string
+	UserAgent  string
+	NoRedirect bool
+	ConfigFile string
 }
 
 type Manager struct {
 	config          *Config
+	configMgr       *config.Manager
 	servers         []*Server
 	certManager     *certmanager.Manager
 	middlewareChain *middleware.Chain
-	trustedProxyMgr *middleware.TrustedProxyManager
 	mu              sync.RWMutex
 }
 
-func NewManager(config *Config) *Manager {
-	// Create IP filter
-	ipFilter := middleware.NewIPFilter(config.IPSetV4Name, config.IPSetV6Name)
-
-	// Create trusted proxy manager if URLs are provided
-	var trustedProxyMgr *middleware.TrustedProxyManager
-	if len(config.TrustedProxyURLs) > 0 {
-		trustedProxyMgr = middleware.NewTrustedProxyManager(config.TrustedProxyURLs, config.TrustedProxyRefresh, config.UserAgent, config.CacheDir)
-		ipFilter.SetTrustedProxyManager(trustedProxyMgr)
+func NewManager(cfg *Config) *Manager {
+	// Create configuration manager
+	configMgr, err := config.NewManager(cfg.ConfigFile, cfg.UserAgent, cfg.CacheDir)
+	if err != nil {
+		log.Printf("Failed to load configuration from %s: %v", cfg.ConfigFile, err)
+		os.Exit(1)
 	}
 
-	// Create middleware chain
+	// Start config file watcher for hot-reload
+	configMgr.StartWatcher(10 * time.Second)
+
+	// Create middleware chain with config-based middleware
 	middlewareChain := middleware.NewChain()
-	middlewareChain.Add(ipFilter)
-	middlewareChain.Add(middleware.NewAgentFilter())
+	rulesMiddleware := middleware.NewRulesMiddleware(configMgr)
+	middlewareChain.Add(rulesMiddleware)
 
 	// Determine bind addresses based on configuration
-	bindAddrs := config.BindAddrs
+	bindAddrs := cfg.BindAddrs
 	if len(bindAddrs) == 0 {
 		// Default: Get all public IP addresses on the machine
 		publicIPs, err := getPublicIPAddresses()
@@ -61,24 +59,43 @@ func NewManager(config *Config) *Manager {
 		}
 
 		log.Printf("Auto-detected %d public IP address(es) for binding", len(publicIPs))
-		config.BindAddrs = publicIPs
+		cfg.BindAddrs = publicIPs
 	}
 
 	return &Manager{
-		config:          config,
-		certManager:     certmanager.New(config.CertPath),
+		config:          cfg,
+		configMgr:       configMgr,
+		certManager:     certmanager.New(cfg.CertPath),
 		middlewareChain: middlewareChain,
-		trustedProxyMgr: trustedProxyMgr,
 	}
 }
 
 func (p *Manager) Start() error {
-	// Start trusted proxy manager if configured
-	if p.trustedProxyMgr != nil {
-		if err := p.trustedProxyMgr.Start(); err != nil {
-			return err
-		}
-		log.Println("Trusted proxy manager started")
+	// Start trusted proxy refresh if using config manager
+	if p.configMgr != nil {
+		// Get refresh interval from config
+		refreshInterval := p.configMgr.GetRefreshInterval()
+		log.Printf("Starting trusted proxy refresh with interval: %v", refreshInterval)
+		
+		// Periodically refresh trusted proxy lists from URLs
+		go func() {
+			ticker := time.NewTicker(refreshInterval)
+			defer ticker.Stop()
+
+			for range ticker.C {
+				// Check if interval has changed in config
+				newInterval := p.configMgr.GetRefreshInterval()
+				if newInterval != refreshInterval {
+					log.Printf("Refresh interval changed from %v to %v", refreshInterval, newInterval)
+					ticker.Reset(newInterval)
+					refreshInterval = newInterval
+				}
+				
+				if err := p.configMgr.RefreshTrustedProxies(); err != nil {
+					log.Printf("Failed to refresh trusted proxy lists: %v", err)
+				}
+			}
+		}()
 	}
 
 	errChan := make(chan error, len(p.config.BindAddrs)*2)
@@ -151,9 +168,9 @@ func (p *Manager) Start() error {
 func (p *Manager) Shutdown() error {
 	log.Println("Shutting down proxy server...")
 
-	// Stop trusted proxy manager if running
-	if p.trustedProxyMgr != nil {
-		p.trustedProxyMgr.Stop()
+	// Stop config watcher if running
+	if p.configMgr != nil {
+		p.configMgr.StopWatcher()
 	}
 
 	// Remove the port redirection rules to stop new incoming connections
