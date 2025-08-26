@@ -161,13 +161,21 @@ func (rm *RulesMiddleware) matchesIPSetCriteria(r *http.Request, criteria []conf
 
 // matchesString checks if a string matches the given criteria
 func (rm *RulesMiddleware) matchesString(value string, criterion config.MatchCriteria) bool {
+	// Apply case-insensitive matching if requested
+	compareValue := value
+	criterionValue := criterion.Value
+	if criterion.CaseInsensitive {
+		compareValue = strings.ToLower(value)
+		criterionValue = strings.ToLower(criterion.Value)
+	}
+
 	switch criterion.Match {
 	case "exact":
-		return value == criterion.Value
+		return compareValue == criterionValue
 	case "starts-with":
-		return strings.HasPrefix(value, criterion.Value)
+		return strings.HasPrefix(compareValue, criterionValue)
 	case "contains":
-		return strings.Contains(value, criterion.Value)
+		return strings.Contains(compareValue, criterionValue)
 	default:
 		log.Printf("[middleware:rules] Unknown match type: %s", criterion.Match)
 		return false

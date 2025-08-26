@@ -45,8 +45,9 @@ type Rule struct {
 
 // MatchCriteria represents a matching criteria for strings
 type MatchCriteria struct {
-	Match string `json:"match"` // "exact", "starts-with", "contains"
-	Value string `json:"value"`
+	Match           string `json:"match"`             // "exact", "starts-with", "contains"
+	Value           string `json:"value"`
+	CaseInsensitive bool   `json:"case_insensitive,omitempty"` // Optional: perform case-insensitive matching
 }
 
 // IPSetCriteria represents an ipset matching criteria
