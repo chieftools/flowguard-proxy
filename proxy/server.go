@@ -18,6 +18,7 @@ import (
 
 type ServerConfig struct {
 	scheme       string
+	verbose      bool
 	bindAddr     string
 	bindPort     string
 	redirPort    string
@@ -216,7 +217,9 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 		return nil
 	}
 
-	log.Printf("[%s:%s] routing request for %s", s.config.bindAddr, s.config.bindPort, proxyHost)
+	if s.config.verbose {
+		log.Printf("[%s:%s] routing request for %s", s.config.bindAddr, s.config.bindPort, proxyHost)
+	}
 
 	return proxy
 }

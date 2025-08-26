@@ -25,6 +25,7 @@ func main() {
 		testCerts = flag.Bool("test-certs", false, "Test loading all certificates and exit")
 
 		// Behavior configuration
+		verbose    = flag.Bool("verbose", false, "Enable more verbose output")
 		cacheDir   = flag.String("cache-dir", "/var/cache/http-sec-proxy", "Directory for caching external data")
 		userAgent  = flag.String("user-agent", "Alboweb-Proxy/1.0", "The User-Agent & Server header value to use requests and responses")
 		configFile = flag.String("config", "config.json", "Path to the configuration file")
@@ -39,6 +40,7 @@ func main() {
 	}
 
 	proxyManager := proxy.NewManager(&proxy.Config{
+		Verbose:    *verbose,
 		CacheDir:   *cacheDir,
 		CertPath:   *certPath,
 		HTTPPort:   *httpPort,
