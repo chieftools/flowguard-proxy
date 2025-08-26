@@ -29,12 +29,13 @@ type TrustedProxiesConfig struct {
 
 // RulesConfig represents the rules configuration section
 type RulesConfig struct {
-	Match   []Rule             `json:"match"`
+	Match   map[string]*Rule   `json:"match"`
 	Actions map[string]*Action `json:"actions"`
 }
 
 // Rule represents a single matching rule
 type Rule struct {
+	ID      string          // Rule ID from the map key
 	Action  string          `json:"action"`
 	Agents  []MatchCriteria `json:"agents,omitempty"`
 	Domains []MatchCriteria `json:"domains,omitempty"`
@@ -139,6 +140,13 @@ func (m *Manager) Load() error {
 	// Notify change listener if configured and config changed
 	if m.onChange != nil && oldConfig != nil {
 		m.onChange(&config)
+	}
+
+	// Set rule IDs from map keys
+	if config.Rules != nil && config.Rules.Match != nil {
+		for id, rule := range config.Rules.Match {
+			rule.ID = id
+		}
 	}
 
 	log.Printf("[config] Loaded configuration from %s (rules: %d, trusted proxies: %d networks)",

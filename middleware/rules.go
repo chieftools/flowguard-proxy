@@ -31,18 +31,18 @@ func (rm *RulesMiddleware) Process(w http.ResponseWriter, r *http.Request) (bool
 	}
 
 	// Evaluate each rule
-	for i, rule := range rules.Match {
-		if rm.matchesRule(r, &rule) {
+	for _, rule := range rules.Match {
+		if rm.matchesRule(r, rule) {
 			// Rule matched, get the action
 			action, exists := rules.Actions[rule.Action]
 			if !exists {
-				log.Printf("[middleware:rules] Rule %d references unknown action: %s", i, rule.Action)
+				log.Printf("[middleware:rules] Rule %s references unknown action: %s", rule.ID, rule.Action)
 				continue
 			}
 
 			// Log the match
-			log.Printf("[middleware:rules] Rule %d matched (action: %s) for %s %s from %s",
-				i, rule.Action, r.Method, r.URL.Path, rm.getClientIP(r))
+			log.Printf("[middleware:rules] Rule %s matched (action: %s) for %s %s from %s",
+				rule.ID, rule.Action, r.Method, r.URL.Path, rm.getClientIP(r))
 
 			if action.Action == "block" {
 				return false, action.Status, action.Message
