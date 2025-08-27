@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -52,9 +53,10 @@ type Rule struct {
 
 // MatchCriteria represents a matching criteria for strings
 type MatchCriteria struct {
-	Match           string `json:"match"` // "exact", "starts-with", "contains"
-	Value           string `json:"value"`
-	CaseInsensitive bool   `json:"case_insensitive,omitempty"` // Optional: perform case-insensitive matching
+	Match           string         `json:"match"` // "exact", "starts-with", "contains", "regex"
+	Value           string         `json:"value"`
+	CaseInsensitive bool           `json:"case_insensitive,omitempty"` // Optional: perform case-insensitive matching
+	compiledRegex   *regexp.Regexp `json:"-"`                          // Pre-compiled regex (not serialized)
 }
 
 // IPSetCriteria represents an ipset matching criteria
@@ -151,10 +153,20 @@ func (m *Manager) Load() error {
 		m.onChange(&config)
 	}
 
-	// Set rule IDs from map keys
+	// Set rule IDs from map keys and compile regex patterns
 	if config.Rules != nil && config.Rules.Match != nil {
 		for id, rule := range config.Rules.Match {
 			rule.ID = id
+			// Compile regex patterns for all match criteria
+			for i := range rule.Agents {
+				rule.Agents[i].CompileRegexIfNeeded()
+			}
+			for i := range rule.Domains {
+				rule.Domains[i].CompileRegexIfNeeded()
+			}
+			for i := range rule.Paths {
+				rule.Paths[i].CompileRegexIfNeeded()
+			}
 		}
 	}
 
@@ -421,6 +433,38 @@ func (m *Manager) GetIPDatabaseRefreshInterval() time.Duration {
 
 	// Default to 24 hours if not configured
 	return 24 * time.Hour
+}
+
+// GetCompiledRegex returns the pre-compiled regex for this criteria
+func (mc *MatchCriteria) GetCompiledRegex() *regexp.Regexp {
+	return mc.compiledRegex
+}
+
+// SetCompiledRegex sets the pre-compiled regex (mainly for testing)
+func (mc *MatchCriteria) SetCompiledRegex(re *regexp.Regexp) {
+	mc.compiledRegex = re
+}
+
+// CompileRegexIfNeeded sets the pre-compiled regex (mainly for testing)
+func (mc *MatchCriteria) CompileRegexIfNeeded() {
+	if mc.Match != "regex" || mc.compiledRegex != nil {
+		return
+	}
+
+	// Build pattern with case-insensitive flag if needed
+	pattern := mc.Value
+	if mc.CaseInsensitive {
+		pattern = "(?i)" + pattern
+	}
+
+	// Compile regex
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		log.Printf("[config] Warning: Invalid regex pattern '%s': %v", mc.Value, err)
+		return
+	}
+
+	mc.compiledRegex = re
 }
 
 // GetIPDatabasePath downloads the IP database if configured and returns the local path

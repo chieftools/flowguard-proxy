@@ -193,6 +193,15 @@ func (rm *RulesMiddleware) matchesASNCriteria(r *http.Request, asns []uint) bool
 
 // matchesString checks if a string matches the given criteria
 func (rm *RulesMiddleware) matchesString(value string, criterion config.MatchCriteria) bool {
+	if criterion.Match == "regex" {
+		re := criterion.GetCompiledRegex()
+		if re == nil {
+			return false
+		}
+
+		return re.MatchString(value)
+	}
+
 	// Apply case-insensitive matching if requested
 	compareValue := value
 	criterionValue := criterion.Value
