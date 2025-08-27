@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"http-sec-proxy/config"
+	"flowguard/config"
 )
 
 // RulesMiddleware implements dynamic rule-based filtering

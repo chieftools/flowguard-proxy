@@ -1,4 +1,4 @@
-module http-sec-proxy
+module flowguard
 
 go 1.25.0
 

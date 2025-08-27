@@ -7,21 +7,22 @@ import (
 	"sync"
 	"time"
 
-	"http-sec-proxy/certmanager"
-	"http-sec-proxy/config"
-	"http-sec-proxy/middleware"
+	"flowguard/certmanager"
+	"flowguard/config"
+	"flowguard/middleware"
 )
 
 type Config struct {
-	Verbose    bool
-	CertPath   string
-	CacheDir   string
-	HTTPPort   string
-	HTTPSPort  string
-	BindAddrs  []string
-	UserAgent  string
-	NoRedirect bool
-	ConfigFile string
+	Verbose         bool
+	CertPath        string
+	CacheDir        string
+	HTTPPort        string
+	HTTPSPort       string
+	BindAddrs       []string
+	UserAgent       string
+	NoRedirect      bool
+	ConfigFile      string
+	DefaultHostname string
 }
 
 type Manager struct {
@@ -78,7 +79,7 @@ func NewManager(cfg *Config) *Manager {
 		config:          cfg,
 		ipLookup:        ipLookup,
 		configMgr:       configMgr,
-		certManager:     certmanager.New(cfg.CertPath),
+		certManager:     certmanager.New(cfg.CertPath, cfg.DefaultHostname),
 		middlewareChain: middlewareChain,
 	}
 }

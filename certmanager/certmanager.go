@@ -17,27 +17,29 @@ import (
 
 // Manager handles SSL/TLS certificate loading and management
 type Manager struct {
-	certPath      string
-	certCache     map[string]*tls.Certificate // Maps certificate file path to certificate
-	hostnameCache map[string]*tls.Certificate // Maps hostname to certificate
-	cacheMutex    sync.RWMutex
-	watcher       *fsnotify.Watcher
-	stopChan      chan struct{}
+	certPath        string
+	defaultHostname string
+	certCache       map[string]*tls.Certificate // Maps certificate file path to certificate
+	hostnameCache   map[string]*tls.Certificate // Maps hostname to certificate
+	cacheMutex      sync.RWMutex
+	watcher         *fsnotify.Watcher
+	stopChan        chan struct{}
 }
 
 // New creates a new certificate manager
-func New(certPath string) *Manager {
+func New(certPath, defaultHostname string) *Manager {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Printf("[certmanager] Warning: Failed to create file watcher: %v. Certificate updates will not be automatic.", err)
 	}
 
 	cm := &Manager{
-		certPath:      certPath,
-		certCache:     make(map[string]*tls.Certificate),
-		hostnameCache: make(map[string]*tls.Certificate),
-		watcher:       watcher,
-		stopChan:      make(chan struct{}),
+		certPath:        certPath,
+		defaultHostname: defaultHostname,
+		certCache:       make(map[string]*tls.Certificate),
+		hostnameCache:   make(map[string]*tls.Certificate),
+		watcher:         watcher,
+		stopChan:        make(chan struct{}),
 	}
 
 	cm.loadAllCertificates(false)
@@ -271,21 +273,23 @@ func (cm *Manager) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate,
 	cm.cacheMutex.RLock()
 	defer cm.cacheMutex.RUnlock()
 
-	// First, try exact hostname match
+	// First, try to find an exact hostname match
 	if cert, exists := cm.hostnameCache[hello.ServerName]; exists {
 		return cert, nil
 	}
 
-	// Then, try wildcard match
+	// Then, try to find a wildcard match
 	for hostname, cert := range cm.hostnameCache {
 		if strings.HasPrefix(hostname, "*.") && cm.matchesWildcard(hostname, hello.ServerName) {
 			return cert, nil
 		}
 	}
 
-	// Finally, try to find any default certificate in cache
-	if cert, exists := cm.hostnameCache["*.alboweb.nl"]; exists {
-		return cert, nil
+	// Finally, try to find any default certificate in cache if we were given a default hostname
+	if cm.defaultHostname != "" {
+		if cert, exists := cm.hostnameCache[cm.defaultHostname]; exists {
+			return cert, nil
+		}
 	}
 
 	return nil, fmt.Errorf("no certificate found for %s", hello.ServerName)

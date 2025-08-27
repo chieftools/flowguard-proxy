@@ -13,7 +13,7 @@ import (
 	"os/exec"
 	"time"
 
-	"http-sec-proxy/middleware"
+	"flowguard/middleware"
 )
 
 type ServerConfig struct {

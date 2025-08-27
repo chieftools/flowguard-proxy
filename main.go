@@ -8,17 +8,18 @@ import (
 	"strings"
 	"syscall"
 
-	"http-sec-proxy/certmanager"
-	"http-sec-proxy/proxy"
+	"flowguard/certmanager"
+	"flowguard/proxy"
 )
 
 func main() {
 	var (
 		// Proxy configuration
-		bindAddrs  = flag.String("bind", "", "Comma-separated list of IP addresses to bind to (default: auto-detect public IPs)")
-		httpPort   = flag.String("http-port", "11080", "Port for HTTP proxy server")
-		httpsPort  = flag.String("https-port", "11443", "Port for HTTPS proxy server")
-		noRedirect = flag.Bool("no-redirect", false, "Skip iptables port redirection setup")
+		bindAddrs       = flag.String("bind", "", "Comma-separated list of IP addresses to bind to (default: auto-detect public IPs)")
+		httpPort        = flag.String("http-port", "11080", "Port for HTTP proxy server")
+		httpsPort       = flag.String("https-port", "11443", "Port for HTTPS proxy server")
+		noRedirect      = flag.Bool("no-redirect", false, "Skip iptables port redirection setup")
+		defaultHostname = flag.String("default-hostname", "", "The default hostname to use when a certificate is not found")
 
 		// Certificate configuration
 		certPath  = flag.String("cert-path", "/opt/psa/var/certificates", "Path to combined certificate files")
@@ -26,29 +27,30 @@ func main() {
 
 		// Behavior configuration
 		verbose    = flag.Bool("verbose", false, "Enable more verbose output")
-		cacheDir   = flag.String("cache-dir", "/var/cache/http-sec-proxy", "Directory for caching external data")
-		userAgent  = flag.String("user-agent", "Alboweb-Proxy/1.0", "The User-Agent & Server header value to use requests and responses")
+		cacheDir   = flag.String("cache-dir", "/var/cache/flowguard", "Directory for caching external data")
+		userAgent  = flag.String("user-agent", "FlowGuard/1.0", "The User-Agent & Server header value to use requests and responses")
 		configFile = flag.String("config", "config.json", "Path to the configuration file")
 	)
 	flag.Parse()
 
 	// Certificate test mode
 	if *testCerts {
-		cm := certmanager.New(*certPath)
+		cm := certmanager.New(*certPath, *defaultHostname)
 		cm.TestCertificates()
 		os.Exit(0)
 	}
 
 	proxyManager := proxy.NewManager(&proxy.Config{
-		Verbose:    *verbose,
-		CacheDir:   *cacheDir,
-		CertPath:   *certPath,
-		HTTPPort:   *httpPort,
-		HTTPSPort:  *httpsPort,
-		BindAddrs:  parseBindAddrsList(*bindAddrs),
-		UserAgent:  *userAgent,
-		NoRedirect: *noRedirect,
-		ConfigFile: *configFile,
+		Verbose:         *verbose,
+		CacheDir:        *cacheDir,
+		CertPath:        *certPath,
+		HTTPPort:        *httpPort,
+		HTTPSPort:       *httpsPort,
+		BindAddrs:       parseBindAddrsList(*bindAddrs),
+		UserAgent:       *userAgent,
+		NoRedirect:      *noRedirect,
+		ConfigFile:      *configFile,
+		DefaultHostname: *defaultHostname,
 	})
 
 	sigChan := make(chan os.Signal, 1)

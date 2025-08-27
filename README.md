@@ -1,4 +1,4 @@
-# HTTP Security Proxy
+# FlowGuard
 
 A high-performance Go-based reverse proxy with advanced security features, designed to transparently intercept and filter HTTP/HTTPS traffic with minimal disruption.
 
@@ -34,16 +34,16 @@ A high-performance Go-based reverse proxy with advanced security features, desig
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/http-sec-proxy.git
-cd http-sec-proxy
+git clone https://github.com/chieftools/flowguard.git
+cd flowguard
 
 # Build for current platform
-go build -o http-sec-proxy .
+go build -o flowguard .
 
 # Build for Linux AMD64 (production)
 ./build.sh
 # or manually:
-GOOS=linux GOARCH=amd64 go build -o http-sec-proxy-linux-amd64 .
+GOOS=linux GOARCH=amd64 go build -o flowguard-linux-amd64 .
 ```
 
 ## Usage
@@ -52,10 +52,10 @@ GOOS=linux GOARCH=amd64 go build -o http-sec-proxy-linux-amd64 .
 
 ```bash
 # Start with default settings
-sudo ./http-sec-proxy
+sudo ./flowguard
 
 # Start without iptables redirection (for testing)
-./http-sec-proxy --no-redirect
+./flowguard --no-redirect
 ```
 
 ### Command Line Options
@@ -85,16 +85,16 @@ Trusted Proxy Options:
 
 ```bash
 # Test certificate loading
-./http-sec-proxy --test-certs --cert-path /path/to/certs
+./flowguard --test-certs --cert-path /path/to/certs
 
 # Run with custom ports and IP filtering
-sudo ./http-sec-proxy --http-port 8080 --https-port 8443 --ipset-v4 my_blocklist_v4
+sudo ./flowguard --http-port 8080 --https-port 8443 --ipset-v4 my_blocklist_v4
 
 # Bind to specific IPs only
-sudo ./http-sec-proxy --bind "192.168.1.100,10.0.0.50"
+sudo ./flowguard --bind "192.168.1.100,10.0.0.50"
 
 # Use custom trusted proxy lists
-sudo ./http-sec-proxy --trusted-proxy-urls "https://mycdn.com/ips.txt" --trusted-proxy-refresh 6h
+sudo ./flowguard --trusted-proxy-urls "https://mycdn.com/ips.txt" --trusted-proxy-refresh 6h
 ```
 
 ## Certificate Management
@@ -162,7 +162,7 @@ go test ./...
 ### Project Structure
 
 ```
-http-sec-proxy/
+flowguard/
 ├── main.go                 # Entry point and CLI
 ├── build.sh               # Build script for Linux AMD64
 ├── go.mod                 # Go module definition

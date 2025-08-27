@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"http-sec-proxy/config"
+	"flowguard/config"
 
 	"github.com/oschwald/maxminddb-golang"
 )

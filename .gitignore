@@ -8,8 +8,8 @@
 *.dll
 *.so
 *.dylib
-http-sec-proxy
-http-sec-proxy-*
+flowguard
+flowguard-*
 
 # Test binary, built with `go test -c`
 *.test

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"http-sec-proxy/cache"
+	"flowguard/cache"
 )
 
 // Config represents the complete application configuration
@@ -413,11 +413,11 @@ func (m *Manager) RefreshTrustedProxies() error {
 func (m *Manager) GetIPDatabaseRefreshInterval() time.Duration {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	if m.config != nil && m.config.IPDatabase != nil && m.config.IPDatabase.RefreshIntervalSeconds > 0 {
 		return time.Duration(m.config.IPDatabase.RefreshIntervalSeconds) * time.Second
 	}
-	
+
 	// Default to 24 hours if not configured
 	return 24 * time.Hour
 }
@@ -434,7 +434,7 @@ func (m *Manager) GetIPDatabasePath() (string, error) {
 		}
 	}
 	m.mu.RUnlock()
-	
+
 	if dbURL == "" {
 		// No database URL configured, use local file if exists
 		if _, err := os.Stat("ipinfo_lite.mmdb"); err == nil {
@@ -442,18 +442,18 @@ func (m *Manager) GetIPDatabasePath() (string, error) {
 		}
 		return "", fmt.Errorf("no IP database configured or found")
 	}
-	
+
 	// Use cache to download and store the database file
 	if m.cache == nil {
 		return "", fmt.Errorf("cache not initialized")
 	}
-	
+
 	// Use configured TTL or default to 24 hours
 	cacheTTL := 24 * time.Hour
 	if refreshInterval > 0 {
 		cacheTTL = refreshInterval
 	}
-	
+
 	// Download/retrieve from cache
 	cachedPath, err := m.cache.FetchFileWithCache(dbURL, cacheTTL)
 	if err != nil {
@@ -464,6 +464,6 @@ func (m *Manager) GetIPDatabasePath() (string, error) {
 		}
 		return "", fmt.Errorf("failed to download IP database: %w", err)
 	}
-	
+
 	return cachedPath, nil
 }
