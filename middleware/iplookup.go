@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -277,4 +278,20 @@ func IsProxied(r *http.Request) bool {
 		return proxied
 	}
 	return false
+}
+
+// GetASN returns the ASN number as uint, or 0 if not available/invalid
+func (asn *ASNInfo) GetASN() uint {
+	asnString, found := strings.CutPrefix(asn.ASN, "AS")
+
+	if !found {
+		return 0
+	}
+
+	number, err := strconv.Atoi(asnString)
+	if err != nil {
+		return 0
+	}
+
+	return uint(number)
 }

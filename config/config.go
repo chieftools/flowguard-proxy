@@ -47,6 +47,7 @@ type Rule struct {
 	Domains []MatchCriteria `json:"domains,omitempty"`
 	Paths   []MatchCriteria `json:"paths,omitempty"`
 	IPSet   []IPSetCriteria `json:"ipset,omitempty"`
+	ASNs    []uint          `json:"asns,omitempty"`
 }
 
 // MatchCriteria represents a matching criteria for strings

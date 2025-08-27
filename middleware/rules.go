@@ -84,8 +84,15 @@ func (rm *RulesMiddleware) matchesRule(r *http.Request, rule *config.Rule) bool 
 		}
 	}
 
+	// Check ASN criteria
+	if len(rule.ASNs) > 0 {
+		if !rm.matchesASNCriteria(r, rule.ASNs) {
+			return false
+		}
+	}
+
 	// If we have at least one criteria type and all matched, return true
-	return len(rule.Agents) > 0 || len(rule.Domains) > 0 || len(rule.Paths) > 0 || len(rule.IPSet) > 0
+	return len(rule.Agents) > 0 || len(rule.Domains) > 0 || len(rule.Paths) > 0 || len(rule.IPSet) > 0 || len(rule.ASNs) > 0
 }
 
 // matchesAgentCriteria checks if the User-Agent matches any of the criteria
@@ -158,6 +165,29 @@ func (rm *RulesMiddleware) matchesIPSetCriteria(r *http.Request, criteria []conf
 			return true
 		}
 	}
+	return false
+}
+
+// matchesASNCriteria checks if the client's ASN matches any of the specified ASNs
+func (rm *RulesMiddleware) matchesASNCriteria(r *http.Request, asns []uint) bool {
+	// Get the client ASN from the request context (set by IPLookupMiddleware)
+	clientASNInfo := GetClientASN(r)
+	if clientASNInfo == nil {
+		return false
+	}
+
+	clientASN := clientASNInfo.GetASN()
+	if clientASNInfo.GetASN() == 0 {
+		return false
+	}
+
+	// Check if client ASN matches any of the specified ASNs (OR logic)
+	for _, asn := range asns {
+		if clientASN == asn {
+			return true
+		}
+	}
+
 	return false
 }
 
