@@ -214,6 +214,7 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		resp.Header.Set("Server", s.config.serverHeader)
+		resp.Header.Del("X-Powered-By")
 		return nil
 	}
 
