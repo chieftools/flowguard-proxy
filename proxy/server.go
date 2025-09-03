@@ -213,8 +213,34 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 	}
 
 	proxy.ModifyResponse = func(resp *http.Response) error {
-		resp.Header.Set("Server", s.config.serverHeader)
+		// Remove headers we don't want to expose
+		resp.Header.Del("Server")
 		resp.Header.Del("X-Powered-By")
+
+		// Remove duplicate headers with identical values
+		for key, values := range resp.Header {
+			if len(values) > 1 {
+				// Create a map to track unique values while preserving order
+				seen := make(map[string]bool)
+				var unique []string
+
+				for _, value := range values {
+					if !seen[value] {
+						seen[value] = true
+						unique = append(unique, value)
+					}
+				}
+
+				// Only update if we actually removed duplicates
+				if len(unique) < len(values) {
+					resp.Header[key] = unique
+				}
+			}
+		}
+
+		// Add Via header to indicate proxying
+		resp.Header.Add("Via", fmt.Sprintf("%d.%d flowguard", resp.ProtoMajor, resp.ProtoMinor))
+
 		return nil
 	}
 
