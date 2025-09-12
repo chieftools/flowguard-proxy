@@ -56,7 +56,7 @@ type MatchCriteria struct {
 	Match           string         `json:"match"` // "equals", "does-not-equal", "starts-with", "does-not-start-with", "ends-with", "does-not-end-with", "contains", "does-not-contain", "regex"
 	Value           string         `json:"value"`
 	CaseInsensitive bool           `json:"case_insensitive,omitempty"` // Optional: perform case-insensitive matching
-	compiledRegex   *regexp.Regexp `json:"-"`                          // Pre-compiled regex (not serialized)
+	compiledRegex   *regexp.Regexp // Pre-compiled regex (not serialized)
 }
 
 // IPSetCriteria represents an ipset matching criteria
