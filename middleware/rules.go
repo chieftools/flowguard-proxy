@@ -56,16 +56,16 @@ func (rm *RulesMiddleware) Process(w http.ResponseWriter, r *http.Request) (bool
 func (rm *RulesMiddleware) matchesRule(r *http.Request, rule *config.Rule) bool {
 	// All criteria within a rule must match (AND logic)
 
-	// Check agent criteria
-	if len(rule.Agents) > 0 {
-		if !rm.matchesAgentCriteria(r, rule.Agents) {
+	// Check domain criteria
+	if len(rule.Domains) > 0 {
+		if !rm.matchesDomainCriteria(r, rule.Domains) {
 			return false
 		}
 	}
 
-	// Check domain criteria
-	if len(rule.Domains) > 0 {
-		if !rm.matchesDomainCriteria(r, rule.Domains) {
+	// Check agent criteria
+	if len(rule.Agents) > 0 {
+		if !rm.matchesAgentCriteria(r, rule.Agents) {
 			return false
 		}
 	}
