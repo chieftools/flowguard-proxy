@@ -215,6 +215,8 @@ func (rm *RulesMiddleware) matchesString(value string, criterion config.MatchCri
 		return compareValue == criterionValue
 	case "starts-with":
 		return strings.HasPrefix(compareValue, criterionValue)
+	case "ends-with":
+		return strings.HasSuffix(compareValue, criterionValue)
 	case "contains":
 		return strings.Contains(compareValue, criterionValue)
 	default:
