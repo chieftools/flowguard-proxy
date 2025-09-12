@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 )
 
@@ -31,6 +32,8 @@ func (mc *Chain) Process(w http.ResponseWriter, r *http.Request) bool {
 	for _, m := range mc.middlewares {
 		allowed, statusCode, message := m.Process(w, r)
 		if !allowed {
+			// Add Via header to blocked responses to match proxied responses
+			w.Header().Add("Via", fmt.Sprintf("%d.%d flowguard", r.ProtoMajor, r.ProtoMinor))
 			http.Error(w, message, statusCode)
 			return false
 		}
