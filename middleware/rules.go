@@ -211,14 +211,22 @@ func (rm *RulesMiddleware) matchesString(value string, criterion config.MatchCri
 	}
 
 	switch criterion.Match {
-	case "exact":
+	case "equals":
 		return compareValue == criterionValue
-	case "starts-with":
-		return strings.HasPrefix(compareValue, criterionValue)
-	case "ends-with":
-		return strings.HasSuffix(compareValue, criterionValue)
+	case "does-not-equal":
+		return compareValue != criterionValue
 	case "contains":
 		return strings.Contains(compareValue, criterionValue)
+	case "does-not-contain":
+		return !strings.Contains(compareValue, criterionValue)
+	case "starts-with":
+		return strings.HasPrefix(compareValue, criterionValue)
+	case "does-not-start-with":
+		return !strings.HasPrefix(compareValue, criterionValue)
+	case "ends-with":
+		return strings.HasSuffix(compareValue, criterionValue)
+	case "does-not-end-with":
+		return !strings.HasSuffix(compareValue, criterionValue)
 	default:
 		log.Printf("[middleware:rules] Unknown match type: %s", criterion.Match)
 		return false
