@@ -17,7 +17,8 @@ import (
 
 // Config represents the complete application configuration
 type Config struct {
-	Rules          *RulesConfig          `json:"rules"`
+	Rules          map[string]*Rule      `json:"rules"`
+	Actions        map[string]*Action    `json:"actions"`
 	IPDatabase     *IPDatabaseConfig     `json:"ip_database"`
 	TrustedProxies *TrustedProxiesConfig `json:"trusted_proxies"`
 }
@@ -34,35 +35,30 @@ type TrustedProxiesConfig struct {
 	RefreshIntervalSeconds int      `json:"refresh_interval_seconds"`
 }
 
-// RulesConfig represents the rules configuration section
-type RulesConfig struct {
-	Match   map[string]*Rule   `json:"match"`
-	Actions map[string]*Action `json:"actions"`
-}
-
 // Rule represents a single matching rule
 type Rule struct {
-	ID      string          // Rule ID from the map key
-	Action  string          `json:"action"`
-	Agents  []MatchCriteria `json:"agents,omitempty"`
-	Domains []MatchCriteria `json:"domains,omitempty"`
-	Paths   []MatchCriteria `json:"paths,omitempty"`
-	IPSet   []IPSetCriteria `json:"ipset,omitempty"`
-	ASNs    []uint          `json:"asns,omitempty"`
+	ID         string      // Rule ID from the map key
+	Action     string      `json:"action"`
+	Conditions *Conditions `json:"conditions"`
 }
 
-// MatchCriteria represents a matching criteria for strings
-type MatchCriteria struct {
-	Match           string         `json:"match"` // "equals", "does-not-equal", "starts-with", "does-not-start-with", "ends-with", "does-not-end-with", "contains", "does-not-contain", "regex"
-	Value           string         `json:"value"`
-	CaseInsensitive bool           `json:"case_insensitive,omitempty"` // Optional: perform case-insensitive matching
-	compiledRegex   *regexp.Regexp // Pre-compiled regex (not serialized)
+// Conditions represents the rule condition structure
+type Conditions struct {
+	Operator string       `json:"operator,omitempty"` // AND, OR, NOT
+	Groups   []Conditions `json:"groups,omitempty"`
+	Matches  []Match      `json:"matches,omitempty"`
+	Comment  string       `json:"comment,omitempty"`
 }
 
-// IPSetCriteria represents an ipset matching criteria
-type IPSetCriteria struct {
-	Family int    `json:"family"` // 4 or 6
-	Value  string `json:"value"`  // ipset name
+// Match represents a single match condition
+type Match struct {
+	Type            string   `json:"type"`  // path, domain, ip, agent, header, asn, ipset
+	Match           string   `json:"match"` // equals, contains, regex, in, not-in, etc.
+	Value           string   `json:"value,omitempty"`
+	Values          []string `json:"values,omitempty"`
+	CaseInsensitive bool     `json:"case_insensitive,omitempty"`
+	Family          int      `json:"family,omitempty"` // For ipset matches (4 or 6)
+	compiledRegex   *regexp.Regexp
 }
 
 // Action represents an action to take when a rule matches
@@ -154,24 +150,18 @@ func (m *Manager) Load() error {
 	}
 
 	// Set rule IDs from map keys and compile regex patterns
-	if config.Rules != nil && config.Rules.Match != nil {
-		for id, rule := range config.Rules.Match {
+	if config.Rules != nil {
+		for id, rule := range config.Rules {
 			rule.ID = id
-			// Compile regex patterns for all match criteria
-			for i := range rule.Agents {
-				rule.Agents[i].CompileRegexIfNeeded()
-			}
-			for i := range rule.Domains {
-				rule.Domains[i].CompileRegexIfNeeded()
-			}
-			for i := range rule.Paths {
-				rule.Paths[i].CompileRegexIfNeeded()
+			// Compile regex patterns in conditions
+			if rule.Conditions != nil {
+				m.compileConditionRegex(rule.Conditions)
 			}
 		}
 	}
 
-	log.Printf("[config] Loaded configuration from %s (rules: %d, trusted proxies: %d networks)",
-		m.configPath, len(config.Rules.Match), len(trustedProxyIPs))
+	log.Printf("[config] Loaded configuration from %s (rules: %d, actions: %d, trusted proxies: %d networks)",
+		m.configPath, len(config.Rules), len(config.Actions), len(trustedProxyIPs))
 
 	return nil
 }
@@ -288,13 +278,23 @@ func (m *Manager) GetConfig() *Config {
 }
 
 // GetRules returns the current rules configuration
-func (m *Manager) GetRules() *RulesConfig {
+func (m *Manager) GetRules() map[string]*Rule {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if m.config == nil {
 		return nil
 	}
 	return m.config.Rules
+}
+
+// GetActions returns the current actions configuration
+func (m *Manager) GetActions() map[string]*Action {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.config == nil {
+		return nil
+	}
+	return m.config.Actions
 }
 
 // GetRefreshInterval returns the configured refresh interval for trusted proxies
@@ -435,36 +435,38 @@ func (m *Manager) GetIPDatabaseRefreshInterval() time.Duration {
 	return 24 * time.Hour
 }
 
-// GetCompiledRegex returns the pre-compiled regex for this criteria
-func (mc *MatchCriteria) GetCompiledRegex() *regexp.Regexp {
-	return mc.compiledRegex
+// compileConditionRegex recursively compiles regex patterns in conditions
+func (m *Manager) compileConditionRegex(cond *Conditions) {
+	// Compile regex in matches
+	for i := range cond.Matches {
+		if cond.Matches[i].Match == "regex" {
+			pattern := cond.Matches[i].Value
+			if cond.Matches[i].CaseInsensitive {
+				pattern = "(?i)" + pattern
+			}
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				log.Printf("[config] Warning: Invalid regex pattern '%s': %v", cond.Matches[i].Value, err)
+			} else {
+				cond.Matches[i].compiledRegex = re
+			}
+		}
+	}
+
+	// Recursively compile in groups
+	for i := range cond.Groups {
+		m.compileConditionRegex(&cond.Groups[i])
+	}
 }
 
-// SetCompiledRegex sets the pre-compiled regex (mainly for testing)
-func (mc *MatchCriteria) SetCompiledRegex(re *regexp.Regexp) {
-	mc.compiledRegex = re
+// GetCompiledRegex returns the compiled regex for a Match
+func (m *Match) GetCompiledRegex() *regexp.Regexp {
+	return m.compiledRegex
 }
 
-// CompileRegexIfNeeded sets the pre-compiled regex (mainly for testing)
-func (mc *MatchCriteria) CompileRegexIfNeeded() {
-	if mc.Match != "regex" || mc.compiledRegex != nil {
-		return
-	}
-
-	// Build pattern with case-insensitive flag if needed
-	pattern := mc.Value
-	if mc.CaseInsensitive {
-		pattern = "(?i)" + pattern
-	}
-
-	// Compile regex
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		log.Printf("[config] Warning: Invalid regex pattern '%s': %v", mc.Value, err)
-		return
-	}
-
-	mc.compiledRegex = re
+// SetCompiledRegexInternal sets the compiled regex (for testing)
+func (m *Match) SetCompiledRegexInternal(re *regexp.Regexp) {
+	m.compiledRegex = re
 }
 
 // GetIPDatabasePath downloads the IP database if configured and returns the local path
