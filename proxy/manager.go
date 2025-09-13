@@ -66,10 +66,12 @@ func NewManager(cfg *Config) *Manager {
 	// Create middleware chain with config-based middleware
 	middlewareChain := middleware.NewChain()
 
-	// Add all middlewares using unified HTTP middleware pattern
-	middlewareChain.Add(requestLogger)
-	middlewareChain.Add(ipLookup)
-	middlewareChain.Add(middleware.NewRulesMiddleware(configMgr))
+	// Add middleware in the order they should execute
+	// The first added middleware wraps everything (executes first and completes last)
+	// Execution order: logging -> IP lookup -> rules -> handler -> rules -> IP lookup -> logging
+	middlewareChain.Add(requestLogger)                            // Wraps everything: logs request and response
+	middlewareChain.Add(ipLookup)                                 // Enriches request with IP/ASN data
+	middlewareChain.Add(middleware.NewRulesMiddleware(configMgr)) // Evaluates rules with enriched data
 
 	// Determine bind addresses based on configuration
 	bindAddrs := cfg.BindAddrs
