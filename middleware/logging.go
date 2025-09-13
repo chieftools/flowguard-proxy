@@ -27,52 +27,66 @@ const (
 )
 
 type RequestLogEntry struct {
+	StreamID  string `json:"stream_id"`
 	Timestamp string `json:"timestamp"`
 
-	// FlowGuard ID for request tracing
-	StreamID string `json:"stream_id"`
+	Rule       RequestLogEntryRuleInfo        `json:"rule"`
+	Proxy      *RequestLogEntryIPInfo         `json:"proxy,omitempty"`
+	Client     RequestLogEntryIPInfo          `json:"client"`
+	Request    RequestLogEntryRequestInfo     `json:"request"`
+	Response   RequestLogEntryResponseInfo    `json:"response"`
+	Cloudflare *RequestLogEntryCloudflareInfo `json:"cloudflare,omitempty"`
+}
 
-	// Action details
-	Action string `json:"action"`
-	RuleID string `json:"matched_rule_id,omitempty"`
+type RequestLogEntryIPInfo struct {
+	IP      string                   `json:"ip"`
+	AS      *RequestLogEntryIPASInfo `json:"as,omitempty"`
+	Country string                   `json:"country,omitempty"`
+}
 
-	// Request details
-	RequestURL           string `json:"request_url"`
-	RequestPath          string `json:"request_path"`
-	RequestQuery         string `json:"request_query,omitempty"`
-	RequestScheme        string `json:"request_scheme"`
-	RequestDomain        string `json:"request_domain"`
-	RequestMethod        string `json:"request_method"`
-	RequestReferrer      string `json:"request_referrer,omitempty"`
-	RequestUserAgent     string `json:"request_user_agent,omitempty"`
-	RequestContentType   string `json:"request_content_type,omitempty"`
-	RequestHTTPVersion   string `json:"request_http_version"`
-	RequestContentLength string `json:"request_content_length,omitempty"`
+type RequestLogEntryTLSInfo struct {
+	Cipher  string `json:"cipher,omitempty"`
+	Version string `json:"version,omitempty"`
+}
 
-	// TLS details
-	RequestTLSCipher  string `json:"request_tls_cipher,omitempty"`
-	RequestTLSVersion string `json:"request_tls_version,omitempty"`
+type RequestLogEntryRuleInfo struct {
+	Result string `json:"result"`
+	ID     string `json:"id,omitempty"`
+}
 
-	// Cloudflare details if request passed through Cloudflare
-	CloudflareRayID string `json:"cloudflare_ray_id,omitempty"`
+type RequestLogEntryIPASInfo struct {
+	ASN    uint   `json:"num,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Domain string `json:"domain,omitempty"`
+}
 
-	// Response details
-	ResponseStatus int   `json:"response_response_status"`
-	ResponseTimeMS int64 `json:"response_time_ms,omitempty"`
+type RequestLogEntryRequestInfo struct {
+	TLS *RequestLogEntryTLSInfo       `json:"tls,omitempty"`
+	URL RequestLogEntryRequestURLInfo `json:"url"`
 
-	// Client details
-	ClientIP       string `json:"client_ip"`
-	ClientCountry  string `json:"client_country,omitempty"`
-	ClientASN      uint   `json:"client_asn,omitempty"`
-	ClientASName   string `json:"client_as_name,omitempty"`
-	ClientASDomain string `json:"client_as_domain,omitempty"`
+	Method        string `json:"method"`
+	Referrer      string `json:"referrer,omitempty"`
+	UserAgent     string `json:"user_agent,omitempty"`
+	ContentType   string `json:"content_type,omitempty"`
+	HTTPVersion   string `json:"http_version"`
+	ContentLength string `json:"content_length,omitempty"`
+}
 
-	// Proxy details if request was proxied
-	ProxyIP       string `json:"proxy_ip,omitempty"`
-	ProxyCountry  string `json:"proxy_country,omitempty"`
-	ProxyASN      uint   `json:"proxy_asn,omitempty"`
-	ProxyASName   string `json:"proxy_as_name,omitempty"`
-	ProxyASDomain string `json:"proxy_as_domain,omitempty"`
+type RequestLogEntryResponseInfo struct {
+	Status int   `json:"status"`
+	TimeMS int64 `json:"time_ms,omitempty"`
+}
+
+type RequestLogEntryRequestURLInfo struct {
+	Full   string `json:"full"`
+	Path   string `json:"path"`
+	Query  string `json:"query,omitempty"`
+	Scheme string `json:"scheme"`
+	Domain string `json:"domain"`
+}
+
+type RequestLogEntryCloudflareInfo struct {
+	RayID string `json:"ray_id,omitempty"`
 }
 
 type LoggingMiddleware struct {
@@ -215,22 +229,16 @@ func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 	enabled := lm.enabled
 	lm.mu.RUnlock()
 
-	// Generate FG-Ray ID for request tracing
-	streamID := generateStreamID()
-
-	// Set start time and FG-Ray ID in context
+	// Set start time and stream ID in context
 	ctx := context.WithValue(r.Context(), ContextKeyStartTime, time.Now())
-	ctx = context.WithValue(ctx, ContextKeyStreamID, streamID)
+	ctx = context.WithValue(ctx, ContextKeyStreamID, generateStreamID())
 	r = r.WithContext(ctx)
 
-	// Create wrapper to capture response status code and add FG-Ray header
+	// Create wrapper to capture response status code
 	wrapper := &ResponseWriterWrapper{
 		ResponseWriter:  w,
 		StatusCodeValue: http.StatusOK,
 	}
-
-	// Add FG-Ray header to response
-	wrapper.Header().Set("FG-Ray", streamID)
 
 	if !enabled {
 		next.ServeHTTP(wrapper, r)
@@ -258,89 +266,17 @@ func (lm *LoggingMiddleware) logCompletedRequest(r *http.Request, statusCode int
 }
 
 func (lm *LoggingMiddleware) buildLogEntry(r *http.Request, statusCode int) *RequestLogEntry {
-	entry := &RequestLogEntry{
+	return &RequestLogEntry{
+		StreamID:  GetStreamID(r),
 		Timestamp: time.Now().Format(time.RFC3339),
 
-		// Stream ID
-		StreamID: GetStreamID(r),
-
-		// Client details
-		ClientIP: GetClientIP(r),
-
-		// Proxy details
-		ProxyIP: GetProxyIP(r),
-
-		// Request details
-		RequestPath:          r.URL.String(),
-		RequestQuery:         r.URL.RawQuery,
-		RequestDomain:        r.Host,
-		RequestMethod:        r.Method,
-		RequestReferrer:      r.Header.Get("Referer"),
-		RequestUserAgent:     r.Header.Get("User-Agent"),
-		RequestContentType:   r.Header.Get("Content-Type"),
-		RequestHTTPVersion:   r.Proto,
-		RequestContentLength: r.Header.Get("Content-Length"),
-
-		// Response details
-		ResponseStatus: statusCode,
-
-		// Cloudflare details
-		CloudflareRayID: r.Header.Get("CF-Ray"),
+		Rule:       getRuleInfo(r),
+		Proxy:      getProxyInfo(r),
+		Client:     getClientInfo(r),
+		Request:    getRequestInfo(r),
+		Response:   getResponseInfo(statusCode, GetStartTime(r)),
+		Cloudflare: getCloudflareInfo(r),
 	}
-
-	if r.Host != "" {
-		if r.URL.Scheme == "" {
-			if r.TLS != nil {
-				entry.RequestURL = "https://" + r.Host + entry.RequestURL
-				entry.RequestScheme = "https"
-			} else {
-				entry.RequestURL = "http://" + r.Host + entry.RequestURL
-				entry.RequestScheme = "http"
-			}
-		}
-	}
-
-	if r.TLS != nil {
-		entry.RequestTLSCipher = tls.CipherSuiteName(r.TLS.CipherSuite)
-		entry.RequestTLSVersion = tls.VersionName(r.TLS.Version)
-	}
-
-	startTime := GetStartTime(r)
-	responseTime := 0 * time.Millisecond
-
-	if !startTime.IsZero() {
-		responseTime = time.Since(startTime)
-	}
-	if responseTime > 0 {
-		entry.ResponseTimeMS = responseTime.Milliseconds()
-	}
-
-	if proxyASN := GetProxyASN(r); proxyASN != nil {
-		entry.ProxyASN = proxyASN.GetASN()
-		entry.ProxyASName = proxyASN.ASName
-		entry.ProxyCountry = proxyASN.CountryCode
-		entry.ProxyASDomain = proxyASN.ASDomain
-	}
-
-	if clientASN := GetClientASN(r); clientASN != nil {
-		entry.ClientASN = clientASN.GetASN()
-		entry.ClientASName = clientASN.ASName
-		entry.ClientCountry = clientASN.CountryCode
-		entry.ClientASDomain = clientASN.ASDomain
-	}
-
-	ctx := r.Context()
-	if ruleID, ok := ctx.Value(ContextKeyRuleID).(string); ok {
-		entry.RuleID = ruleID
-	}
-
-	if actionTaken, ok := ctx.Value(ContextKeyActionTaken).(string); ok {
-		entry.Action = actionTaken
-	} else {
-		entry.Action = "proxy"
-	}
-
-	return entry
 }
 
 func (lm *LoggingMiddleware) writeLogEntry(entry *RequestLogEntry) {
@@ -397,6 +333,13 @@ func (lm *LoggingMiddleware) Close() {
 	}
 }
 
+func GetStreamID(r *http.Request) string {
+	if streamID, ok := r.Context().Value(ContextKeyStreamID).(string); ok {
+		return streamID
+	}
+	return ""
+}
+
 func SetRuleMatch(r *http.Request, ruleID string, action string) {
 	ctx := r.Context()
 	ctx = context.WithValue(ctx, ContextKeyRuleID, ruleID)
@@ -412,17 +355,143 @@ func GetStartTime(r *http.Request) time.Time {
 	return time.Time{}
 }
 
-func GetStreamID(r *http.Request) string {
-	if streamID, ok := r.Context().Value(ContextKeyStreamID).(string); ok {
-		return streamID
-	}
-	return ""
-}
-
 func generateStreamID() string {
 	bytes := make([]byte, 8)
 	if _, err := rand.Read(bytes); err != nil {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(bytes)
+}
+
+func getTLSInfo(r *http.Request) *RequestLogEntryTLSInfo {
+	if r.TLS == nil {
+		return nil
+	}
+
+	return &RequestLogEntryTLSInfo{
+		Cipher:  tls.CipherSuiteName(r.TLS.CipherSuite),
+		Version: tls.VersionName(r.TLS.Version),
+	}
+}
+
+func getRuleInfo(r *http.Request) RequestLogEntryRuleInfo {
+	ruleInfo := RequestLogEntryRuleInfo{
+		Result: "proxy",
+	}
+
+	ctx := r.Context()
+	if ruleID, ok := ctx.Value(ContextKeyRuleID).(string); ok {
+		ruleInfo.ID = ruleID
+	}
+	if actionTaken, ok := ctx.Value(ContextKeyActionTaken).(string); ok {
+		ruleInfo.Result = actionTaken
+	}
+
+	return ruleInfo
+}
+
+func getProxyInfo(r *http.Request) *RequestLogEntryIPInfo {
+	proxyInfo := RequestLogEntryIPInfo{
+		IP: GetProxyIP(r),
+	}
+
+	if proxyInfo.IP == "" {
+		return nil
+	}
+
+	if proxyASN := GetProxyASN(r); proxyASN != nil {
+		proxyInfo.AS = &RequestLogEntryIPASInfo{
+			ASN:    proxyASN.GetASN(),
+			Name:   proxyASN.ASName,
+			Domain: proxyASN.ASDomain,
+		}
+		proxyInfo.Country = proxyASN.CountryCode
+	}
+
+	return &proxyInfo
+}
+
+func getClientInfo(r *http.Request) RequestLogEntryIPInfo {
+	clientInfo := RequestLogEntryIPInfo{
+		IP: GetClientIP(r),
+	}
+
+	if clientASN := GetClientASN(r); clientASN != nil {
+		clientInfo.AS = &RequestLogEntryIPASInfo{
+			ASN:    clientASN.GetASN(),
+			Name:   clientASN.ASName,
+			Domain: clientASN.ASDomain,
+		}
+		clientInfo.Country = clientASN.CountryCode
+	}
+
+	return clientInfo
+}
+
+func getRequestInfo(r *http.Request) RequestLogEntryRequestInfo {
+	return RequestLogEntryRequestInfo{
+		TLS: getTLSInfo(r),
+		URL: getRequestURLInfo(r),
+
+		Method:        r.Method,
+		Referrer:      r.Header.Get("Referer"),
+		UserAgent:     r.Header.Get("User-Agent"),
+		ContentType:   r.Header.Get("Content-Type"),
+		HTTPVersion:   r.Proto,
+		ContentLength: r.Header.Get("Content-Length"),
+	}
+}
+
+func getResponseInfo(statusCode int, startTime time.Time) RequestLogEntryResponseInfo {
+	responseInfo := RequestLogEntryResponseInfo{
+		Status: statusCode,
+	}
+
+	if !startTime.IsZero() {
+		responseTime := time.Since(startTime)
+		if responseTime > 0 {
+			responseInfo.TimeMS = responseTime.Milliseconds()
+		}
+	}
+
+	return responseInfo
+}
+
+func getRequestURLInfo(r *http.Request) RequestLogEntryRequestURLInfo {
+	scheme := r.URL.Scheme
+	if scheme == "" {
+		if r.TLS != nil {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
+	}
+
+	domain := r.Host
+	if domain == "" {
+		domain = r.URL.Host
+	}
+
+	fullURL := r.URL.String()
+	if !r.URL.IsAbs() && domain != "" {
+		fullURL = fmt.Sprintf("%s://%s%s", scheme, domain, r.URL.RequestURI())
+	}
+
+	return RequestLogEntryRequestURLInfo{
+		Full:   fullURL,
+		Path:   r.URL.Path,
+		Query:  r.URL.Query().Encode(),
+		Scheme: scheme,
+		Domain: domain,
+	}
+}
+
+func getCloudflareInfo(r *http.Request) *RequestLogEntryCloudflareInfo {
+	if r.Header.Get("CF-Ray") == "" {
+		return nil
+	}
+
+	return &RequestLogEntryCloudflareInfo{
+		RayID: r.Header.Get("CF-Ray"),
+	}
 }
