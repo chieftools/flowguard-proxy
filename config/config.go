@@ -19,11 +19,18 @@ import (
 type Config struct {
 	Rules           map[string]*Rule      `json:"rules"`
 	Actions         map[string]*Action    `json:"actions"`
+	Logging         *LoggingConfig        `json:"logging"`
 	IPDatabase      *IPDatabaseConfig     `json:"ip_database"`
 	TrustedProxies  *TrustedProxiesConfig `json:"trusted_proxies"`
 	CacheDir        string                `json:"cache_dir,omitempty"`
 	CertPath        string                `json:"cert_path,omitempty"`
 	DefaultHostname string                `json:"default_hostname,omitempty"`
+}
+
+// LoggingConfig represents the request logging configuration
+type LoggingConfig struct {
+	Enabled  bool   `json:"enabled"`
+	FilePath string `json:"file_path,omitempty"`
 }
 
 // IPDatabaseConfig represents the IP database configuration

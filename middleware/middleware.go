@@ -1,13 +1,12 @@
 package middleware
 
 import (
-	"fmt"
 	"net/http"
 )
 
-// Middleware represents a security middleware that can allow or deny requests
+// Middleware represents middleware that can wrap the entire HTTP request/response cycle
 type Middleware interface {
-	Process(w http.ResponseWriter, r *http.Request) (bool, int, string)
+	Handle(w http.ResponseWriter, r *http.Request, next http.Handler)
 }
 
 // Chain manages a chain of middleware processors
@@ -27,16 +26,49 @@ func (mc *Chain) Add(m Middleware) {
 	mc.middlewares = append(mc.middlewares, m)
 }
 
-// Process runs through all middleware and returns false if any denies the request
-func (mc *Chain) Process(w http.ResponseWriter, r *http.Request) bool {
-	for _, m := range mc.middlewares {
-		allowed, statusCode, message := m.Process(w, r)
-		if !allowed {
-			// Add Via header to blocked responses to match proxied responses
-			w.Header().Add("Via", fmt.Sprintf("%d.%d flowguard", r.ProtoMajor, r.ProtoMinor))
-			http.Error(w, message, statusCode)
-			return false
-		}
+// ServeHTTP makes Chain implement http.Handler interface
+func (mc *Chain) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	mc.ServeHTTPWithHandler(w, r, nil)
+}
+
+// ServeHTTPWithHandler processes the request through middleware chain, then the final handler
+func (mc *Chain) ServeHTTPWithHandler(w http.ResponseWriter, r *http.Request, finalHandler http.Handler) {
+	// Start with the final handler
+	handler := finalHandler
+	if handler == nil {
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// No final handler, just return
+		})
 	}
-	return true
+
+	// Wrap with middleware in reverse order (last added executes first)
+	for i := len(mc.middlewares) - 1; i >= 0; i-- {
+		middleware := mc.middlewares[i]
+		currentHandler := handler
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			middleware.Handle(w, r, currentHandler)
+		})
+	}
+
+	// Execute the final wrapped handler
+	handler.ServeHTTP(w, r)
+}
+
+// ResponseWriterWrapper wraps http.ResponseWriter to capture status code
+type ResponseWriterWrapper struct {
+	http.ResponseWriter
+	StatusCodeValue int
+}
+
+func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
+	w.StatusCodeValue = statusCode
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *ResponseWriterWrapper) StatusCode() int {
+	if w.StatusCodeValue == 0 {
+		return http.StatusInternalServerError
+	}
+
+	return w.StatusCodeValue
 }

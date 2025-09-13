@@ -31,6 +31,7 @@ type Manager struct {
 	configMgr       *config.Manager
 	certManager     *certmanager.Manager
 	middlewareChain *middleware.Chain
+	requestLogger   *middleware.LoggingMiddleware
 	ipLookup        *middleware.IPLookupMiddleware
 	mu              sync.RWMutex
 }
@@ -46,7 +47,15 @@ func NewManager(cfg *Config) *Manager {
 	// Start config file watcher for hot-reload
 	configMgr.StartWatcher(10 * time.Second)
 
-	// Add IP enrichment middleware first to enrich all requests with IP/ASN data
+	// Create logging middleware first
+	var requestLogger *middleware.LoggingMiddleware
+	requestLogger, err = middleware.NewLoggingMiddleware(configMgr)
+	if err != nil {
+		log.Printf("Failed to initialize logging middleware: %v", err)
+		os.Exit(1)
+	}
+
+	// Add IP enrichment middleware to enrich all requests with IP/ASN data
 	var ipLookup *middleware.IPLookupMiddleware
 	ipLookup, err = middleware.NewIPLookupMiddleware(configMgr)
 	if err != nil {
@@ -57,7 +66,8 @@ func NewManager(cfg *Config) *Manager {
 	// Create middleware chain with config-based middleware
 	middlewareChain := middleware.NewChain()
 
-	// Add middlewares in order
+	// Add all middlewares using unified HTTP middleware pattern
+	middlewareChain.Add(requestLogger)
 	middlewareChain.Add(ipLookup)
 	middlewareChain.Add(middleware.NewRulesMiddleware(configMgr))
 
@@ -80,6 +90,7 @@ func NewManager(cfg *Config) *Manager {
 		ipLookup:        ipLookup,
 		configMgr:       configMgr,
 		certManager:     certmanager.New(cfg.CertPath, cfg.DefaultHostname),
+		requestLogger:   requestLogger,
 		middlewareChain: middlewareChain,
 	}
 }
@@ -208,7 +219,7 @@ func (p *Manager) Shutdown() error {
 	// Stop config watcher if running
 	p.configMgr.StopWatcher()
 
-	// Small delay before we shutdown the servers
+	// Small delay before we shut down the servers
 	time.Sleep(100 * time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -228,11 +239,14 @@ func (p *Manager) Shutdown() error {
 
 	wg.Wait()
 
-	// Close IP lookup database if open
-	p.ipLookup.Close()
-
 	// Shutdown certificate manager
 	p.certManager.Stop()
+
+	// Close request logger if open
+	p.requestLogger.Close()
+
+	// Close IP lookup database if open
+	p.ipLookup.Close()
 
 	log.Println("Proxy server shutdown complete")
 	return nil

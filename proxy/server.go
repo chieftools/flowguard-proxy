@@ -161,25 +161,25 @@ func (s *Server) CleanupPortRedirect() {
 }
 
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
-	// Process through middleware chain
-	if !s.config.middleware.Process(w, r) {
-		// Request was denied by middleware
-		return
-	}
+	// Create the proxy handler that will be called after middleware processing
+	proxyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Create target URL that points to the actual backend server
+		proxyTarget := &url.URL{
+			Scheme: s.config.scheme,
+			Host:   maybeFormatV6Addr(s.config.bindAddr),
+		}
 
-	// Create target URL that points to the actual backend server
-	proxyTarget := &url.URL{
-		Scheme: s.config.scheme,
-		Host:   maybeFormatV6Addr(s.config.bindAddr),
-	}
+		proxyHost := r.Host
+		if host, _, err := net.SplitHostPort(r.Host); err == nil {
+			proxyHost = host
+		}
 
-	proxyHost := r.Host
-	if host, _, err := net.SplitHostPort(r.Host); err == nil {
-		proxyHost = host
-	}
+		proxy := s.createReverseProxyWithHost(proxyTarget, proxyHost)
+		proxy.ServeHTTP(w, r)
+	})
 
-	proxy := s.createReverseProxyWithHost(proxyTarget, proxyHost)
-	proxy.ServeHTTP(w, r)
+	// Let the middleware chain handle the request with the proxy as the final handler
+	s.config.middleware.ServeHTTPWithHandler(w, r, proxyHandler)
 }
 
 func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *httputil.ReverseProxy {

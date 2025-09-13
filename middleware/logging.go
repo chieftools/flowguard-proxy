@@ -1,0 +1,256 @@
+package middleware
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"sync"
+	"time"
+
+	"flowguard/config"
+)
+
+const (
+	ContextKeyRuleID      contextKey = "ruleID"
+	ContextKeyActionTaken contextKey = "actionTaken"
+	ContextKeyStartTime   contextKey = "startTime"
+)
+
+type RequestLogEntry struct {
+	Timestamp string `json:"timestamp"`
+
+	// Action details
+	Action string `json:"action"`
+	RuleID string `json:"matched_rule_id,omitempty"`
+
+	// Request details
+	Method    string `json:"request_method"`
+	URL       string `json:"request_url"`
+	UserAgent string `json:"request_user_agent,omitempty"`
+
+	// Response details
+	ResponseStatus int   `json:"response_response_status"`
+	ResponseTimeMS int64 `json:"response_time_ms,omitempty"`
+
+	// Client details
+	ClientIP       string `json:"client_ip"`
+	ClientCountry  string `json:"client_country,omitempty"`
+	ClientASN      uint   `json:"client_asn,omitempty"`
+	ClientASName   string `json:"client_as_name,omitempty"`
+	ClientASDomain string `json:"client_as_domain,omitempty"`
+
+	// Proxy details if request was proxied
+	ProxyIP       string `json:"proxy_ip,omitempty"`
+	ProxyCountry  string `json:"proxy_country,omitempty"`
+	ProxyASN      uint   `json:"proxy_asn,omitempty"`
+	ProxyASName   string `json:"proxy_as_name,omitempty"`
+	ProxyASDomain string `json:"proxy_as_domain,omitempty"`
+}
+
+type LoggingMiddleware struct {
+	configMgr  *config.Manager
+	logFile    *os.File
+	mu         sync.RWMutex
+	lastConfig *config.LoggingConfig
+}
+
+func NewLoggingMiddleware(configMgr *config.Manager) (*LoggingMiddleware, error) {
+	m := &LoggingMiddleware{
+		configMgr: configMgr,
+	}
+
+	if err := m.updateLogOutput(); err != nil {
+		return nil, fmt.Errorf("failed to initialize logging: %w", err)
+	}
+
+	return m, nil
+}
+
+func (lm *LoggingMiddleware) updateLogOutput() error {
+	cfg := lm.configMgr.GetConfig()
+	if cfg == nil || cfg.Logging == nil {
+		return nil
+	}
+
+	loggingCfg := cfg.Logging
+
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	if lm.lastConfig != nil && lm.lastConfig.FilePath == loggingCfg.FilePath {
+		return nil
+	}
+
+	if lm.logFile != nil {
+		err := lm.logFile.Close()
+		if err != nil {
+			return err
+		}
+		lm.logFile = nil
+	}
+
+	if loggingCfg.FilePath != "" {
+		file, err := os.OpenFile(loggingCfg.FilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return fmt.Errorf("failed to open log file %s: %w", loggingCfg.FilePath, err)
+		}
+		lm.logFile = file
+	}
+
+	lm.lastConfig = loggingCfg
+	return nil
+}
+
+func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next http.Handler) {
+	cfg := lm.configMgr.GetConfig()
+	if cfg == nil || cfg.Logging == nil || !cfg.Logging.Enabled {
+		next.ServeHTTP(w, r)
+		return
+	}
+
+	if err := lm.updateLogOutput(); err != nil {
+		log.Printf("[middleware:logging] Failed to update log output: %v", err)
+	}
+
+	// Set start time for request duration tracking
+	ctx := context.WithValue(r.Context(), ContextKeyStartTime, time.Now())
+	r = r.WithContext(ctx)
+
+	// Create wrapper to capture response status code
+	wrapper := &ResponseWriterWrapper{ResponseWriter: w, StatusCodeValue: http.StatusOK}
+
+	// Process the request through the next handler
+	next.ServeHTTP(wrapper, r)
+
+	// Log the completed request
+	lm.logCompletedRequest(r, wrapper.StatusCode())
+}
+
+func (lm *LoggingMiddleware) logCompletedRequest(r *http.Request, statusCode int) {
+	cfg := lm.configMgr.GetConfig()
+	if cfg == nil || cfg.Logging == nil || !cfg.Logging.Enabled {
+		return
+	}
+
+	entry := lm.buildLogEntry(r, statusCode)
+	lm.writeLogEntry(entry)
+}
+
+func (lm *LoggingMiddleware) buildLogEntry(r *http.Request, statusCode int) *RequestLogEntry {
+	entry := &RequestLogEntry{
+		Timestamp:      time.Now().Format(time.RFC3339),
+		Method:         r.Method,
+		URL:            r.URL.String(),
+		ClientIP:       GetClientIP(r),
+		ResponseStatus: statusCode,
+		UserAgent:      r.Header.Get("User-Agent"),
+	}
+
+	if r.Host != "" {
+		if r.URL.Scheme == "" {
+			if r.TLS != nil {
+				entry.URL = "https://" + r.Host + entry.URL
+			} else {
+				entry.URL = "http://" + r.Host + entry.URL
+			}
+		}
+	}
+
+	startTime := GetStartTime(r)
+	responseTime := 0 * time.Millisecond
+
+	if !startTime.IsZero() {
+		responseTime = time.Since(startTime)
+	}
+
+	if responseTime > 0 {
+		entry.ResponseTimeMS = responseTime.Milliseconds()
+	}
+
+	if proxyIP := GetProxyIP(r); proxyIP != "" {
+		entry.ProxyIP = proxyIP
+
+		if proxyASN := GetProxyASN(r); proxyASN != nil {
+			entry.ProxyASN = proxyASN.GetASN()
+			entry.ProxyASName = proxyASN.ASName
+			entry.ProxyCountry = proxyASN.CountryCode
+			entry.ProxyASDomain = proxyASN.ASDomain
+		}
+	}
+
+	if clientASN := GetClientASN(r); clientASN != nil {
+		entry.ClientASN = clientASN.GetASN()
+		entry.ClientASName = clientASN.ASName
+		entry.ClientCountry = clientASN.CountryCode
+		entry.ClientASDomain = clientASN.ASDomain
+	}
+
+	ctx := r.Context()
+	if ruleID, ok := ctx.Value(ContextKeyRuleID).(string); ok {
+		entry.RuleID = ruleID
+	}
+
+	if actionTaken, ok := ctx.Value(ContextKeyActionTaken).(string); ok {
+		entry.Action = actionTaken
+	} else {
+		entry.Action = "proxy"
+	}
+
+	return entry
+}
+
+func (lm *LoggingMiddleware) writeLogEntry(entry *RequestLogEntry) {
+	lm.mu.RLock()
+	defer lm.mu.RUnlock()
+
+	var output string
+	var err error
+
+	var jsonBytes []byte
+	jsonBytes, err = json.Marshal(entry)
+	if err != nil {
+		log.Printf("[middleware:logging] Failed to marshal log entry: %v", err)
+		return
+	}
+	output = string(jsonBytes)
+
+	output += "\n"
+
+	if lm.logFile != nil {
+		if _, err := lm.logFile.WriteString(output); err != nil {
+			log.Printf("[middleware:logging] Failed to write to log file: %v", err)
+		}
+	} else {
+		fmt.Print(output)
+	}
+}
+
+func (lm *LoggingMiddleware) Close() {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	if lm.logFile != nil {
+		err := lm.logFile.Close()
+		if err != nil {
+			return
+		}
+		lm.logFile = nil
+	}
+}
+
+func SetRuleMatch(r *http.Request, ruleID string, action string) {
+	ctx := r.Context()
+	ctx = context.WithValue(ctx, ContextKeyRuleID, ruleID)
+	ctx = context.WithValue(ctx, ContextKeyActionTaken, action)
+	*r = *r.WithContext(ctx)
+}
+
+func GetStartTime(r *http.Request) time.Time {
+	if startTime, ok := r.Context().Value(ContextKeyStartTime).(time.Time); ok {
+		return startTime
+	}
+	return time.Time{}
+}

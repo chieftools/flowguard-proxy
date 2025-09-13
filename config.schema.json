@@ -35,6 +35,9 @@
     "trusted_proxies": {
       "$ref": "#/definitions/trustedProxies"
     },
+    "logging": {
+      "$ref": "#/definitions/logging"
+    },
     "cache_dir": {
       "type": "string",
       "description": "Directory for caching external data (IP databases, etc.)"
@@ -214,6 +217,22 @@
         }
       },
       "required": ["ipnets"],
+      "additionalProperties": false
+    },
+    "logging": {
+      "type": "object",
+      "description": "Request logging configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable request logging"
+        },
+        "file_path": {
+          "type": "string",
+          "description": "Path to log file (if empty, logs to stdout)"
+        }
+      },
+      "required": ["enabled"],
       "additionalProperties": false
     }
   }

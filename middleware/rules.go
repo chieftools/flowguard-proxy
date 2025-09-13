@@ -23,35 +23,40 @@ func NewRulesMiddleware(configMgr *config.Manager) *RulesMiddleware {
 	}
 }
 
-// Process evaluates the request against all rules
-func (rm *RulesMiddleware) Process(w http.ResponseWriter, r *http.Request) (bool, int, string) {
+// ServeHTTP evaluates the request against all rules using HTTP middleware pattern
+func (rm *RulesMiddleware) Handle(w http.ResponseWriter, r *http.Request, next http.Handler) {
 	rules := rm.configMgr.GetRules()
-	actions := rm.configMgr.GetActions()
 
 	// No rules configured, allow by default
 	if rules == nil {
-		return true, 0, ""
+		next.ServeHTTP(w, r)
+		return
 	}
 
 	for _, rule := range rules {
 		if rm.matchesRule(r, rule) {
+			actions := rm.configMgr.GetActions()
+
 			action, exists := actions[rule.Action]
 			if !exists {
 				log.Printf("[middleware:rules] Rule %s references unknown action: %s", rule.ID, rule.Action)
 				continue
 			}
 
-			clientIP := GetClientIP(r)
-			log.Printf("[middleware:rules] Rule %s matched (action: %s) for %s from %s", rule.ID, rule.Action, r.Host, clientIP)
+			// Set rule match information in context for logging
+			SetRuleMatch(r, rule.ID, action.Action)
 
 			if action.Action == "block" {
-				return false, action.Status, action.Message
+				// Add Via header to blocked responses to match proxied responses
+				w.Header().Add("Via", fmt.Sprintf("%d.%d flowguard", r.ProtoMajor, r.ProtoMinor))
+				http.Error(w, action.Message, action.Status)
+				return
 			}
 		}
 	}
 
 	// No rules matched, allow the request
-	return true, 0, ""
+	next.ServeHTTP(w, r)
 }
 
 // matchesRule checks if a request matches a specific rule

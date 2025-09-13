@@ -102,8 +102,8 @@ func (m *IPLookupMiddleware) loadASNDatabase() error {
 	return nil
 }
 
-// Process enriches the request with IP and ASN information
-func (m *IPLookupMiddleware) Process(w http.ResponseWriter, r *http.Request) (bool, int, string) {
+// ServeHTTP enriches the request with IP and ASN information using HTTP middleware pattern
+func (m *IPLookupMiddleware) Handle(w http.ResponseWriter, r *http.Request, next http.Handler) {
 	// Extract the real client IP considering trusted proxies
 	clientIP, proxyIP := m.extractIPs(r)
 
@@ -131,11 +131,8 @@ func (m *IPLookupMiddleware) Process(w http.ResponseWriter, r *http.Request) (bo
 		ctx = context.WithValue(ctx, ContextKeyIsProxied, false)
 	}
 
-	// Update the request with the new context
-	*r = *r.WithContext(ctx)
-
-	// Always allow - this middleware only enriches, doesn't block
-	return true, 0, ""
+	// Update the request with the new context and continue to next handler
+	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
 // extractIPs extracts the real client IP and proxy IP (if applicable) from the request
