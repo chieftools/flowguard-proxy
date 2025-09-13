@@ -127,22 +127,32 @@ chmod 755 /usr/bin/flowguard
 # Reload systemd
 systemctl daemon-reload
 
-echo ""
-echo "FlowGuard has been installed successfully!"
-echo ""
-echo "To configure FlowGuard:"
-echo "  1. Edit the configuration file: /etc/flowguard/config.json"
-echo "  2. Start the service: systemctl start flowguard"
-echo "  3. Start the service on boot: systemctl enable flowguard"
-echo ""
-echo "Important directories:"
-echo "  Configuration: /etc/flowguard/"
-echo "  Cache:         /var/cache/flowguard/"
-echo "  Logs:          /var/log/flowguard/"
-echo ""
-echo "To check service status: systemctl status flowguard"
-echo "To view logs: journalctl -u flowguard -f"
-echo ""
+# Check if this is an upgrade (service was previously enabled)
+if [ "$1" = "configure" ] && [ -n "$2" ]; then
+    # This is an upgrade - restart the service if it was previously enabled
+    if systemctl is-enabled --quiet flowguard.service 2>/dev/null; then
+        echo "Restarting FlowGuard service after upgrade..."
+        systemctl restart flowguard.service || true
+    fi
+else
+    # Fresh install - show setup instructions
+    echo ""
+    echo "FlowGuard has been installed successfully!"
+    echo ""
+    echo "To configure FlowGuard:"
+    echo "  1. Edit the configuration file: /etc/flowguard/config.json"
+    echo "  2. Start the service: systemctl start flowguard"
+    echo "  3. Start the service on boot: systemctl enable flowguard"
+    echo ""
+    echo "Important directories:"
+    echo "  Configuration: /etc/flowguard/"
+    echo "  Cache:         /var/cache/flowguard/"
+    echo "  Logs:          /var/log/flowguard/"
+    echo ""
+    echo "To check service status: systemctl status flowguard"
+    echo "To view logs: journalctl -u flowguard -f"
+    echo ""
+fi
 
 exit 0
 EOF
