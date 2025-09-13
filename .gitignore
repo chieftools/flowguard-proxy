@@ -22,6 +22,7 @@ flowguard-*
 
 # Workspace files
 .idea
+.cache
 go.work
 go.work.sum
 
