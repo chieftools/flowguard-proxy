@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"flowguard/config"
+
+	"github.com/axiomhq/axiom-go/axiom"
+	"github.com/axiomhq/axiom-go/axiom/ingest"
 )
 
 const (
@@ -51,11 +54,14 @@ type RequestLogEntry struct {
 }
 
 type LoggingMiddleware struct {
-	configMgr *config.Manager
-	logFile   *os.File
-	enabled   bool
-	config    *config.LoggingConfig
-	mu        sync.RWMutex
+	configMgr       *config.Manager
+	logFile         *os.File
+	enabled         bool
+	config          *config.LoggingConfig
+	axiomClient     *axiom.Client
+	axiomChannel    chan axiom.Event
+	axiomCancelFunc context.CancelFunc
+	mu              sync.RWMutex
 }
 
 func NewLoggingMiddleware(configMgr *config.Manager) (*LoggingMiddleware, error) {
@@ -94,6 +100,22 @@ func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
 
 	lm.enabled = loggingCfg.Enabled
 
+	err := lm.updateFileOutput(loggingCfg)
+	if err != nil {
+		return err
+	}
+
+	err = lm.updateAxiomOutput(loggingCfg)
+	if err != nil {
+		return err
+	}
+
+	lm.config = loggingCfg
+
+	return nil
+}
+
+func (lm *LoggingMiddleware) updateFileOutput(loggingCfg *config.LoggingConfig) error {
 	if lm.config != nil && lm.config.FilePath == loggingCfg.FilePath {
 		return nil
 	}
@@ -106,15 +128,62 @@ func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
 		lm.logFile = nil
 	}
 
-	if loggingCfg.FilePath != "" {
-		file, err := os.OpenFile(loggingCfg.FilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			return fmt.Errorf("failed to open log file %s: %w", loggingCfg.FilePath, err)
-		}
-		lm.logFile = file
+	if loggingCfg.FilePath == "" {
+		return nil
 	}
 
-	lm.config = loggingCfg
+	file, err := os.OpenFile(loggingCfg.FilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open log file %s: %w", loggingCfg.FilePath, err)
+	}
+	lm.logFile = file
+
+	log.Printf("[middleware:logging] File logging enabled to %s", loggingCfg.FilePath)
+
+	return nil
+}
+
+func (lm *LoggingMiddleware) updateAxiomOutput(loggingCfg *config.LoggingConfig) error {
+	if lm.config != nil && lm.config.AxiomDataset == loggingCfg.AxiomDataset && lm.config.AxiomToken == loggingCfg.AxiomToken {
+		return nil
+	}
+
+	if lm.axiomCancelFunc != nil {
+		lm.axiomCancelFunc()
+		lm.axiomCancelFunc = nil
+	}
+
+	if lm.axiomChannel != nil {
+		close(lm.axiomChannel)
+		lm.axiomChannel = nil
+		lm.axiomClient = nil
+	}
+
+	if loggingCfg.AxiomDataset == "" || loggingCfg.AxiomToken == "" {
+		return nil
+	}
+
+	client, err := axiom.NewClient(
+		axiom.SetToken(loggingCfg.AxiomToken),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create Axiom client: %w", err)
+	}
+
+	lm.axiomClient = client
+	lm.axiomChannel = make(chan axiom.Event, 10000)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	lm.axiomCancelFunc = cancel
+
+	go func() {
+		_, err = client.IngestChannel(ctx, loggingCfg.AxiomDataset, lm.axiomChannel, ingest.SetTimestampField("timestamp"))
+		if err != nil && ctx.Err() == nil {
+			log.Printf("[middleware:logging] Axiom ingestion error: %v", err)
+		}
+	}()
+
+	log.Printf("[middleware:logging] Axiom logging enabled to dataset %s", loggingCfg.AxiomDataset)
 
 	return nil
 }
@@ -226,25 +295,30 @@ func (lm *LoggingMiddleware) writeLogEntry(entry *RequestLogEntry) {
 	lm.mu.RLock()
 	defer lm.mu.RUnlock()
 
-	var output string
-	var err error
-
-	var jsonBytes []byte
-	jsonBytes, err = json.Marshal(entry)
+	jsonBytes, err := json.Marshal(entry)
 	if err != nil {
 		log.Printf("[middleware:logging] Failed to marshal log entry: %v", err)
 		return
 	}
-	output = string(jsonBytes)
-
-	output += "\n"
 
 	if lm.logFile != nil {
-		if _, err := lm.logFile.WriteString(output); err != nil {
+		if _, err := lm.logFile.WriteString(string(jsonBytes) + "\n"); err != nil {
 			log.Printf("[middleware:logging] Failed to write to log file: %v", err)
 		}
-	} else {
-		fmt.Print(output)
+	}
+
+	if lm.axiomChannel != nil {
+		var event axiom.Event
+		if err := json.Unmarshal(jsonBytes, &event); err != nil {
+			log.Printf("[middleware:logging] Failed to unmarshal log entry for Axiom: %v", err)
+			return
+		}
+
+		select {
+		case lm.axiomChannel <- event:
+		default:
+			log.Printf("[middleware:logging] Axiom channel is full, dropping log entry")
+		}
 	}
 }
 
@@ -252,10 +326,20 @@ func (lm *LoggingMiddleware) Close() {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 
+	if lm.axiomCancelFunc != nil {
+		lm.axiomCancelFunc()
+		lm.axiomCancelFunc = nil
+	}
+
+	if lm.axiomChannel != nil {
+		close(lm.axiomChannel)
+		lm.axiomChannel = nil
+		lm.axiomClient = nil
+	}
+
 	if lm.logFile != nil {
-		err := lm.logFile.Close()
-		if err != nil {
-			return
+		if err := lm.logFile.Close(); err != nil {
+			log.Printf("[middleware:logging] Failed to close log file: %v", err)
 		}
 		lm.logFile = nil
 	}

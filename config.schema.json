@@ -230,6 +230,14 @@
         "file_path": {
           "type": "string",
           "description": "Path to log file (if empty, logs to stdout)"
+        },
+        "axiom_token": {
+          "type": "string",
+          "description": "The Axiom API token to send logs to"
+        },
+        "axiom_dataset": {
+          "type": "string",
+          "description": "The Axiom dataset to send logs to"
         }
       },
       "required": ["enabled"],
