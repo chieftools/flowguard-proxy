@@ -51,10 +51,11 @@ type RequestLogEntry struct {
 }
 
 type LoggingMiddleware struct {
-	configMgr  *config.Manager
-	logFile    *os.File
-	mu         sync.RWMutex
-	lastConfig *config.LoggingConfig
+	configMgr *config.Manager
+	logFile   *os.File
+	enabled   bool
+	config    *config.LoggingConfig
+	mu        sync.RWMutex
 }
 
 func NewLoggingMiddleware(configMgr *config.Manager) (*LoggingMiddleware, error) {
@@ -62,25 +63,38 @@ func NewLoggingMiddleware(configMgr *config.Manager) (*LoggingMiddleware, error)
 		configMgr: configMgr,
 	}
 
-	if err := m.updateLogOutput(); err != nil {
+	if err := m.updateLogOutput(configMgr.GetConfig()); err != nil {
 		return nil, fmt.Errorf("failed to initialize logging: %w", err)
 	}
+
+	// Set up config change notification
+	configMgr.OnChange(m.onConfigChange)
 
 	return m, nil
 }
 
-func (lm *LoggingMiddleware) updateLogOutput() error {
-	cfg := lm.configMgr.GetConfig()
+func (lm *LoggingMiddleware) onConfigChange(cfg *config.Config) {
+	if err := lm.updateLogOutput(cfg); err != nil {
+		log.Printf("[middleware:logging] Failed to update log output on config change: %v", err)
+	}
+}
+
+func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
 	if cfg == nil || cfg.Logging == nil {
+		lm.config = nil
+		lm.enabled = false
+
 		return nil
 	}
 
 	loggingCfg := cfg.Logging
 
-	lm.mu.Lock()
-	defer lm.mu.Unlock()
+	lm.enabled = loggingCfg.Enabled
 
-	if lm.lastConfig != nil && lm.lastConfig.FilePath == loggingCfg.FilePath {
+	if lm.config != nil && lm.config.FilePath == loggingCfg.FilePath {
 		return nil
 	}
 
@@ -100,19 +114,19 @@ func (lm *LoggingMiddleware) updateLogOutput() error {
 		lm.logFile = file
 	}
 
-	lm.lastConfig = loggingCfg
+	lm.config = loggingCfg
+
 	return nil
 }
 
 func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next http.Handler) {
-	cfg := lm.configMgr.GetConfig()
-	if cfg == nil || cfg.Logging == nil || !cfg.Logging.Enabled {
+	lm.mu.RLock()
+	enabled := lm.enabled
+	lm.mu.RUnlock()
+
+	if !enabled {
 		next.ServeHTTP(w, r)
 		return
-	}
-
-	if err := lm.updateLogOutput(); err != nil {
-		log.Printf("[middleware:logging] Failed to update log output: %v", err)
 	}
 
 	// Set start time for request duration tracking
@@ -130,8 +144,11 @@ func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 }
 
 func (lm *LoggingMiddleware) logCompletedRequest(r *http.Request, statusCode int) {
-	cfg := lm.configMgr.GetConfig()
-	if cfg == nil || cfg.Logging == nil || !cfg.Logging.Enabled {
+	lm.mu.RLock()
+	enabled := lm.enabled
+	lm.mu.RUnlock()
+
+	if !enabled {
 		return
 	}
 

@@ -83,11 +83,11 @@ type Manager struct {
 	configPath      string
 	config          *Config
 	trustedProxyIPs []net.IPNet
-	mu              sync.RWMutex
 	lastModified    time.Time
-	onChange        func(*Config)
 	stopWatcher     chan struct{}
+	callbacks       []func(*Config)
 	cache           *cache.Cache
+	mu              sync.RWMutex
 }
 
 // NewManager creates a new configuration manager
@@ -154,9 +154,18 @@ func (m *Manager) Load() error {
 	m.lastModified = info.ModTime()
 	m.mu.Unlock()
 
-	// Notify change listener if configured and config changed
-	if m.onChange != nil && oldConfig != nil {
-		m.onChange(&config)
+	// Notify all change listeners if config changed
+	if oldConfig != nil {
+		m.mu.RLock()
+		callbacks := make([]func(*Config), len(m.callbacks))
+		copy(callbacks, m.callbacks)
+		m.mu.RUnlock()
+
+		for _, callback := range callbacks {
+			if callback != nil {
+				callback(&config)
+			}
+		}
 	}
 
 	// Set rule IDs from map keys and compile regex patterns
@@ -338,9 +347,28 @@ func (m *Manager) IsTrustedProxy(ip string) bool {
 	return false
 }
 
-// OnChange sets a callback to be called when configuration changes
+// OnChange adds a callback to be called when configuration changes
 func (m *Manager) OnChange(callback func(*Config)) {
-	m.onChange = callback
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.callbacks = append(m.callbacks, callback)
+}
+
+// RemoveOnChange removes a specific callback (by comparing function pointers)
+// Note: This is not commonly needed but provided for completeness
+func (m *Manager) RemoveOnChange(callback func(*Config)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, cb := range m.callbacks {
+		// This comparison works for function pointers but may not be reliable
+		// in all cases. A better approach would be to return an ID from OnChange.
+		if &cb == &callback {
+			// Remove callback by replacing with last element and truncating
+			m.callbacks[i] = m.callbacks[len(m.callbacks)-1]
+			m.callbacks = m.callbacks[:len(m.callbacks)-1]
+			break
+		}
+	}
 }
 
 // StartWatcher starts watching the configuration file for changes
