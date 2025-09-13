@@ -45,16 +45,11 @@ func (mc *Chain) ServeHTTPWithHandler(w http.ResponseWriter, r *http.Request, fi
 	// We iterate backwards so that the first middleware added becomes the outermost wrapper
 	// This means the first added middleware executes first and completes last (wrap pattern)
 	for i := len(mc.middlewares) - 1; i >= 0; i-- {
-		// Capture loop variables correctly to avoid closure issues
 		middleware := mc.middlewares[i]
 		currentHandler := handler
-
-		// Create a closure that captures the middleware and handler by value
-		handler = func(mw Middleware, next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				mw.Handle(w, r, next)
-			})
-		}(middleware, currentHandler)
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			middleware.Handle(w, r, currentHandler)
+		})
 	}
 
 	// Execute the final wrapped handler
