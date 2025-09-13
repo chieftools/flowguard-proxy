@@ -10,6 +10,7 @@
 *.dylib
 flowguard
 flowguard-*
+flowguard_*.deb
 
 # Test binary, built with `go test -c`
 *.test
