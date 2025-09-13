@@ -100,18 +100,18 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration) (string, er
 	if c == nil {
 		return "", fmt.Errorf("cache not initialized")
 	}
-	
+
 	// Use a different naming scheme for binary files
 	hash := sha256.Sum256([]byte(url))
 	cacheFile := filepath.Join(c.cacheDir, hex.EncodeToString(hash[:])+"_file.bin")
 	metaFile := filepath.Join(c.cacheDir, hex.EncodeToString(hash[:])+"_file.meta")
-	
+
 	// Check metadata first
 	var meta struct {
 		ETag      string    `json:"etag,omitempty"`
 		Timestamp time.Time `json:"timestamp"`
 	}
-	
+
 	if metaData, err := os.ReadFile(metaFile); err == nil {
 		if err := json.Unmarshal(metaData, &meta); err == nil {
 			// Check if cache is still fresh
@@ -124,23 +124,23 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration) (string, er
 			}
 		}
 	}
-	
+
 	// Fetch fresh file
 	log.Printf("[cache] Fetching fresh file from %s", url)
-	
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", err
 	}
-	
+
 	if c.userAgent != "" {
 		req.Header.Set("User-Agent", c.userAgent)
 	}
-	
+
 	if meta.ETag != "" {
 		req.Header.Set("If-None-Match", meta.ETag)
 	}
-	
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		// If fetch fails but we have stale cache, use it
@@ -151,7 +151,7 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration) (string, er
 		return "", err
 	}
 	defer resp.Body.Close()
-	
+
 	// Handle 304 Not Modified
 	if resp.StatusCode == http.StatusNotModified {
 		// Update timestamp
@@ -162,18 +162,18 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration) (string, er
 		log.Printf("[cache] File not modified for %s", url)
 		return cacheFile, nil
 	}
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
-	
+
 	// Create temporary file first
 	tempFile := cacheFile + ".tmp"
 	out, err := os.Create(tempFile)
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Copy data
 	size, err := io.Copy(out, resp.Body)
 	out.Close()
@@ -181,20 +181,20 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration) (string, er
 		os.Remove(tempFile)
 		return "", err
 	}
-	
+
 	// Move temp file to final location
 	if err := os.Rename(tempFile, cacheFile); err != nil {
 		os.Remove(tempFile)
 		return "", err
 	}
-	
+
 	// Save metadata
 	meta.ETag = resp.Header.Get("ETag")
 	meta.Timestamp = time.Now()
 	if metaData, err := json.Marshal(meta); err == nil {
 		os.WriteFile(metaFile, metaData, 0644)
 	}
-	
+
 	log.Printf("[cache] Downloaded and cached file from %s (size: %.2f MB)", url, float64(size)/1024/1024)
 	return cacheFile, nil
 }
