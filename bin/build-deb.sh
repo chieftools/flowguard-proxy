@@ -170,9 +170,11 @@ if systemctl is-active --quiet flowguard.service; then
     systemctl stop flowguard.service || true
 fi
 
-# Disable the service
-if systemctl is-enabled --quiet flowguard.service; then
-    systemctl disable flowguard.service || true
+# Only disable service on actual removal, not upgrades
+if [ "$1" = "remove" ]; then
+    if systemctl is-enabled --quiet flowguard.service; then
+        systemctl disable flowguard.service || true
+    fi
 fi
 
 exit 0
