@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -30,9 +31,24 @@ type RequestLogEntry struct {
 	RuleID string `json:"matched_rule_id,omitempty"`
 
 	// Request details
-	Method    string `json:"request_method"`
-	URL       string `json:"request_url"`
-	UserAgent string `json:"request_user_agent,omitempty"`
+	RequestURL           string `json:"request_url"`
+	RequestPath          string `json:"request_path"`
+	RequestQuery         string `json:"request_query,omitempty"`
+	RequestScheme        string `json:"request_scheme"`
+	RequestDomain        string `json:"request_domain"`
+	RequestMethod        string `json:"request_method"`
+	RequestReferrer      string `json:"request_referrer,omitempty"`
+	RequestUserAgent     string `json:"request_user_agent,omitempty"`
+	RequestContentType   string `json:"request_content_type,omitempty"`
+	RequestHTTPVersion   string `json:"request_http_version"`
+	RequestContentLength string `json:"request_content_length,omitempty"`
+
+	// TLS details
+	RequestTLSCipher  string `json:"request_tls_cipher,omitempty"`
+	RequestTLSVersion string `json:"request_tls_version,omitempty"`
+
+	// Cloudflare details if request passed through Cloudflare
+	CloudflareRayID string `json:"cloudflare_ray_id,omitempty"`
 
 	// Response details
 	ResponseStatus int   `json:"response_response_status"`
@@ -230,22 +246,47 @@ func (lm *LoggingMiddleware) logCompletedRequest(r *http.Request, statusCode int
 
 func (lm *LoggingMiddleware) buildLogEntry(r *http.Request, statusCode int) *RequestLogEntry {
 	entry := &RequestLogEntry{
-		Timestamp:      time.Now().Format(time.RFC3339),
-		Method:         r.Method,
-		URL:            r.URL.String(),
-		ClientIP:       GetClientIP(r),
+		Timestamp: time.Now().Format(time.RFC3339),
+
+		// Client details
+		ClientIP: GetClientIP(r),
+
+		// Proxy details
+		ProxyIP: GetProxyIP(r),
+
+		// Request details
+		RequestPath:          r.URL.String(),
+		RequestQuery:         r.URL.RawQuery,
+		RequestDomain:        r.Host,
+		RequestMethod:        r.Method,
+		RequestReferrer:      r.Header.Get("Referer"),
+		RequestUserAgent:     r.Header.Get("User-Agent"),
+		RequestContentType:   r.Header.Get("Content-Type"),
+		RequestHTTPVersion:   r.Proto,
+		RequestContentLength: r.Header.Get("Content-Length"),
+
+		// Response details
 		ResponseStatus: statusCode,
-		UserAgent:      r.Header.Get("User-Agent"),
+
+		// Cloudflare details
+		CloudflareRayID: r.Header.Get("CF-Ray"),
 	}
 
 	if r.Host != "" {
 		if r.URL.Scheme == "" {
 			if r.TLS != nil {
-				entry.URL = "https://" + r.Host + entry.URL
+				entry.RequestURL = "https://" + r.Host + entry.RequestURL
+				entry.RequestScheme = "https"
 			} else {
-				entry.URL = "http://" + r.Host + entry.URL
+				entry.RequestURL = "http://" + r.Host + entry.RequestURL
+				entry.RequestScheme = "http"
 			}
 		}
+	}
+
+	if r.TLS != nil {
+		entry.RequestTLSCipher = tls.CipherSuiteName(r.TLS.CipherSuite)
+		entry.RequestTLSVersion = tls.VersionName(r.TLS.Version)
 	}
 
 	startTime := GetStartTime(r)
@@ -254,20 +295,15 @@ func (lm *LoggingMiddleware) buildLogEntry(r *http.Request, statusCode int) *Req
 	if !startTime.IsZero() {
 		responseTime = time.Since(startTime)
 	}
-
 	if responseTime > 0 {
 		entry.ResponseTimeMS = responseTime.Milliseconds()
 	}
 
-	if proxyIP := GetProxyIP(r); proxyIP != "" {
-		entry.ProxyIP = proxyIP
-
-		if proxyASN := GetProxyASN(r); proxyASN != nil {
-			entry.ProxyASN = proxyASN.GetASN()
-			entry.ProxyASName = proxyASN.ASName
-			entry.ProxyCountry = proxyASN.CountryCode
-			entry.ProxyASDomain = proxyASN.ASDomain
-		}
+	if proxyASN := GetProxyASN(r); proxyASN != nil {
+		entry.ProxyASN = proxyASN.GetASN()
+		entry.ProxyASName = proxyASN.ASName
+		entry.ProxyCountry = proxyASN.CountryCode
+		entry.ProxyASDomain = proxyASN.ASDomain
 	}
 
 	if clientASN := GetClientASN(r); clientASN != nil {
