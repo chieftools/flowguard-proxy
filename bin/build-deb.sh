@@ -127,9 +127,6 @@ chmod 755 /usr/bin/flowguard
 # Reload systemd
 systemctl daemon-reload
 
-# Enable service but don't start it
-systemctl enable flowguard.service || true
-
 echo ""
 echo "FlowGuard has been installed successfully!"
 echo ""
