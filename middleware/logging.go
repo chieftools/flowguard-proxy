@@ -2,7 +2,9 @@ package middleware
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -19,12 +21,16 @@ import (
 
 const (
 	ContextKeyRuleID      contextKey = "ruleID"
-	ContextKeyActionTaken contextKey = "actionTaken"
+	ContextKeyStreamID    contextKey = "streamID"
 	ContextKeyStartTime   contextKey = "startTime"
+	ContextKeyActionTaken contextKey = "actionTaken"
 )
 
 type RequestLogEntry struct {
 	Timestamp string `json:"timestamp"`
+
+	// FlowGuard ID for request tracing
+	StreamID string `json:"stream_id"`
 
 	// Action details
 	Action string `json:"action"`
@@ -209,19 +215,26 @@ func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 	enabled := lm.enabled
 	lm.mu.RUnlock()
 
-	if !enabled {
-		next.ServeHTTP(w, r)
-		return
-	}
+	// Generate FG-Ray ID for request tracing
+	streamID := generateStreamID()
 
-	// Set start time for request duration tracking
+	// Set start time and FG-Ray ID in context
 	ctx := context.WithValue(r.Context(), ContextKeyStartTime, time.Now())
+	ctx = context.WithValue(ctx, ContextKeyStreamID, streamID)
 	r = r.WithContext(ctx)
 
-	// Create wrapper to capture response status code
+	// Create wrapper to capture response status code and add FG-Ray header
 	wrapper := &ResponseWriterWrapper{
 		ResponseWriter:  w,
 		StatusCodeValue: http.StatusOK,
+	}
+
+	// Add FG-Ray header to response
+	wrapper.Header().Set("FG-Ray", streamID)
+
+	if !enabled {
+		next.ServeHTTP(wrapper, r)
+		return
 	}
 
 	// Process the request through the next handler
@@ -247,6 +260,9 @@ func (lm *LoggingMiddleware) logCompletedRequest(r *http.Request, statusCode int
 func (lm *LoggingMiddleware) buildLogEntry(r *http.Request, statusCode int) *RequestLogEntry {
 	entry := &RequestLogEntry{
 		Timestamp: time.Now().Format(time.RFC3339),
+
+		// Stream ID
+		StreamID: GetStreamID(r),
 
 		// Client details
 		ClientIP: GetClientIP(r),
@@ -394,4 +410,19 @@ func GetStartTime(r *http.Request) time.Time {
 	}
 
 	return time.Time{}
+}
+
+func GetStreamID(r *http.Request) string {
+	if streamID, ok := r.Context().Value(ContextKeyStreamID).(string); ok {
+		return streamID
+	}
+	return ""
+}
+
+func generateStreamID() string {
+	bytes := make([]byte, 8)
+	if _, err := rand.Read(bytes); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(bytes)
 }

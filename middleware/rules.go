@@ -47,9 +47,12 @@ func (rm *RulesMiddleware) Handle(w http.ResponseWriter, r *http.Request, next h
 			SetRuleMatch(r, rule.ID, action.Action)
 
 			if action.Action == "block" {
-				// Add Via header to blocked responses to match proxied responses
+				// Add Via header to blocked responses to match proxied responses and our stream ID
 				w.Header().Add("Via", fmt.Sprintf("%d.%d flowguard", r.ProtoMajor, r.ProtoMinor))
+				w.Header().Add("FG-Stream", GetStreamID(r))
+
 				http.Error(w, action.Message, action.Status)
+
 				return
 			}
 		}
