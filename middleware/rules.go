@@ -23,7 +23,7 @@ func NewRulesMiddleware(configMgr *config.Manager) *RulesMiddleware {
 	}
 }
 
-// ServeHTTP evaluates the request against all rules using HTTP middleware pattern
+// Handle evaluates the request against all rules using HTTP middleware pattern
 func (rm *RulesMiddleware) Handle(w http.ResponseWriter, r *http.Request, next http.Handler) {
 	rules := rm.configMgr.GetRules()
 

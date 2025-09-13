@@ -102,7 +102,7 @@ func (m *IPLookupMiddleware) loadASNDatabase() error {
 	return nil
 }
 
-// ServeHTTP enriches the request with IP and ASN information using HTTP middleware pattern
+// Handle enriches the request with IP and ASN information using HTTP middleware pattern
 func (m *IPLookupMiddleware) Handle(w http.ResponseWriter, r *http.Request, next http.Handler) {
 	// Extract the real client IP considering trusted proxies
 	clientIP, proxyIP := m.extractIPs(r)

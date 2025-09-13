@@ -71,11 +71,3 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 	w.StatusCodeValue = statusCode
 	w.ResponseWriter.WriteHeader(statusCode)
 }
-
-func (w *ResponseWriterWrapper) StatusCode() int {
-	if w.StatusCodeValue == 0 {
-		return http.StatusInternalServerError
-	}
-
-	return w.StatusCodeValue
-}

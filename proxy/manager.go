@@ -68,9 +68,10 @@ func NewManager(cfg *Config) *Manager {
 
 	// Add middleware in the order they should execute
 	// The first added middleware wraps everything (executes first and completes last)
-	// Execution order: logging -> IP lookup -> rules -> handler -> rules -> IP lookup -> logging
-	middlewareChain.Add(requestLogger)                            // Wraps everything: logs request and response
-	middlewareChain.Add(ipLookup)                                 // Enriches request with IP/ASN data
+	// IP lookup MUST be before logging so logging can see the enriched context
+	// Execution order: IP lookup -> logging -> rules -> handler -> rules -> logging -> IP lookup
+	middlewareChain.Add(ipLookup)                                 // Enriches request with IP/ASN data (must be first!)
+	middlewareChain.Add(requestLogger)                            // Logs request and response with enriched data
 	middlewareChain.Add(middleware.NewRulesMiddleware(configMgr)) // Evaluates rules with enriched data
 
 	// Determine bind addresses based on configuration

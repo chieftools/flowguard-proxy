@@ -134,13 +134,16 @@ func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 	r = r.WithContext(ctx)
 
 	// Create wrapper to capture response status code
-	wrapper := &ResponseWriterWrapper{ResponseWriter: w, StatusCodeValue: http.StatusOK}
+	wrapper := &ResponseWriterWrapper{
+		ResponseWriter:  w,
+		StatusCodeValue: http.StatusOK,
+	}
 
 	// Process the request through the next handler
 	next.ServeHTTP(wrapper, r)
 
-	// Log the completed request
-	lm.logCompletedRequest(r, wrapper.StatusCode())
+	// Log the completed request - now r has the enriched context from IP lookup
+	lm.logCompletedRequest(r, wrapper.StatusCodeValue)
 }
 
 func (lm *LoggingMiddleware) logCompletedRequest(r *http.Request, statusCode int) {
@@ -269,5 +272,6 @@ func GetStartTime(r *http.Request) time.Time {
 	if startTime, ok := r.Context().Value(ContextKeyStartTime).(time.Time); ok {
 		return startTime
 	}
+
 	return time.Time{}
 }
