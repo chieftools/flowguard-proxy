@@ -17,13 +17,12 @@ import (
 )
 
 type ServerConfig struct {
-	scheme       string
-	verbose      bool
-	bindAddr     string
-	bindPort     string
-	redirPort    string
-	middleware   *middleware.Chain
-	serverHeader string
+	scheme     string
+	verbose    bool
+	bindAddr   string
+	bindPort   string
+	redirPort  string
+	middleware *middleware.Chain
 }
 
 type Server struct {

@@ -28,7 +28,7 @@ func main() {
 		// Behavior configuration
 		verbose    = flag.Bool("verbose", false, "Enable more verbose output")
 		cacheDir   = flag.String("cache-dir", "/var/cache/flowguard", "Directory for caching external data")
-		userAgent  = flag.String("user-agent", "FlowGuard/1.0", "The User-Agent & Server header value to use requests and responses")
+		userAgent  = flag.String("user-agent", "FlowGuard/1.0", "The User-Agent header value to use for outgoing requests")
 		configFile = flag.String("config", "config.json", "Path to the configuration file")
 	)
 	flag.Parse()

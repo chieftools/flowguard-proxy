@@ -140,13 +140,12 @@ func (p *Manager) Start() error {
 		}
 
 		httpServer := NewServer(&ServerConfig{
-			scheme:       "http",
-			verbose:      p.config.Verbose,
-			bindAddr:     bindAddr,
-			bindPort:     p.config.HTTPPort,
-			redirPort:    httpRedirPort,
-			middleware:   p.middlewareChain,
-			serverHeader: p.config.UserAgent,
+			scheme:     "http",
+			verbose:    p.config.Verbose,
+			bindAddr:   bindAddr,
+			bindPort:   p.config.HTTPPort,
+			redirPort:  httpRedirPort,
+			middleware: p.middlewareChain,
 		})
 		p.servers = append(p.servers, httpServer)
 
@@ -156,13 +155,12 @@ func (p *Manager) Start() error {
 		}
 
 		httpsServer := NewServer(&ServerConfig{
-			scheme:       "https",
-			verbose:      p.config.Verbose,
-			bindAddr:     bindAddr,
-			bindPort:     p.config.HTTPSPort,
-			redirPort:    httpsRedirPort,
-			middleware:   p.middlewareChain,
-			serverHeader: p.config.UserAgent,
+			scheme:     "https",
+			verbose:    p.config.Verbose,
+			bindAddr:   bindAddr,
+			bindPort:   p.config.HTTPSPort,
+			redirPort:  httpsRedirPort,
+			middleware: p.middlewareChain,
 		})
 		p.servers = append(p.servers, httpsServer)
 
