@@ -17,10 +17,13 @@ import (
 
 // Config represents the complete application configuration
 type Config struct {
-	Rules          map[string]*Rule      `json:"rules"`
-	Actions        map[string]*Action    `json:"actions"`
-	IPDatabase     *IPDatabaseConfig     `json:"ip_database"`
-	TrustedProxies *TrustedProxiesConfig `json:"trusted_proxies"`
+	Rules           map[string]*Rule      `json:"rules"`
+	Actions         map[string]*Action    `json:"actions"`
+	IPDatabase      *IPDatabaseConfig     `json:"ip_database"`
+	TrustedProxies  *TrustedProxiesConfig `json:"trusted_proxies"`
+	CacheDir        string                `json:"cache_dir,omitempty"`
+	CertPath        string                `json:"cert_path,omitempty"`
+	DefaultHostname string                `json:"default_hostname,omitempty"`
 }
 
 // IPDatabaseConfig represents the IP database configuration

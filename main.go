@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"log"
 	"os"
@@ -33,25 +34,47 @@ func main() {
 	)
 	flag.Parse()
 
+	// Load config file first to get defaults
+	cfg, err := loadConfigDefaults(*configFile)
+	if err != nil {
+		log.Printf("Failed to load configuration from %s: %v", *configFile, err)
+		os.Exit(1)
+	}
+
+	// Override config with CLI flags if provided
+	if *cacheDir != "/var/cache/flowguard" {
+		cfg.CacheDir = *cacheDir
+	} else if cfg.CacheDir == "" {
+		cfg.CacheDir = *cacheDir
+	}
+
+	if *certPath != "/opt/psa/var/certificates" {
+		cfg.CertPath = *certPath
+	} else if cfg.CertPath == "" {
+		cfg.CertPath = *certPath
+	}
+
+	if *defaultHostname != "" {
+		cfg.DefaultHostname = *defaultHostname
+	}
+
 	// Certificate test mode
 	if *testCerts {
-		cm := certmanager.New(*certPath, *defaultHostname)
+		cm := certmanager.New(cfg.CertPath, cfg.DefaultHostname)
 		cm.TestCertificates()
 		os.Exit(0)
 	}
 
-	proxyManager := proxy.NewManager(&proxy.Config{
-		Verbose:         *verbose,
-		CacheDir:        *cacheDir,
-		CertPath:        *certPath,
-		HTTPPort:        *httpPort,
-		HTTPSPort:       *httpsPort,
-		BindAddrs:       parseBindAddrsList(*bindAddrs),
-		UserAgent:       *userAgent,
-		NoRedirect:      *noRedirect,
-		ConfigFile:      *configFile,
-		DefaultHostname: *defaultHostname,
-	})
+	// Apply remaining CLI flags
+	cfg.Verbose = *verbose
+	cfg.HTTPPort = *httpPort
+	cfg.HTTPSPort = *httpsPort
+	cfg.BindAddrs = parseBindAddrsList(*bindAddrs)
+	cfg.UserAgent = *userAgent
+	cfg.NoRedirect = *noRedirect
+	cfg.ConfigFile = *configFile
+
+	proxyManager := proxy.NewManager(cfg)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -84,4 +107,29 @@ func parseBindAddrsList(list string) []string {
 	}
 
 	return addrs
+}
+
+// loadConfigDefaults loads configuration defaults from config file
+func loadConfigDefaults(configFile string) (*proxy.Config, error) {
+	type ConfigDefaults struct {
+		CacheDir        string `json:"cache_dir,omitempty"`
+		CertPath        string `json:"cert_path,omitempty"`
+		DefaultHostname string `json:"default_hostname,omitempty"`
+	}
+
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return nil, err
+	}
+
+	var defaults ConfigDefaults
+	if err := json.Unmarshal(data, &defaults); err != nil {
+		return nil, err
+	}
+
+	return &proxy.Config{
+		CacheDir:        defaults.CacheDir,
+		CertPath:        defaults.CertPath,
+		DefaultHostname: defaults.DefaultHostname,
+	}, nil
 }

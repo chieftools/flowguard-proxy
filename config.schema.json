@@ -34,6 +34,18 @@
     },
     "trusted_proxies": {
       "$ref": "#/definitions/trustedProxies"
+    },
+    "cache_dir": {
+      "type": "string",
+      "description": "Directory for caching external data (IP databases, etc.)"
+    },
+    "cert_path": {
+      "type": "string",
+      "description": "Path to SSL certificate files directory"
+    },
+    "default_hostname": {
+      "type": "string",
+      "description": "Default hostname to use when a certificate is not found"
     }
   },
   "additionalProperties": false,
