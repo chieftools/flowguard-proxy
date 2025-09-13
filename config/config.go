@@ -29,7 +29,6 @@ type Config struct {
 
 // LoggingConfig represents the request logging configuration
 type LoggingConfig struct {
-	Enabled      bool   `json:"enabled"`
 	FilePath     string `json:"file_path,omitempty"`
 	AxiomToken   string `json:"axiom_token,omitempty"`
 	AxiomDataset string `json:"axiom_dataset,omitempty"`

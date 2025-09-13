@@ -134,7 +134,7 @@ func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
 
 	loggingCfg := cfg.Logging
 
-	lm.enabled = loggingCfg.Enabled
+	lm.enabled = loggingCfg.FilePath != "" || (loggingCfg.AxiomDataset != "" && loggingCfg.AxiomToken != "")
 
 	err := lm.updateFileOutput(loggingCfg)
 	if err != nil {

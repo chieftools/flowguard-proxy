@@ -223,24 +223,19 @@
       "type": "object",
       "description": "Request logging configuration",
       "properties": {
-        "enabled": {
-          "type": "boolean",
-          "description": "Enable request logging"
-        },
         "file_path": {
           "type": "string",
-          "description": "Path to log file (if empty, logs to stdout)"
+          "description": "Path to log file, leave empty to disable file logging"
         },
         "axiom_token": {
           "type": "string",
-          "description": "The Axiom API token to send logs to"
+          "description": "The Axiom API token to send logs to, leave empty to disable Axiom logging"
         },
         "axiom_dataset": {
           "type": "string",
-          "description": "The Axiom dataset to send logs to"
+          "description": "The Axiom dataset to send logs to, leave empty to disable Axiom logging"
         }
       },
-      "required": ["enabled"],
       "additionalProperties": false
     }
   }
