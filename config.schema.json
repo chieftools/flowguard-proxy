@@ -48,10 +48,6 @@
         "cert_path": {
             "type": "string",
             "description": "Path to SSL certificate files directory"
-        },
-        "default_hostname": {
-            "type": "string",
-            "description": "Default hostname to use when a certificate is not found"
         }
     },
     "additionalProperties": false,
@@ -76,6 +72,10 @@
                 "team": {
                     "type": "string",
                     "description": "The team slug this host belongs to"
+                },
+                "default_hostname": {
+                    "type": "string",
+                    "description": "Default hostname to use when a certificate is not found"
                 }
             },
             "required": [

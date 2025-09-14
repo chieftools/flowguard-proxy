@@ -23,11 +23,10 @@ func main() {
 
 	var (
 		// Proxy configuration
-		bindAddrs       = flag.String("bind", "", "Comma-separated list of IP addresses to bind to (default: auto-detect public IPs)")
-		httpPort        = flag.String("http-port", "11080", "Port for HTTP proxy server")
-		httpsPort       = flag.String("https-port", "11443", "Port for HTTPS proxy server")
-		noRedirect      = flag.Bool("no-redirect", false, "Skip iptables port redirection setup")
-		defaultHostname = flag.String("default-hostname", "", "The default hostname to use when a certificate is not found")
+		bindAddrs  = flag.String("bind", "", "Comma-separated list of IP addresses to bind to (default: auto-detect public IPs)")
+		httpPort   = flag.String("http-port", "11080", "Port for HTTP proxy server")
+		httpsPort  = flag.String("https-port", "11443", "Port for HTTPS proxy server")
+		noRedirect = flag.Bool("no-redirect", false, "Skip iptables port redirection setup")
 
 		// Certificate configuration
 		certPath  = flag.String("cert-path", "/opt/psa/var/certificates", "Path to combined certificate files")
@@ -60,13 +59,9 @@ func main() {
 		cfg.CertPath = *certPath
 	}
 
-	if *defaultHostname != "" {
-		cfg.DefaultHostname = *defaultHostname
-	}
-
 	// Certificate test mode
 	if *testCerts {
-		cm := certmanager.New(cfg.CertPath, cfg.DefaultHostname)
+		cm := certmanager.New(cfg.CertPath, "")
 		cm.TestCertificates()
 		os.Exit(0)
 	}
@@ -118,9 +113,8 @@ func parseBindAddrsList(list string) []string {
 // loadConfigDefaults loads configuration defaults from config file
 func loadConfigDefaults(configFile string) (*proxy.Config, error) {
 	type ConfigDefaults struct {
-		CacheDir        string `json:"cache_dir,omitempty"`
-		CertPath        string `json:"cert_path,omitempty"`
-		DefaultHostname string `json:"default_hostname,omitempty"`
+		CacheDir string `json:"cache_dir,omitempty"`
+		CertPath string `json:"cert_path,omitempty"`
 	}
 
 	data, err := os.ReadFile(configFile)
@@ -134,8 +128,7 @@ func loadConfigDefaults(configFile string) (*proxy.Config, error) {
 	}
 
 	return &proxy.Config{
-		CacheDir:        defaults.CacheDir,
-		CertPath:        defaults.CertPath,
-		DefaultHostname: defaults.DefaultHostname,
+		CacheDir: defaults.CacheDir,
+		CertPath: defaults.CertPath,
 	}, nil
 }

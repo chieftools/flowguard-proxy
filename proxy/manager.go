@@ -13,16 +13,15 @@ import (
 )
 
 type Config struct {
-	Verbose         bool
-	CertPath        string
-	CacheDir        string
-	HTTPPort        string
-	HTTPSPort       string
-	BindAddrs       []string
-	UserAgent       string
-	NoRedirect      bool
-	ConfigFile      string
-	DefaultHostname string
+	Verbose    bool
+	CertPath   string
+	CacheDir   string
+	HTTPPort   string
+	HTTPSPort  string
+	BindAddrs  []string
+	UserAgent  string
+	NoRedirect bool
+	ConfigFile string
 }
 
 type Manager struct {
@@ -92,7 +91,7 @@ func NewManager(cfg *Config) *Manager {
 		config:          cfg,
 		ipLookup:        ipLookup,
 		configMgr:       configMgr,
-		certManager:     certmanager.New(cfg.CertPath, cfg.DefaultHostname),
+		certManager:     certmanager.New(cfg.CertPath, configMgr.GetConfig().Host.DefaultHostname),
 		requestLogger:   requestLogger,
 		middlewareChain: middlewareChain,
 	}

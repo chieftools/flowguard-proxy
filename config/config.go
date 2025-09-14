@@ -17,22 +17,22 @@ import (
 
 // Config represents the complete application configuration
 type Config struct {
-	Host            *HostConfig            `json:"host"`
-	Rules           map[string]*Rule       `json:"rules"`
-	Actions         map[string]*RuleAction `json:"actions"`
-	Logging         *LoggingConfig         `json:"logging"`
-	IPDatabase      *IPDatabaseConfig      `json:"ip_database"`
-	TrustedProxies  *TrustedProxiesConfig  `json:"trusted_proxies"`
-	CacheDir        string                 `json:"cache_dir,omitempty"`
-	CertPath        string                 `json:"cert_path,omitempty"`
-	DefaultHostname string                 `json:"default_hostname,omitempty"`
+	Host           *HostConfig            `json:"host"`
+	Rules          map[string]*Rule       `json:"rules"`
+	Actions        map[string]*RuleAction `json:"actions"`
+	Logging        *LoggingConfig         `json:"logging"`
+	IPDatabase     *IPDatabaseConfig      `json:"ip_database"`
+	TrustedProxies *TrustedProxiesConfig  `json:"trusted_proxies"`
+	CacheDir       string                 `json:"cache_dir,omitempty"`
+	CertPath       string                 `json:"cert_path,omitempty"`
 }
 
 type HostConfig struct {
-	ID   string `json:"id,omitempty"`
-	Key  string `json:"key,omitempty"`
-	Name string `json:"name"`
-	Team string `json:"team,omitempty"`
+	ID              string `json:"id,omitempty"`
+	Key             string `json:"key,omitempty"`
+	Name            string `json:"name"`
+	Team            string `json:"team,omitempty"`
+	DefaultHostname string `json:"default_hostname,omitempty"`
 }
 
 type LoggingConfig struct {
