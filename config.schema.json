@@ -9,6 +9,9 @@
             "type": "string",
             "description": "JSON Schema reference for IDE validation and autocomplete"
         },
+        "host": {
+            "$ref": "#/definitions/host"
+        },
         "rules": {
             "type": "object",
             "description": "Security rules that define when to take actions",
@@ -53,6 +56,33 @@
     },
     "additionalProperties": false,
     "definitions": {
+        "host": {
+            "type": "object",
+            "description": "Host and API configuration",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "format": "ulid",
+                    "description": "The server identifier as provided by FlowGuard when registering the host"
+                },
+                "key": {
+                    "type": "string",
+                    "description": "The API key for authenticating requests with the FlowGuard API"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "The human-readable name of this host"
+                },
+                "team": {
+                    "type": "string",
+                    "description": "The team slug this host belongs to"
+                }
+            },
+            "required": [
+                "name"
+            ],
+            "additionalProperties": false
+        },
         "rule": {
             "type": "object",
             "description": "A security rule with conditions and an action",

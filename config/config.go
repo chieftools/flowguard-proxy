@@ -17,52 +17,60 @@ import (
 
 // Config represents the complete application configuration
 type Config struct {
-	Rules           map[string]*Rule      `json:"rules"`
-	Actions         map[string]*Action    `json:"actions"`
-	Logging         *LoggingConfig        `json:"logging"`
-	IPDatabase      *IPDatabaseConfig     `json:"ip_database"`
-	TrustedProxies  *TrustedProxiesConfig `json:"trusted_proxies"`
-	CacheDir        string                `json:"cache_dir,omitempty"`
-	CertPath        string                `json:"cert_path,omitempty"`
-	DefaultHostname string                `json:"default_hostname,omitempty"`
+	Host            *HostConfig            `json:"host"`
+	Rules           map[string]*Rule       `json:"rules"`
+	Actions         map[string]*RuleAction `json:"actions"`
+	Logging         *LoggingConfig         `json:"logging"`
+	IPDatabase      *IPDatabaseConfig      `json:"ip_database"`
+	TrustedProxies  *TrustedProxiesConfig  `json:"trusted_proxies"`
+	CacheDir        string                 `json:"cache_dir,omitempty"`
+	CertPath        string                 `json:"cert_path,omitempty"`
+	DefaultHostname string                 `json:"default_hostname,omitempty"`
 }
 
-// LoggingConfig represents the request logging configuration
+type HostConfig struct {
+	ID   string `json:"id,omitempty"`
+	Key  string `json:"key,omitempty"`
+	Name string `json:"name"`
+	Team string `json:"team,omitempty"`
+}
+
 type LoggingConfig struct {
 	FilePath     string `json:"file_path,omitempty"`
 	AxiomToken   string `json:"axiom_token,omitempty"`
 	AxiomDataset string `json:"axiom_dataset,omitempty"`
 }
 
-// IPDatabaseConfig represents the IP database configuration
 type IPDatabaseConfig struct {
 	URL                    string `json:"url"`
 	RefreshIntervalSeconds int    `json:"refresh_interval_seconds"`
 }
 
-// TrustedProxiesConfig represents the trusted proxies configuration
 type TrustedProxiesConfig struct {
 	IPNets                 []string `json:"ipnets"`
 	RefreshIntervalSeconds int      `json:"refresh_interval_seconds"`
 }
 
-// Rule represents a single matching rule
 type Rule struct {
-	ID         string      // Rule ID from the map key
-	Action     string      `json:"action"`
-	Conditions *Conditions `json:"conditions"`
+	ID         string          // Rule ID from the map key
+	Action     string          `json:"action"`
+	Conditions *RuleConditions `json:"conditions"`
 }
 
-// Conditions represents the rule condition structure
-type Conditions struct {
-	Operator string       `json:"operator,omitempty"` // AND, OR, NOT
-	Groups   []Conditions `json:"groups,omitempty"`
-	Matches  []Match      `json:"matches,omitempty"`
-	Comment  string       `json:"comment,omitempty"`
+type RuleAction struct {
+	Action  string `json:"action"`  // "block"
+	Status  int    `json:"status"`  // HTTP status code
+	Message string `json:"message"` // Response message
 }
 
-// Match represents a single match condition
-type Match struct {
+type RuleConditions struct {
+	Operator string           `json:"operator,omitempty"` // AND, OR, NOT
+	Groups   []RuleConditions `json:"groups,omitempty"`
+	Matches  []MatchCondition `json:"matches,omitempty"`
+	Comment  string           `json:"comment,omitempty"`
+}
+
+type MatchCondition struct {
 	Type            string   `json:"type"`  // path, domain, ip, agent, header, asn, ipset
 	Match           string   `json:"match"` // equals, contains, regex, in, not-in, etc.
 	Value           string   `json:"value,omitempty"`
@@ -70,13 +78,6 @@ type Match struct {
 	CaseInsensitive bool     `json:"case_insensitive,omitempty"`
 	Family          int      `json:"family,omitempty"` // For ipset matches (4 or 6)
 	compiledRegex   *regexp.Regexp
-}
-
-// Action represents an action to take when a rule matches
-type Action struct {
-	Action  string `json:"action"`  // "block"
-	Status  int    `json:"status"`  // HTTP status code
-	Message string `json:"message"` // Response message
 }
 
 // Manager manages the configuration with hot-reload support
@@ -308,7 +309,7 @@ func (m *Manager) GetRules() map[string]*Rule {
 }
 
 // GetActions returns the current actions configuration
-func (m *Manager) GetActions() map[string]*Action {
+func (m *Manager) GetActions() map[string]*RuleAction {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if m.config == nil {
@@ -475,7 +476,7 @@ func (m *Manager) GetIPDatabaseRefreshInterval() time.Duration {
 }
 
 // compileConditionRegex recursively compiles regex patterns in conditions
-func (m *Manager) compileConditionRegex(cond *Conditions) {
+func (m *Manager) compileConditionRegex(cond *RuleConditions) {
 	// Compile regex in matches
 	for i := range cond.Matches {
 		if cond.Matches[i].Match == "regex" {
@@ -498,13 +499,13 @@ func (m *Manager) compileConditionRegex(cond *Conditions) {
 	}
 }
 
-// GetCompiledRegex returns the compiled regex for a Match
-func (m *Match) GetCompiledRegex() *regexp.Regexp {
+// GetCompiledRegex returns the compiled regex for a MatchCondition
+func (m *MatchCondition) GetCompiledRegex() *regexp.Regexp {
 	return m.compiledRegex
 }
 
 // SetCompiledRegexInternal sets the compiled regex (for testing)
-func (m *Match) SetCompiledRegexInternal(re *regexp.Regexp) {
+func (m *MatchCondition) SetCompiledRegexInternal(re *regexp.Regexp) {
 	m.compiledRegex = re
 }
 

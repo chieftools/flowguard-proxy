@@ -71,7 +71,7 @@ func (rm *RulesMiddleware) matchesRule(r *http.Request, rule *config.Rule) bool 
 }
 
 // matchesConditions evaluates conditions recursively
-func (rm *RulesMiddleware) matchesConditions(r *http.Request, conditions *config.Conditions) bool {
+func (rm *RulesMiddleware) matchesConditions(r *http.Request, conditions *config.RuleConditions) bool {
 	// Determine the operator, defaulting to AND
 	operator := conditions.Operator
 	if operator == "" {
@@ -164,7 +164,7 @@ func (rm *RulesMiddleware) matchesConditions(r *http.Request, conditions *config
 }
 
 // evaluateMatches evaluates a list of matches with the specified operator
-func (rm *RulesMiddleware) evaluateMatches(r *http.Request, operator string, matches []config.Match) bool {
+func (rm *RulesMiddleware) evaluateMatches(r *http.Request, operator string, matches []config.MatchCondition) bool {
 	if len(matches) == 0 {
 		return false
 	}
@@ -196,7 +196,7 @@ func (rm *RulesMiddleware) evaluateMatches(r *http.Request, operator string, mat
 }
 
 // evaluateMatch evaluates a single match condition
-func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.Match) bool {
+func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCondition) bool {
 	var value string
 
 	// Extract the value based on type
@@ -245,7 +245,7 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.Match) b
 }
 
 // matchesStringValue checks if a string value matches the given criteria
-func (rm *RulesMiddleware) matchesStringValue(value string, match *config.Match) bool {
+func (rm *RulesMiddleware) matchesStringValue(value string, match *config.MatchCondition) bool {
 	// Handle regex matching
 	if match.Match == "regex" {
 		re := match.GetCompiledRegex()
@@ -320,7 +320,7 @@ func (rm *RulesMiddleware) matchesStringValue(value string, match *config.Match)
 }
 
 // matchesIPSet checks if the client IP is in the specified ipset
-func (rm *RulesMiddleware) matchesIPSet(r *http.Request, match *config.Match) bool {
+func (rm *RulesMiddleware) matchesIPSet(r *http.Request, match *config.MatchCondition) bool {
 	clientIP := GetClientIP(r)
 	host, _, err := net.SplitHostPort(clientIP)
 	if err != nil {
