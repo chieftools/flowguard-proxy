@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"flowguard/config"
 
@@ -50,23 +51,27 @@ type IPLookupMiddleware struct {
 	asnDB     *maxminddb.Reader
 	dbPath    string
 	mu        sync.RWMutex
+	stopChan  chan struct{}
+	stopped   bool
 }
 
 // NewIPLookupMiddleware creates a new IP enrichment middleware
-func NewIPLookupMiddleware(configMgr *config.Manager) (*IPLookupMiddleware, error) {
+func NewIPLookupMiddleware(configMgr *config.Manager) *IPLookupMiddleware {
 	m := &IPLookupMiddleware{
 		configMgr: configMgr,
+		stopChan:  make(chan struct{}),
 	}
 
 	// Load the ASN database
 	if err := m.loadASNDatabase(); err != nil {
 		// Don't fail if database is not available, just log warning
 		log.Printf("[middleware:iplookup] Warning: IP database not available: %v", err)
-		// Return middleware anyway - it will work without ASN lookups
-		return m, nil
 	}
 
-	return m, nil
+	// Start the periodic database refresh goroutine
+	go m.startPeriodicRefresh()
+
+	return m
 }
 
 // loadASNDatabase loads or reloads the MaxMind ASN database
@@ -226,10 +231,43 @@ func (m *IPLookupMiddleware) ReloadDatabase() {
 	}
 }
 
-// Close closes the ASN database
-func (m *IPLookupMiddleware) Close() {
+// startPeriodicRefresh starts the periodic database refresh goroutine
+func (m *IPLookupMiddleware) startPeriodicRefresh() {
+	ipDbRefreshInterval := m.configMgr.GetIPDatabaseRefreshInterval()
+	log.Printf("[middleware:iplookup] Starting IP database refresh with interval: %v", ipDbRefreshInterval)
+
+	ticker := time.NewTicker(ipDbRefreshInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.stopChan:
+			log.Printf("[middleware:iplookup] Stopping IP database refresh goroutine")
+			return
+		case <-ticker.C:
+			// Check if interval has changed in config
+			newInterval := m.configMgr.GetIPDatabaseRefreshInterval()
+			if newInterval != ipDbRefreshInterval {
+				log.Printf("[middleware:iplookup] IP database refresh interval changed from %v to %v", ipDbRefreshInterval, newInterval)
+				ticker.Reset(newInterval)
+				ipDbRefreshInterval = newInterval
+			}
+
+			// Reload IP database (checks for updates)
+			m.ReloadDatabase()
+		}
+	}
+}
+
+// Stop closes the ASN database and stops the refresh goroutine
+func (m *IPLookupMiddleware) Stop() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if !m.stopped {
+		close(m.stopChan)
+		m.stopped = true
+	}
 
 	if m.asnDB != nil {
 		m.asnDB.Close()

@@ -33,7 +33,7 @@ type RulesMiddleware struct {
 func NewRulesMiddleware(configMgr ConfigProvider) *RulesMiddleware {
 	return &RulesMiddleware{
 		configMgr:    configMgr,
-		rateLimiter:  NewRateLimiter(time.Minute * 10), // Cleanup every 10 minutes
+		rateLimiter:  NewRateLimiter(time.Minute * 10), // Stop every 10 minutes
 		keyGenerator: NewRateLimitKeyGenerator(),
 	}
 }
@@ -99,38 +99,6 @@ func (rm *RulesMiddleware) Handle(w http.ResponseWriter, r *http.Request, next h
 
 	// No blocking rules matched, allow the request
 	next.ServeHTTP(w, r)
-}
-
-func blockRequest(w http.ResponseWriter, r *http.Request, action *config.RuleAction, rule *config.Rule) {
-	// Set rule match information in context for logging
-	SetRuleMatch(r, rule.ID, action.Action)
-
-	// Add Via header to blocked responses to match proxied responses and our stream ID
-	w.Header().Add("Via", fmt.Sprintf("%d.%d flowguard", r.ProtoMajor, r.ProtoMinor))
-	w.Header().Add("FG-Stream", GetStreamID(r))
-
-	// Use configured status and message, or defaults
-	message := action.Message
-	if message == "" {
-		switch action.Action {
-		case "rate_limit":
-			message = "Rate limit exceeded"
-		default:
-			message = "Forbidden"
-		}
-	}
-
-	status := action.Status
-	if status == 0 {
-		switch action.Action {
-		case "rate_limit":
-			status = http.StatusTooManyRequests
-		default:
-			status = http.StatusForbidden
-		}
-	}
-
-	http.Error(w, message, status)
 }
 
 // matchesRule checks if a request matches a specific rule
@@ -434,6 +402,39 @@ func (rm *RulesMiddleware) Stop() {
 	if rm.rateLimiter != nil {
 		rm.rateLimiter.Stop()
 	}
+}
+
+// blockRequest sends a block response based on the action configuration
+func blockRequest(w http.ResponseWriter, r *http.Request, action *config.RuleAction, rule *config.Rule) {
+	// Set rule match information in context for logging
+	SetRuleMatch(r, rule.ID, action.Action)
+
+	// Add Via header to blocked responses to match proxied responses and our stream ID
+	w.Header().Add("Via", fmt.Sprintf("%d.%d flowguard", r.ProtoMajor, r.ProtoMinor))
+	w.Header().Add("FG-Stream", GetStreamID(r))
+
+	// Use configured status and message, or defaults
+	message := action.Message
+	if message == "" {
+		switch action.Action {
+		case "rate_limit":
+			message = "Rate limit exceeded"
+		default:
+			message = "Forbidden"
+		}
+	}
+
+	status := action.Status
+	if status == 0 {
+		switch action.Action {
+		case "rate_limit":
+			status = http.StatusTooManyRequests
+		default:
+			status = http.StatusForbidden
+		}
+	}
+
+	http.Error(w, message, status)
 }
 
 // RateLimiter manages rate limiting counters using sliding window algorithm

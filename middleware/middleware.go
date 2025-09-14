@@ -7,6 +7,7 @@ import (
 // Middleware represents middleware that can wrap the entire HTTP request/response cycle
 type Middleware interface {
 	Handle(w http.ResponseWriter, r *http.Request, next http.Handler)
+	Stop()
 }
 
 // Chain manages a chain of middleware processors
@@ -54,6 +55,13 @@ func (mc *Chain) ServeHTTPWithHandler(w http.ResponseWriter, r *http.Request, fi
 
 	// Execute the final wrapped handler
 	handler.ServeHTTP(w, r)
+}
+
+// Stop calls Stop on all middlewares in the chain
+func (mc *Chain) Stop() {
+	for _, m := range mc.middlewares {
+		m.Stop()
+	}
 }
 
 // ResponseWriterWrapper wraps http.ResponseWriter to capture status code, content type, and body size

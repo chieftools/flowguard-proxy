@@ -427,7 +427,7 @@ func TestRateLimiter_Cleanup(t *testing.T) {
 	// Force cleanup by accessing stats
 	stats = rl.GetStats()
 	totalKeys = stats["total_keys"].(int)
-	// Note: Cleanup might not have run yet due to timing, so we don't assert specific values
+	// Note: Stop might not have run yet due to timing, so we don't assert specific values
 	// but the test verifies the cleanup mechanism exists and runs
 }
 

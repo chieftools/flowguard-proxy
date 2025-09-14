@@ -27,12 +27,9 @@ type Config struct {
 type Manager struct {
 	config          *Config
 	servers         []*Server
-	configMgr       *config.Manager
 	certManager     *certmanager.Manager
+	configManager   *config.Manager
 	middlewareChain *middleware.Chain
-	requestLogger   *middleware.LoggingMiddleware
-	ipLookup        *middleware.IPLookupMiddleware
-	rulesMiddleware *middleware.RulesMiddleware
 	mu              sync.RWMutex
 }
 
@@ -47,35 +44,14 @@ func NewManager(cfg *Config) *Manager {
 	// Start config file watcher for hot-reload
 	configMgr.StartWatcher(10 * time.Second)
 
-	// Create logging middleware first
-	var requestLogger *middleware.LoggingMiddleware
-	requestLogger, err = middleware.NewLoggingMiddleware(configMgr)
-	if err != nil {
-		log.Printf("Failed to initialize logging middleware: %v", err)
-		os.Exit(1)
-	}
-
-	// Add IP enrichment middleware to enrich all requests with IP/ASN data
-	var ipLookup *middleware.IPLookupMiddleware
-	ipLookup, err = middleware.NewIPLookupMiddleware(configMgr)
-	if err != nil {
-		log.Printf("Failed to initialize IP enrichment middleware: %v", err)
-		os.Exit(1)
-	}
-
-	// Create rules middleware with integrated rate limiting
-	rulesMiddleware := middleware.NewRulesMiddleware(configMgr)
-
 	// Create middleware chain with config-based middleware
 	middlewareChain := middleware.NewChain()
 
 	// Add middleware in the order they should execute
-	// The first added middleware wraps everything (executes first and completes last)
 	// IP lookup MUST be before other middleware so they can see the enriched context
-	// Execution order: IP lookup -> logging -> rules -> handler -> rules -> logging -> IP lookup
-	middlewareChain.Add(ipLookup)        // Enriches request with IP/ASN data (must be first!)
-	middlewareChain.Add(requestLogger)   // Logs request and response with enriched data
-	middlewareChain.Add(rulesMiddleware) // Evaluates rules and handles rate limiting in single pass
+	middlewareChain.Add(middleware.NewIPLookupMiddleware(configMgr)) // Enriches request with IP/ASN data (must be first!)
+	middlewareChain.Add(middleware.NewLoggingMiddleware(configMgr))  // Logs request and response with enriched data
+	middlewareChain.Add(middleware.NewRulesMiddleware(configMgr))    // Evaluates user defined rules
 
 	// Determine bind addresses based on configuration
 	bindAddrs := cfg.BindAddrs
@@ -93,17 +69,14 @@ func NewManager(cfg *Config) *Manager {
 
 	return &Manager{
 		config:          cfg,
-		ipLookup:        ipLookup,
-		configMgr:       configMgr,
 		certManager:     certmanager.New(cfg.CertPath, configMgr.GetConfig().Host.DefaultHostname),
-		requestLogger:   requestLogger,
-		rulesMiddleware: rulesMiddleware,
+		configManager:   configMgr,
 		middlewareChain: middlewareChain,
 	}
 }
 
 func (p *Manager) Start() error {
-	trustedProxiesRefreshInterval := p.configMgr.GetRefreshInterval()
+	trustedProxiesRefreshInterval := p.configManager.GetRefreshInterval()
 	log.Printf("Starting trusted proxy refresh with interval: %v", trustedProxiesRefreshInterval)
 
 	// Periodically refresh trusted proxy lists from URLs
@@ -113,38 +86,16 @@ func (p *Manager) Start() error {
 
 		for range ticker.C {
 			// Check if interval has changed in config
-			newInterval := p.configMgr.GetRefreshInterval()
+			newInterval := p.configManager.GetRefreshInterval()
 			if newInterval != trustedProxiesRefreshInterval {
 				log.Printf("Refresh interval changed from %v to %v", trustedProxiesRefreshInterval, newInterval)
 				ticker.Reset(newInterval)
 				trustedProxiesRefreshInterval = newInterval
 			}
 
-			if err := p.configMgr.RefreshTrustedProxies(); err != nil {
+			if err := p.configManager.RefreshTrustedProxies(); err != nil {
 				log.Printf("Failed to refresh trusted proxy lists: %v", err)
 			}
-		}
-	}()
-
-	ipDbRefreshInterval := p.configMgr.GetIPDatabaseRefreshInterval()
-	log.Printf("Starting IP database refresh with interval: %v", ipDbRefreshInterval)
-
-	// Periodically refresh IP database
-	go func() {
-		ticker := time.NewTicker(ipDbRefreshInterval)
-		defer ticker.Stop()
-
-		for range ticker.C {
-			// Check if interval has changed in config
-			newInterval := p.configMgr.GetIPDatabaseRefreshInterval()
-			if newInterval != ipDbRefreshInterval {
-				log.Printf("IP database refresh interval changed from %v to %v", ipDbRefreshInterval, newInterval)
-				ticker.Reset(newInterval)
-				ipDbRefreshInterval = newInterval
-			}
-
-			// Reload IP database (checks for updates)
-			p.ipLookup.ReloadDatabase()
 		}
 	}()
 
@@ -223,8 +174,11 @@ func (p *Manager) Shutdown() error {
 		server.CleanupPortRedirect()
 	}
 
-	// Stop config watcher if running
-	p.configMgr.StopWatcher()
+	// Stop the configuration mamager
+	p.configManager.Stop()
+
+	// Stop the certificate manager
+	p.certManager.Stop()
 
 	// Small delay before we shut down the servers
 	time.Sleep(100 * time.Millisecond)
@@ -246,17 +200,8 @@ func (p *Manager) Shutdown() error {
 
 	wg.Wait()
 
-	// Shutdown certificate manager
-	p.certManager.Stop()
-
-	// Close request logger if open
-	p.requestLogger.Close()
-
-	// Close IP lookup database if open
-	p.ipLookup.Close()
-
-	// Stop rate limiter cleanup process
-	p.rulesMiddleware.Stop()
+	// Stop the middleware chain
+	p.middlewareChain.Stop()
 
 	log.Println("Proxy server shutdown complete")
 	return nil

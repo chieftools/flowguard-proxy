@@ -415,8 +415,8 @@ func (m *Manager) checkAndReload() {
 	}
 }
 
-// StopWatcher stops the configuration file watcher
-func (m *Manager) StopWatcher() {
+// Stop stops the configuration file watcher
+func (m *Manager) Stop() {
 	close(m.stopWatcher)
 }
 

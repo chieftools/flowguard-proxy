@@ -117,19 +117,17 @@ type LoggingMiddleware struct {
 	mu              sync.RWMutex
 }
 
-func NewLoggingMiddleware(configMgr *config.Manager) (*LoggingMiddleware, error) {
+func NewLoggingMiddleware(configMgr *config.Manager) *LoggingMiddleware {
 	m := &LoggingMiddleware{
 		configMgr: configMgr,
 	}
 
-	if err := m.updateLogOutput(configMgr.GetConfig()); err != nil {
-		return nil, fmt.Errorf("failed to initialize logging: %w", err)
-	}
+	m.onConfigChange(configMgr.GetConfig())
 
 	// Set up config change notification
 	configMgr.OnChange(m.onConfigChange)
 
-	return m, nil
+	return m
 }
 
 func (lm *LoggingMiddleware) logRequest(r *http.Request, wrapper *ResponseWriterWrapper) {
@@ -322,7 +320,7 @@ func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 	lm.logRequest(r, wrapper)
 }
 
-func (lm *LoggingMiddleware) Close() {
+func (lm *LoggingMiddleware) Stop() {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 
