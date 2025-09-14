@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -13,7 +14,13 @@ import (
 	"flowguard/proxy"
 )
 
+var Version string
+
 func main() {
+	if Version == "" {
+		Version = "dev"
+	}
+
 	var (
 		// Proxy configuration
 		bindAddrs       = flag.String("bind", "", "Comma-separated list of IP addresses to bind to (default: auto-detect public IPs)")
@@ -29,7 +36,6 @@ func main() {
 		// Behavior configuration
 		verbose    = flag.Bool("verbose", false, "Enable more verbose output")
 		cacheDir   = flag.String("cache-dir", "/var/cache/flowguard", "Directory for caching external data")
-		userAgent  = flag.String("user-agent", "FlowGuard/1.0", "The User-Agent header value to use for outgoing requests")
 		configFile = flag.String("config", "config.json", "Path to the configuration file")
 	)
 	flag.Parse()
@@ -70,7 +76,7 @@ func main() {
 	cfg.HTTPPort = *httpPort
 	cfg.HTTPSPort = *httpsPort
 	cfg.BindAddrs = parseBindAddrsList(*bindAddrs)
-	cfg.UserAgent = *userAgent
+	cfg.UserAgent = fmt.Sprintf("FlowGuard/%s", Version)
 	cfg.NoRedirect = *noRedirect
 	cfg.ConfigFile = *configFile
 
