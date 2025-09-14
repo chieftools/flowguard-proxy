@@ -32,6 +32,7 @@ type Manager struct {
 	middlewareChain *middleware.Chain
 	requestLogger   *middleware.LoggingMiddleware
 	ipLookup        *middleware.IPLookupMiddleware
+	rulesMiddleware *middleware.RulesMiddleware
 	mu              sync.RWMutex
 }
 
@@ -62,16 +63,19 @@ func NewManager(cfg *Config) *Manager {
 		os.Exit(1)
 	}
 
+	// Create rules middleware with integrated rate limiting
+	rulesMiddleware := middleware.NewRulesMiddleware(configMgr)
+
 	// Create middleware chain with config-based middleware
 	middlewareChain := middleware.NewChain()
 
 	// Add middleware in the order they should execute
 	// The first added middleware wraps everything (executes first and completes last)
-	// IP lookup MUST be before logging so logging can see the enriched context
+	// IP lookup MUST be before other middleware so they can see the enriched context
 	// Execution order: IP lookup -> logging -> rules -> handler -> rules -> logging -> IP lookup
-	middlewareChain.Add(ipLookup)                                 // Enriches request with IP/ASN data (must be first!)
-	middlewareChain.Add(requestLogger)                            // Logs request and response with enriched data
-	middlewareChain.Add(middleware.NewRulesMiddleware(configMgr)) // Evaluates rules with enriched data
+	middlewareChain.Add(ipLookup)        // Enriches request with IP/ASN data (must be first!)
+	middlewareChain.Add(requestLogger)   // Logs request and response with enriched data
+	middlewareChain.Add(rulesMiddleware) // Evaluates rules and handles rate limiting in single pass
 
 	// Determine bind addresses based on configuration
 	bindAddrs := cfg.BindAddrs
@@ -93,6 +97,7 @@ func NewManager(cfg *Config) *Manager {
 		configMgr:       configMgr,
 		certManager:     certmanager.New(cfg.CertPath, configMgr.GetConfig().Host.DefaultHostname),
 		requestLogger:   requestLogger,
+		rulesMiddleware: rulesMiddleware,
 		middlewareChain: middlewareChain,
 	}
 }
@@ -249,6 +254,9 @@ func (p *Manager) Shutdown() error {
 
 	// Close IP lookup database if open
 	p.ipLookup.Close()
+
+	// Stop rate limiter cleanup process
+	p.rulesMiddleware.Stop()
 
 	log.Println("Proxy server shutdown complete")
 	return nil

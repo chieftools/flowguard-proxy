@@ -58,9 +58,11 @@ type Rule struct {
 }
 
 type RuleAction struct {
-	Action  string `json:"action"`  // "block"
-	Status  int    `json:"status"`  // HTTP status code
-	Message string `json:"message"` // Response message
+	Action            string `json:"action"`                        // "block" or "rate_limit"
+	Status            int    `json:"status,omitempty"`              // HTTP status code (for block actions)
+	Message           string `json:"message,omitempty"`             // Response message (for block actions)
+	WindowSeconds     int    `json:"window_seconds,omitempty"`      // Time window in seconds (for rate_limit actions)
+	RequestsPerWindow int    `json:"requests_per_window,omitempty"` // Max requests in time window (for rate_limit actions)
 }
 
 type RuleConditions struct {
@@ -76,7 +78,7 @@ type MatchCondition struct {
 	Value           string   `json:"value,omitempty"`
 	Values          []string `json:"values,omitempty"`
 	CaseInsensitive bool     `json:"case_insensitive,omitempty"`
-	Family          int      `json:"family,omitempty"`    // For ipset matches (4 or 6)
+	Family          uint     `json:"family,omitempty"`    // For ipset matches (4 or 6)
 	RawMatch        bool     `json:"raw_match,omitempty"` // Skip normalization for path matching
 	compiledRegex   *regexp.Regexp
 }

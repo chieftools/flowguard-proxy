@@ -352,6 +352,14 @@ func GetStreamID(r *http.Request) string {
 	return ""
 }
 
+func GetStartTime(r *http.Request) time.Time {
+	if startTime, ok := r.Context().Value(ContextKeyStartTime).(time.Time); ok {
+		return startTime
+	}
+
+	return time.Time{}
+}
+
 func SetRuleMatch(r *http.Request, ruleID string, action string) {
 	ctx := r.Context()
 	ctx = context.WithValue(ctx, ContextKeyRuleID, ruleID)
@@ -359,12 +367,18 @@ func SetRuleMatch(r *http.Request, ruleID string, action string) {
 	*r = *r.WithContext(ctx)
 }
 
-func GetStartTime(r *http.Request) time.Time {
-	if startTime, ok := r.Context().Value(ContextKeyStartTime).(time.Time); ok {
-		return startTime
+func GetRuleIDMatched(r *http.Request) string {
+	if ruleID, ok := r.Context().Value(ContextKeyRuleID).(string); ok {
+		return ruleID
 	}
+	return ""
+}
 
-	return time.Time{}
+func GetRuleActionTaken(r *http.Request) string {
+	if actionTaken, ok := r.Context().Value(ContextKeyActionTaken).(string); ok {
+		return actionTaken
+	}
+	return "proxy"
 }
 
 func generateStreamID() string {
@@ -387,19 +401,10 @@ func getTLSInfo(r *http.Request) *RequestLogEntryTLSInfo {
 }
 
 func getRuleInfo(r *http.Request) RequestLogEntryRuleInfo {
-	ruleInfo := RequestLogEntryRuleInfo{
-		Result: "proxy",
+	return RequestLogEntryRuleInfo{
+		ID:     GetRuleIDMatched(r),
+		Result: GetRuleActionTaken(r),
 	}
-
-	ctx := r.Context()
-	if ruleID, ok := ctx.Value(ContextKeyRuleID).(string); ok {
-		ruleInfo.ID = ruleID
-	}
-	if actionTaken, ok := ctx.Value(ContextKeyActionTaken).(string); ok {
-		ruleInfo.Result = actionTaken
-	}
-
-	return ruleInfo
 }
 
 func getProxyInfo(r *http.Request) *RequestLogEntryIPInfo {

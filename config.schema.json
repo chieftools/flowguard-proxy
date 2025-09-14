@@ -218,7 +218,8 @@
                 "action": {
                     "type": "string",
                     "enum": [
-                        "block"
+                        "block",
+                        "rate_limit"
                     ],
                     "description": "The type of action to take"
                 },
@@ -231,14 +232,39 @@
                 "message": {
                     "type": "string",
                     "description": "Response message to send"
+                },
+                "requests_per_window": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Maximum number of requests allowed in the time window (for rate_limit actions)"
+                },
+                "window_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Time window in seconds for rate limiting (for rate_limit actions)"
                 }
             },
             "required": [
-                "action",
-                "status",
-                "message"
+                "action"
             ],
-            "additionalProperties": false
+            "additionalProperties": false,
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {
+                            "action": {
+                                "const": "rate_limit"
+                            }
+                        }
+                    },
+                    "then": {
+                        "required": [
+                            "requests_per_window",
+                            "window_seconds"
+                        ]
+                    }
+                }
+            ]
         },
         "ipDatabase": {
             "type": "object",

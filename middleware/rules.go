@@ -1,12 +1,16 @@
 package middleware
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os/exec"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"flowguard/config"
 	"flowguard/normalization"
@@ -20,13 +24,17 @@ type ConfigProvider interface {
 
 // RulesMiddleware implements dynamic rule-based filtering
 type RulesMiddleware struct {
-	configMgr ConfigProvider
+	configMgr    ConfigProvider
+	rateLimiter  *RateLimiter
+	keyGenerator *RateLimitKeyGenerator
 }
 
-// NewRulesMiddleware creates a new rules-based middleware
+// NewRulesMiddleware creates a new rules-based middleware with integrated rate limiting
 func NewRulesMiddleware(configMgr ConfigProvider) *RulesMiddleware {
 	return &RulesMiddleware{
-		configMgr: configMgr,
+		configMgr:    configMgr,
+		rateLimiter:  NewRateLimiter(time.Minute * 10), // Cleanup every 10 minutes
+		keyGenerator: NewRateLimitKeyGenerator(),
 	}
 }
 
@@ -50,23 +58,79 @@ func (rm *RulesMiddleware) Handle(w http.ResponseWriter, r *http.Request, next h
 				continue
 			}
 
-			// Set rule match information in context for logging
-			SetRuleMatch(r, rule.ID, action.Action)
-
-			if action.Action == "block" {
-				// Add Via header to blocked responses to match proxied responses and our stream ID
-				w.Header().Add("Via", fmt.Sprintf("%d.%d flowguard", r.ProtoMajor, r.ProtoMinor))
-				w.Header().Add("FG-Stream", GetStreamID(r))
-
-				http.Error(w, action.Message, action.Status)
-
+			switch action.Action {
+			case "block":
+				blockRequest(w, r, action, rule)
 				return
+
+			case "rate_limit":
+				// We only support one rate limit match per request
+				if GetRuleIDMatched(r) != "" {
+					continue
+				}
+
+				allowed, remaining, resetTime := rm.rateLimiter.IsAllowed(
+					rm.keyGenerator.GenerateKey(rule.ID, rule, r),
+					action.RequestsPerWindow,
+					action.WindowSeconds,
+				)
+
+				if !allowed {
+					w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", action.RequestsPerWindow))
+					w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
+					w.Header().Set("X-RateLimit-Reset", fmt.Sprintf("%d", resetTime.Unix()))
+					w.Header().Set("X-RateLimit-Policy", fmt.Sprintf("%d;w=%d", action.RequestsPerWindow, action.WindowSeconds))
+
+					blockRequest(w, r, action, rule)
+					return
+				}
+
+				// We allow the request, but we do want to mark the rule matched
+				SetRuleMatch(r, rule.ID, "")
+
+				continue
+
+			default:
+				log.Printf("[middleware:rules] Unknown action type: %s", action.Action)
+				continue
 			}
 		}
 	}
 
-	// No rules matched, allow the request
+	// No blocking rules matched, allow the request
 	next.ServeHTTP(w, r)
+}
+
+func blockRequest(w http.ResponseWriter, r *http.Request, action *config.RuleAction, rule *config.Rule) {
+	// Set rule match information in context for logging
+	SetRuleMatch(r, rule.ID, action.Action)
+
+	// Add Via header to blocked responses to match proxied responses and our stream ID
+	w.Header().Add("Via", fmt.Sprintf("%d.%d flowguard", r.ProtoMajor, r.ProtoMinor))
+	w.Header().Add("FG-Stream", GetStreamID(r))
+
+	// Use configured status and message, or defaults
+	message := action.Message
+	if message == "" {
+		switch action.Action {
+		case "rate_limit":
+			message = "Rate limit exceeded"
+		default:
+			message = "Forbidden"
+		}
+	}
+
+	status := action.Status
+	if status == 0 {
+		switch action.Action {
+		case "rate_limit":
+			status = http.StatusTooManyRequests
+		default:
+			status = http.StatusForbidden
+		}
+	}
+
+	http.Error(w, message, status)
 }
 
 // matchesRule checks if a request matches a specific rule
@@ -363,4 +427,228 @@ func (rm *RulesMiddleware) matchesIPSet(r *http.Request, match *config.MatchCond
 		return err != nil // IP is NOT in the set
 	}
 	return err == nil // IP IS in the set
+}
+
+// Stop stops the rate limiter cleanup process
+func (rm *RulesMiddleware) Stop() {
+	if rm.rateLimiter != nil {
+		rm.rateLimiter.Stop()
+	}
+}
+
+// RateLimiter manages rate limiting counters using sliding window algorithm
+type RateLimiter struct {
+	entries       map[string]*RateLimitEntry
+	mutex         sync.RWMutex
+	cleanupTicker *time.Ticker
+	stopCleanup   chan struct{}
+}
+
+// RateLimitEntry represents a sliding window counter for rate limiting
+type RateLimitEntry struct {
+	timestamps []time.Time // Sliding window of request timestamps
+	mutex      sync.RWMutex
+}
+
+// NewRateLimiter creates a new rate limiter with automatic cleanup
+func NewRateLimiter(cleanupInterval time.Duration) *RateLimiter {
+	rl := &RateLimiter{
+		entries:     make(map[string]*RateLimitEntry),
+		stopCleanup: make(chan struct{}),
+	}
+
+	// Start cleanup goroutine
+	rl.cleanupTicker = time.NewTicker(cleanupInterval)
+	go rl.cleanupLoop()
+
+	return rl
+}
+
+// IsAllowed checks if a request should be allowed based on rate limiting
+// Returns (allowed, remainingRequests, resetTime)
+func (rl *RateLimiter) IsAllowed(key string, maxRequests int, windowSeconds int) (bool, int, time.Time) {
+	now := time.Now()
+	windowDuration := time.Duration(windowSeconds) * time.Second
+	windowStart := now.Add(-windowDuration)
+
+	rl.mutex.RLock()
+	entry, exists := rl.entries[key]
+	rl.mutex.RUnlock()
+
+	if !exists {
+		// Create new entry
+		entry = &RateLimitEntry{
+			timestamps: make([]time.Time, 0),
+		}
+		rl.mutex.Lock()
+		rl.entries[key] = entry
+		rl.mutex.Unlock()
+	}
+
+	entry.mutex.Lock()
+	defer entry.mutex.Unlock()
+
+	// Remove timestamps outside the current window
+	validTimestamps := make([]time.Time, 0, len(entry.timestamps))
+	for _, ts := range entry.timestamps {
+		if ts.After(windowStart) {
+			validTimestamps = append(validTimestamps, ts)
+		}
+	}
+	entry.timestamps = validTimestamps
+
+	currentCount := len(entry.timestamps)
+
+	if currentCount >= maxRequests {
+		// Rate limit exceeded
+		var resetTime time.Time
+		if len(entry.timestamps) > 0 {
+			// Reset time is when the oldest request in the window expires
+			resetTime = entry.timestamps[0].Add(windowDuration)
+		} else {
+			resetTime = now.Add(windowDuration)
+		}
+		return false, 0, resetTime
+	}
+
+	// Allow the request and record timestamp
+	entry.timestamps = append(entry.timestamps, now)
+	remaining := maxRequests - (currentCount + 1)
+	resetTime := now.Add(windowDuration)
+
+	return true, remaining, resetTime
+}
+
+// cleanupLoop periodically removes expired entries to prevent memory leaks
+func (rl *RateLimiter) cleanupLoop() {
+	for {
+		select {
+		case <-rl.cleanupTicker.C:
+			rl.cleanup()
+		case <-rl.stopCleanup:
+			rl.cleanupTicker.Stop()
+			return
+		}
+	}
+}
+
+// cleanup removes entries that haven't been accessed recently
+func (rl *RateLimiter) cleanup() {
+	now := time.Now()
+	cleanupThreshold := now.Add(-time.Hour) // Remove entries older than 1 hour
+
+	rl.mutex.Lock()
+	defer rl.mutex.Unlock()
+
+	for key, entry := range rl.entries {
+		entry.mutex.RLock()
+		shouldDelete := len(entry.timestamps) == 0 ||
+			(len(entry.timestamps) > 0 && entry.timestamps[len(entry.timestamps)-1].Before(cleanupThreshold))
+		entry.mutex.RUnlock()
+
+		if shouldDelete {
+			delete(rl.entries, key)
+		}
+	}
+}
+
+// Stop stops the cleanup goroutine
+func (rl *RateLimiter) Stop() {
+	close(rl.stopCleanup)
+}
+
+// GetStats returns current rate limiter statistics
+func (rl *RateLimiter) GetStats() map[string]interface{} {
+	rl.mutex.RLock()
+	defer rl.mutex.RUnlock()
+
+	stats := make(map[string]interface{})
+	stats["total_keys"] = len(rl.entries)
+
+	activeKeys := 0
+	now := time.Now()
+	recentThreshold := now.Add(-time.Minute * 5) // Consider active if accessed in last 5 minutes
+
+	for _, entry := range rl.entries {
+		entry.mutex.RLock()
+		if len(entry.timestamps) > 0 && entry.timestamps[len(entry.timestamps)-1].After(recentThreshold) {
+			activeKeys++
+		}
+		entry.mutex.RUnlock()
+	}
+
+	stats["active_keys"] = activeKeys
+	return stats
+}
+
+// RateLimitKeyGenerator generates unique keys for rate limiting based on rule conditions
+type RateLimitKeyGenerator struct{}
+
+// NewRateLimitKeyGenerator creates a new key generator
+func NewRateLimitKeyGenerator() *RateLimitKeyGenerator {
+	return &RateLimitKeyGenerator{}
+}
+
+// GenerateKey creates a unique key for rate limiting based on rule and request context
+func (kg *RateLimitKeyGenerator) GenerateKey(ruleID string, rule *config.Rule, r *http.Request) string {
+	// Build a deterministic key based on rule conditions and matched values
+	var keyParts []string
+	keyParts = append(keyParts, "rule:"+ruleID)
+
+	if rule.Conditions != nil {
+		kg.extractKeyParts(rule.Conditions, r, &keyParts)
+	}
+
+	// Sort key parts for consistent hashing
+	sort.Strings(keyParts)
+
+	// Create a hash of all key parts
+	h := sha256.New()
+	for _, part := range keyParts {
+		h.Write([]byte(part))
+		h.Write([]byte("|"))
+	}
+
+	return fmt.Sprintf("rl_%x", h.Sum(nil)[:16])
+}
+
+// extractKeyParts recursively extracts key components from rule conditions
+func (kg *RateLimitKeyGenerator) extractKeyParts(conditions *config.RuleConditions, r *http.Request, keyParts *[]string) {
+	// Process matches
+	for _, match := range conditions.Matches {
+		switch match.Type {
+		case "domain", "host":
+			*keyParts = append(*keyParts, "domain:"+r.Host)
+		case "agent", "user-agent":
+			agent := r.Header.Get("User-Agent")
+			if agent != "" {
+				*keyParts = append(*keyParts, "agent:"+agent)
+			}
+		case "path":
+			*keyParts = append(*keyParts, "path:"+r.URL.Path)
+		case "header":
+			headerValue := r.Header.Get(match.Value)
+			if headerValue != "" {
+				*keyParts = append(*keyParts, "header:"+match.Value+":"+headerValue)
+			}
+		case "asn":
+			clientASNInfo := GetClientASN(r)
+			if clientASNInfo != nil {
+				asn := clientASNInfo.GetASN()
+				if asn != 0 {
+					*keyParts = append(*keyParts, fmt.Sprintf("asn:%d", asn))
+				}
+			}
+		case "ip":
+			clientIP := GetClientIP(r)
+			if clientIP != "" {
+				*keyParts = append(*keyParts, "ip:"+clientIP)
+			}
+		}
+	}
+
+	// Process nested groups
+	for _, group := range conditions.Groups {
+		kg.extractKeyParts(&group, r, keyParts)
+	}
 }
