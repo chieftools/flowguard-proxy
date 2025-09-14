@@ -86,7 +86,7 @@ func (rm *RulesMiddleware) Handle(w http.ResponseWriter, r *http.Request, next h
 				}
 
 				// We allow the request, but we do want to mark the rule matched
-				SetRuleMatch(r, rule.ID, "")
+				SetRuleMatch(r, rule.ID, "proxy")
 
 				continue
 
