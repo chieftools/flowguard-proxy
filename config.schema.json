@@ -192,6 +192,10 @@
                     "type": "boolean",
                     "description": "Perform case-insensitive matching (default: false)"
                 },
+                "raw_match": {
+                    "type": "boolean",
+                    "description": "Skip URL normalization for path matching to detect malformed URLs (default: false). Only applies to 'path' type matches."
+                },
                 "family": {
                     "type": "integer",
                     "enum": [

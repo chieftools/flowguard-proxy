@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"flowguard/config"
+	"flowguard/normalization"
 
 	"github.com/axiomhq/axiom-go/axiom"
 	"github.com/axiomhq/axiom-go/axiom/ingest"
@@ -85,11 +86,12 @@ type RequestLogEntryResponseInfo struct {
 }
 
 type RequestLogEntryRequestURLInfo struct {
-	Full   string `json:"full"`
-	Path   string `json:"path"`
-	Query  string `json:"query,omitempty"`
-	Scheme string `json:"scheme"`
-	Domain string `json:"domain"`
+	Full           string `json:"full"`
+	Path           string `json:"path"`
+	Query          string `json:"query,omitempty"`
+	Scheme         string `json:"scheme"`
+	Domain         string `json:"domain"`
+	NormalizedPath string `json:"normalized_path,omitempty"`
 }
 
 type RequestLogEntryCloudflareInfo struct {
@@ -480,12 +482,18 @@ func getRequestURLInfo(r *http.Request) RequestLogEntryRequestURLInfo {
 		fullURL = fmt.Sprintf("%s://%s%s", scheme, domain, r.URL.RequestURI())
 	}
 
+	normalizedPath := normalization.NormalizePath(r.URL.Path)
+	if normalizedPath == r.URL.Path {
+		normalizedPath = ""
+	}
+
 	return RequestLogEntryRequestURLInfo{
-		Full:   fullURL,
-		Path:   r.URL.Path,
-		Query:  r.URL.Query().Encode(),
-		Scheme: scheme,
-		Domain: domain,
+		Full:           fullURL,
+		Path:           r.URL.Path,
+		Query:          r.URL.Query().Encode(),
+		Scheme:         scheme,
+		Domain:         domain,
+		NormalizedPath: normalizedPath,
 	}
 }
 

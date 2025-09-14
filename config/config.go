@@ -76,7 +76,8 @@ type MatchCondition struct {
 	Value           string   `json:"value,omitempty"`
 	Values          []string `json:"values,omitempty"`
 	CaseInsensitive bool     `json:"case_insensitive,omitempty"`
-	Family          int      `json:"family,omitempty"` // For ipset matches (4 or 6)
+	Family          int      `json:"family,omitempty"`    // For ipset matches (4 or 6)
+	RawMatch        bool     `json:"raw_match,omitempty"` // Skip normalization for path matching
 	compiledRegex   *regexp.Regexp
 }
 

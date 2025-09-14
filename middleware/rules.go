@@ -9,15 +9,22 @@ import (
 	"strings"
 
 	"flowguard/config"
+	"flowguard/normalization"
 )
+
+// ConfigProvider interface for accessing configuration
+type ConfigProvider interface {
+	GetRules() map[string]*config.Rule
+	GetActions() map[string]*config.RuleAction
+}
 
 // RulesMiddleware implements dynamic rule-based filtering
 type RulesMiddleware struct {
-	configMgr *config.Manager
+	configMgr ConfigProvider
 }
 
 // NewRulesMiddleware creates a new rules-based middleware
-func NewRulesMiddleware(configMgr *config.Manager) *RulesMiddleware {
+func NewRulesMiddleware(configMgr ConfigProvider) *RulesMiddleware {
 	return &RulesMiddleware{
 		configMgr: configMgr,
 	}
@@ -202,7 +209,13 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 	// Extract the value based on type
 	switch match.Type {
 	case "path":
-		value = r.URL.Path
+		// Use raw path if raw_match is true, otherwise normalize for consistent matching
+		if match.RawMatch {
+			value = r.URL.Path
+		} else {
+			// Normalize the path for consistent matching (Cloudflare-style normalization)
+			value = normalization.NormalizePath(r.URL.Path)
+		}
 	case "domain", "host":
 		value = r.Host
 	case "agent", "user-agent":
