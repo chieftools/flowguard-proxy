@@ -56,13 +56,35 @@ func (mc *Chain) ServeHTTPWithHandler(w http.ResponseWriter, r *http.Request, fi
 	handler.ServeHTTP(w, r)
 }
 
-// ResponseWriterWrapper wraps http.ResponseWriter to capture status code
+// ResponseWriterWrapper wraps http.ResponseWriter to capture status code, content type, and body size
 type ResponseWriterWrapper struct {
 	http.ResponseWriter
-	StatusCodeValue int
+
+	BodySize    int64
+	StatusCode  int
+	ContentType string
 }
 
 func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
-	w.StatusCodeValue = statusCode
+	w.StatusCode = statusCode
+	// Capture content type if set
+	if ct := w.Header().Get("Content-Type"); ct != "" {
+		w.ContentType = ct
+	}
 	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
+	// Capture content type if not already captured and WriteHeader wasn't called
+	if w.ContentType == "" {
+		if ct := w.Header().Get("Content-Type"); ct != "" {
+			w.ContentType = ct
+		}
+	}
+
+	n, err := w.ResponseWriter.Write(data)
+	if n > 0 {
+		w.BodySize += int64(n)
+	}
+	return n, err
 }

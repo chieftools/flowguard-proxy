@@ -41,9 +41,10 @@ type RequestLogEntry struct {
 }
 
 type RequestLogEntryIPInfo struct {
-	IP      string                   `json:"ip"`
-	AS      *RequestLogEntryIPASInfo `json:"as,omitempty"`
-	Country string                   `json:"country,omitempty"`
+	IP      string `json:"ip"`
+	Country string `json:"country,omitempty"`
+
+	AS *RequestLogEntryIPASInfo `json:"as,omitempty"`
 }
 
 type RequestLogEntryTLSInfo struct {
@@ -69,20 +70,26 @@ type RequestLogEntryIPASInfo struct {
 }
 
 type RequestLogEntryRequestInfo struct {
-	TLS *RequestLogEntryTLSInfo       `json:"tls,omitempty"`
-	URL RequestLogEntryRequestURLInfo `json:"url"`
+	Method      string `json:"method"`
+	Referrer    string `json:"referrer,omitempty"`
+	UserAgent   string `json:"user_agent,omitempty"`
+	HTTPVersion string `json:"http_version"`
 
-	Method        string `json:"method"`
-	Referrer      string `json:"referrer,omitempty"`
-	UserAgent     string `json:"user_agent,omitempty"`
-	ContentType   string `json:"content_type,omitempty"`
-	HTTPVersion   string `json:"http_version"`
-	ContentLength string `json:"content_length,omitempty"`
+	TLS  *RequestLogEntryTLSInfo       `json:"tls,omitempty"`
+	URL  RequestLogEntryRequestURLInfo `json:"url"`
+	Body *RequestLogEntryBodyInfo      `json:"body,omitempty"`
 }
 
 type RequestLogEntryResponseInfo struct {
 	Status int   `json:"status"`
 	TimeMS int64 `json:"time_ms,omitempty"`
+
+	Body *RequestLogEntryBodyInfo `json:"body,omitempty"`
+}
+
+type RequestLogEntryBodyInfo struct {
+	Size        int64  `json:"body_size,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
 }
 
 type RequestLogEntryRequestURLInfo struct {
@@ -125,7 +132,7 @@ func NewLoggingMiddleware(configMgr *config.Manager) (*LoggingMiddleware, error)
 	return m, nil
 }
 
-func (lm *LoggingMiddleware) logRequest(r *http.Request, statusCode int) {
+func (lm *LoggingMiddleware) logRequest(r *http.Request, wrapper *ResponseWriterWrapper) {
 	lm.mu.RLock()
 	defer lm.mu.RUnlock()
 
@@ -142,7 +149,7 @@ func (lm *LoggingMiddleware) logRequest(r *http.Request, statusCode int) {
 		Proxy:      getProxyInfo(r),
 		Client:     getClientInfo(r),
 		Request:    getRequestInfo(r),
-		Response:   getResponseInfo(statusCode, GetStartTime(r)),
+		Response:   getResponseInfo(r, wrapper),
 		Cloudflare: getCloudflareInfo(r),
 	}
 
@@ -305,14 +312,14 @@ func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 
 	// Create wrapper to capture response status code
 	wrapper := &ResponseWriterWrapper{
-		ResponseWriter:  w,
-		StatusCodeValue: http.StatusOK,
+		ResponseWriter: w,
+		StatusCode:     http.StatusOK,
 	}
 
 	// Process the request through the next handler
 	next.ServeHTTP(wrapper, r)
 
-	lm.logRequest(r, wrapper.StatusCodeValue)
+	lm.logRequest(r, wrapper)
 }
 
 func (lm *LoggingMiddleware) Close() {
@@ -434,28 +441,43 @@ func getClientInfo(r *http.Request) RequestLogEntryIPInfo {
 }
 
 func getRequestInfo(r *http.Request) RequestLogEntryRequestInfo {
-	return RequestLogEntryRequestInfo{
-		TLS: getTLSInfo(r),
-		URL: getRequestURLInfo(r),
+	var bodyInfo *RequestLogEntryBodyInfo = nil
+	if r.Header.Get("Content-Type") != "" || r.ContentLength > 0 {
+		bodyInfo = &RequestLogEntryBodyInfo{
+			Size:        r.ContentLength,
+			ContentType: r.Header.Get("Content-Type"),
+		}
+	}
 
-		Method:        r.Method,
-		Referrer:      r.Header.Get("Referer"),
-		UserAgent:     r.Header.Get("User-Agent"),
-		ContentType:   r.Header.Get("Content-Type"),
-		HTTPVersion:   r.Proto,
-		ContentLength: r.Header.Get("Content-Length"),
+	return RequestLogEntryRequestInfo{
+		TLS:  getTLSInfo(r),
+		URL:  getRequestURLInfo(r),
+		Body: bodyInfo,
+
+		Method:      r.Method,
+		Referrer:    r.Header.Get("Referer"),
+		UserAgent:   r.Header.Get("User-Agent"),
+		HTTPVersion: r.Proto,
 	}
 }
 
-func getResponseInfo(statusCode int, startTime time.Time) RequestLogEntryResponseInfo {
+func getResponseInfo(r *http.Request, wrapper *ResponseWriterWrapper) RequestLogEntryResponseInfo {
 	responseInfo := RequestLogEntryResponseInfo{
-		Status: statusCode,
+		Status: wrapper.StatusCode,
 	}
 
+	startTime := GetStartTime(r)
 	if !startTime.IsZero() {
 		responseTime := time.Since(startTime)
 		if responseTime > 0 {
 			responseInfo.TimeMS = responseTime.Milliseconds()
+		}
+	}
+
+	if wrapper.BodySize > 0 || wrapper.ContentType != "" {
+		responseInfo.Body = &RequestLogEntryBodyInfo{
+			Size:        wrapper.BodySize,
+			ContentType: wrapper.ContentType,
 		}
 	}
 
