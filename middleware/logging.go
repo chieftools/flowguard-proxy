@@ -30,6 +30,7 @@ type RequestLogEntry struct {
 	StreamID  string `json:"stream_id"`
 	Timestamp string `json:"timestamp"`
 
+	Host       RequestLogEntryHostInfo        `json:"host"`
 	Rule       RequestLogEntryRuleInfo        `json:"rule"`
 	Proxy      *RequestLogEntryIPInfo         `json:"proxy,omitempty"`
 	Client     RequestLogEntryIPInfo          `json:"client"`
@@ -47,6 +48,12 @@ type RequestLogEntryIPInfo struct {
 type RequestLogEntryTLSInfo struct {
 	Cipher  string `json:"cipher,omitempty"`
 	Version string `json:"version,omitempty"`
+}
+
+type RequestLogEntryHostInfo struct {
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name"`
+	Team string `json:"team,omitempty"`
 }
 
 type RequestLogEntryRuleInfo struct {
@@ -94,6 +101,7 @@ type LoggingMiddleware struct {
 	logFile         *os.File
 	enabled         bool
 	config          *config.LoggingConfig
+	hostInfo        *RequestLogEntryHostInfo
 	axiomClient     *axiom.Client
 	axiomChannel    chan axiom.Event
 	axiomCancelFunc context.CancelFunc
@@ -115,6 +123,54 @@ func NewLoggingMiddleware(configMgr *config.Manager) (*LoggingMiddleware, error)
 	return m, nil
 }
 
+func (lm *LoggingMiddleware) logRequest(r *http.Request, statusCode int) {
+	lm.mu.RLock()
+	defer lm.mu.RUnlock()
+
+	if !lm.enabled {
+		return
+	}
+
+	entry := &RequestLogEntry{
+		StreamID:  GetStreamID(r),
+		Timestamp: time.Now().Format(time.RFC3339),
+
+		Host:       *lm.hostInfo,
+		Rule:       getRuleInfo(r),
+		Proxy:      getProxyInfo(r),
+		Client:     getClientInfo(r),
+		Request:    getRequestInfo(r),
+		Response:   getResponseInfo(statusCode, GetStartTime(r)),
+		Cloudflare: getCloudflareInfo(r),
+	}
+
+	jsonBytes, err := json.Marshal(entry)
+	if err != nil {
+		log.Printf("[middleware:logging] Failed to marshal log entry: %v", err)
+		return
+	}
+
+	if lm.logFile != nil {
+		if _, err := lm.logFile.WriteString(string(jsonBytes) + "\n"); err != nil {
+			log.Printf("[middleware:logging] Failed to write to log file: %v", err)
+		}
+	}
+
+	if lm.axiomChannel != nil {
+		var event axiom.Event
+		if err := json.Unmarshal(jsonBytes, &event); err != nil {
+			log.Printf("[middleware:logging] Failed to unmarshal log entry for Axiom: %v", err)
+			return
+		}
+
+		select {
+		case lm.axiomChannel <- event:
+		default:
+			log.Printf("[middleware:logging] Axiom channel is full, dropping log entry")
+		}
+	}
+}
+
 func (lm *LoggingMiddleware) onConfigChange(cfg *config.Config) {
 	if err := lm.updateLogOutput(cfg); err != nil {
 		log.Printf("[middleware:logging] Failed to update log output on config change: %v", err)
@@ -128,6 +184,7 @@ func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
 	if cfg == nil || cfg.Logging == nil {
 		lm.config = nil
 		lm.enabled = false
+		lm.hostInfo = nil
 
 		return nil
 	}
@@ -135,6 +192,11 @@ func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
 	loggingCfg := cfg.Logging
 
 	lm.enabled = loggingCfg.FilePath != "" || (loggingCfg.AxiomDataset != "" && loggingCfg.AxiomToken != "")
+	lm.hostInfo = &RequestLogEntryHostInfo{
+		ID:   cfg.Host.ID,
+		Name: cfg.Host.Name,
+		Team: cfg.Host.Team,
+	}
 
 	err := lm.updateFileOutput(loggingCfg)
 	if err != nil {
@@ -234,80 +296,21 @@ func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 	ctx = context.WithValue(ctx, ContextKeyStreamID, generateStreamID())
 	r = r.WithContext(ctx)
 
+	if !enabled {
+		next.ServeHTTP(w, r)
+		return
+	}
+
 	// Create wrapper to capture response status code
 	wrapper := &ResponseWriterWrapper{
 		ResponseWriter:  w,
 		StatusCodeValue: http.StatusOK,
 	}
 
-	if !enabled {
-		next.ServeHTTP(wrapper, r)
-		return
-	}
-
 	// Process the request through the next handler
 	next.ServeHTTP(wrapper, r)
 
-	// Log the completed request - now r has the enriched context from IP lookup
-	lm.logCompletedRequest(r, wrapper.StatusCodeValue)
-}
-
-func (lm *LoggingMiddleware) logCompletedRequest(r *http.Request, statusCode int) {
-	lm.mu.RLock()
-	enabled := lm.enabled
-	lm.mu.RUnlock()
-
-	if !enabled {
-		return
-	}
-
-	entry := lm.buildLogEntry(r, statusCode)
-	lm.writeLogEntry(entry)
-}
-
-func (lm *LoggingMiddleware) buildLogEntry(r *http.Request, statusCode int) *RequestLogEntry {
-	return &RequestLogEntry{
-		StreamID:  GetStreamID(r),
-		Timestamp: time.Now().Format(time.RFC3339),
-
-		Rule:       getRuleInfo(r),
-		Proxy:      getProxyInfo(r),
-		Client:     getClientInfo(r),
-		Request:    getRequestInfo(r),
-		Response:   getResponseInfo(statusCode, GetStartTime(r)),
-		Cloudflare: getCloudflareInfo(r),
-	}
-}
-
-func (lm *LoggingMiddleware) writeLogEntry(entry *RequestLogEntry) {
-	lm.mu.RLock()
-	defer lm.mu.RUnlock()
-
-	jsonBytes, err := json.Marshal(entry)
-	if err != nil {
-		log.Printf("[middleware:logging] Failed to marshal log entry: %v", err)
-		return
-	}
-
-	if lm.logFile != nil {
-		if _, err := lm.logFile.WriteString(string(jsonBytes) + "\n"); err != nil {
-			log.Printf("[middleware:logging] Failed to write to log file: %v", err)
-		}
-	}
-
-	if lm.axiomChannel != nil {
-		var event axiom.Event
-		if err := json.Unmarshal(jsonBytes, &event); err != nil {
-			log.Printf("[middleware:logging] Failed to unmarshal log entry for Axiom: %v", err)
-			return
-		}
-
-		select {
-		case lm.axiomChannel <- event:
-		default:
-			log.Printf("[middleware:logging] Axiom channel is full, dropping log entry")
-		}
-	}
+	lm.logRequest(r, wrapper.StatusCodeValue)
 }
 
 func (lm *LoggingMiddleware) Close() {
