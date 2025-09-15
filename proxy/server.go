@@ -5,12 +5,14 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os/exec"
+	"strings"
 	"time"
 
 	"flowguard/middleware"
@@ -40,6 +42,7 @@ func (s *Server) Start(tlsConfig *tls.Config) error {
 	s.httpServer = &http.Server{
 		Addr:         fmt.Sprintf("%s:%s", maybeFormatV6Addr(s.config.bindAddr), s.config.bindPort),
 		Handler:      http.HandlerFunc(s.handleRequest),
+		ErrorLog:     newFilteredLogger(s.config.verbose),
 		TLSConfig:    tlsConfig,
 		ReadTimeout:  300 * time.Second,
 		WriteTimeout: 300 * time.Second,
@@ -207,7 +210,10 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 	}
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("[%s:%s] proxy error for %s: %v", s.config.bindAddr, s.config.bindPort, proxyHost, err)
+		if s.config.verbose || !strings.Contains(err.Error(), "context canceled") {
+			log.Printf("[%s:%s] proxy error for %s: %v", s.config.bindAddr, s.config.bindPort, proxyHost, err)
+		}
+
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
 	}
 
@@ -249,4 +255,29 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 	}
 
 	return proxy
+}
+
+// filteredLogger wraps a logger and filters out TLS handshake errors when not in verbose mode
+type filteredLogger struct {
+	verbose bool
+	logger  *log.Logger
+}
+
+func newFilteredLogger(verbose bool) *log.Logger {
+	return log.New(&filteredLogger{
+		verbose: verbose,
+		logger:  log.Default(),
+	}, "", 0)
+}
+
+func (fl *filteredLogger) Write(p []byte) (n int, err error) {
+	msg := string(p)
+
+	// If not verbose, filter out TLS handshake errors
+	if !fl.verbose && strings.Contains(msg, "TLS handshake error") {
+		return len(p), nil // Pretend we wrote it but don't actually log
+	}
+
+	// Otherwise, pass through to the underlying logger
+	return fl.logger.Writer().(io.Writer).Write(p)
 }
