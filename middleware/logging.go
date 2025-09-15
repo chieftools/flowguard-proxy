@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"flowguard/config"
@@ -106,15 +107,17 @@ type RequestLogEntryCloudflareInfo struct {
 }
 
 type LoggingMiddleware struct {
-	configMgr       *config.Manager
-	logFile         *os.File
-	enabled         bool
-	config          *config.LoggingConfig
-	hostInfo        *RequestLogEntryHostInfo
-	axiomClient     *axiom.Client
-	axiomChannel    chan axiom.Event
-	axiomCancelFunc context.CancelFunc
-	mu              sync.RWMutex
+	configMgr          *config.Manager
+	logFile            *os.File
+	enabled            bool
+	config             *config.LoggingConfig
+	hostInfo           *RequestLogEntryHostInfo
+	axiomClient        *axiom.Client
+	axiomChannel       chan axiom.Event
+	axiomCancelFunc    context.CancelFunc
+	axiomChannelDrops  uint64
+	axiomChannelResets uint64
+	mu                 sync.RWMutex
 }
 
 func NewLoggingMiddleware(configMgr *config.Manager) *LoggingMiddleware {
@@ -173,7 +176,11 @@ func (lm *LoggingMiddleware) logRequest(r *http.Request, wrapper *ResponseWriter
 		select {
 		case lm.axiomChannel <- event:
 		default:
-			log.Printf("[middleware:logging] Axiom channel is full, dropping log entry")
+			atomic.AddUint64(&lm.axiomChannelDrops, 1)
+			drops := atomic.LoadUint64(&lm.axiomChannelDrops)
+			if drops%100 == 1 {
+				log.Printf("[middleware:logging] Axiom channel is full, total drops: %d", drops)
+			}
 		}
 	}
 }
@@ -281,16 +288,148 @@ func (lm *LoggingMiddleware) updateAxiomOutput(loggingCfg *config.LoggingConfig)
 	ctx, cancel := context.WithCancel(context.Background())
 	lm.axiomCancelFunc = cancel
 
-	go func() {
-		_, err = client.IngestChannel(ctx, loggingCfg.AxiomDataset, lm.axiomChannel, ingest.SetTimestampField("timestamp"))
-		if err != nil && ctx.Err() == nil {
-			log.Printf("[middleware:logging] Axiom ingestion error: %v", err)
-		}
-	}()
+	go lm.runAxiomIngestion(ctx, loggingCfg.AxiomDataset)
 
 	log.Printf("[middleware:logging] Axiom logging enabled to dataset %s", loggingCfg.AxiomDataset)
 
 	return nil
+}
+
+func (lm *LoggingMiddleware) runAxiomIngestion(ctx context.Context, dataset string) {
+	const (
+		initialRetryDelay   = 1 * time.Second
+		maxRetryDelay       = 5 * time.Minute
+		retryMultiplier     = 2.0
+		channelCheckPeriod  = 30 * time.Second
+		maxDropsBeforeReset = 1000
+	)
+
+	retryDelay := initialRetryDelay
+	consecutiveFailures := 0
+	lastChannelCheck := time.Now()
+	lastDropCount := uint64(0)
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("[middleware:logging] Axiom ingestion stopped (context cancelled)")
+			return
+		default:
+		}
+
+		lm.mu.RLock()
+		client := lm.axiomClient
+		channel := lm.axiomChannel
+		lm.mu.RUnlock()
+
+		if client == nil || channel == nil {
+			log.Printf("[middleware:logging] Axiom client or channel is nil, stopping ingestion")
+			return
+		}
+
+		if time.Since(lastChannelCheck) > channelCheckPeriod {
+			currentDrops := atomic.LoadUint64(&lm.axiomChannelDrops)
+			dropsInPeriod := currentDrops - lastDropCount
+
+			if dropsInPeriod > maxDropsBeforeReset {
+				log.Printf("[middleware:logging] Excessive drops detected (%d in last %v), recreating channel",
+					dropsInPeriod, channelCheckPeriod)
+
+				lm.recreateAxiomChannel()
+				atomic.AddUint64(&lm.axiomChannelResets, 1)
+
+				lm.mu.RLock()
+				channel = lm.axiomChannel
+				lm.mu.RUnlock()
+			}
+
+			lastDropCount = currentDrops
+			lastChannelCheck = time.Now()
+		}
+
+		log.Printf("[middleware:logging] Starting Axiom ingestion to dataset %s (attempt #%d)",
+			dataset, consecutiveFailures+1)
+
+		ingestionCtx, cancel := context.WithCancel(ctx)
+
+		go func() {
+			select {
+			case <-time.After(10 * time.Minute):
+				log.Printf("[middleware:logging] Axiom ingestion taking too long, restarting")
+				cancel()
+			case <-ingestionCtx.Done():
+			}
+		}()
+
+		_, err := client.IngestChannel(ingestionCtx, dataset, channel, ingest.SetTimestampField("timestamp"))
+		cancel()
+
+		if ctx.Err() != nil {
+			log.Printf("[middleware:logging] Axiom ingestion stopped (main context cancelled)")
+			return
+		}
+
+		if err != nil {
+			consecutiveFailures++
+			log.Printf("[middleware:logging] Axiom ingestion error (failure #%d): %v. Retrying in %v",
+				consecutiveFailures, err, retryDelay)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(retryDelay):
+				retryDelay = time.Duration(float64(retryDelay) * retryMultiplier)
+				if retryDelay > maxRetryDelay {
+					retryDelay = maxRetryDelay
+				}
+			}
+		} else {
+			if consecutiveFailures > 0 {
+				log.Printf("[middleware:logging] Axiom ingestion recovered after %d failures", consecutiveFailures)
+			}
+			consecutiveFailures = 0
+			retryDelay = initialRetryDelay
+		}
+	}
+}
+
+func (lm *LoggingMiddleware) recreateAxiomChannel() {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	if lm.axiomChannel != nil {
+		oldChannel := lm.axiomChannel
+		lm.axiomChannel = make(chan axiom.Event, 10000)
+
+		go func() {
+			timeout := time.After(5 * time.Second)
+			drained := 0
+			for {
+				select {
+				case event, ok := <-oldChannel:
+					if !ok {
+						return
+					}
+					select {
+					case lm.axiomChannel <- event:
+						drained++
+					case <-timeout:
+						log.Printf("[middleware:logging] Timeout draining old channel, saved %d events", drained)
+						close(oldChannel)
+						return
+					}
+				case <-timeout:
+					log.Printf("[middleware:logging] Timeout draining old channel, saved %d events", drained)
+					close(oldChannel)
+					return
+				default:
+					log.Printf("[middleware:logging] Old channel drained, saved %d events", drained)
+					close(oldChannel)
+					return
+				}
+			}
+		}()
+	}
 }
 
 func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next http.Handler) {
