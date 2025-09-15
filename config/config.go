@@ -515,22 +515,28 @@ func (m *MatchCondition) SetCompiledRegexInternal(re *regexp.Regexp) {
 // GetIPDatabasePath downloads the IP database if configured and returns the local path
 func (m *Manager) GetIPDatabasePath() (string, error) {
 	m.mu.RLock()
+
 	var dbURL string
+	var dbBearer string
 	var refreshInterval time.Duration
+
 	if m.config != nil && m.config.IPDatabase != nil {
 		dbURL = m.config.IPDatabase.URL
+		dbBearer = m.config.Host.Key
+
 		if m.config.IPDatabase.RefreshIntervalSeconds > 0 {
 			refreshInterval = time.Duration(m.config.IPDatabase.RefreshIntervalSeconds) * time.Second
 		}
 	}
+
 	m.mu.RUnlock()
 
-	if dbURL == "" {
+	if dbURL == "" || dbBearer == "" {
 		// No database URL configured, use local file if exists
 		if _, err := os.Stat("ipinfo_lite.mmdb"); err == nil {
 			return "ipinfo_lite.mmdb", nil
 		}
-		return "", fmt.Errorf("no IP database configured or found")
+		return "", fmt.Errorf("no IP database or key configured")
 	}
 
 	// Use cache to download and store the database file
@@ -545,7 +551,7 @@ func (m *Manager) GetIPDatabasePath() (string, error) {
 	}
 
 	// Download/retrieve from cache
-	cachedPath, err := m.cache.FetchFileWithCache(dbURL, cacheTTL)
+	cachedPath, err := m.cache.FetchFileWithCache(dbURL, cacheTTL, dbBearer)
 	if err != nil {
 		// Fallback to local file if download fails
 		if _, err := os.Stat("ipinfo_lite.mmdb"); err == nil {

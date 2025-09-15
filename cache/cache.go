@@ -43,7 +43,8 @@ func NewCache(cacheDir string, userAgent string) (*Cache, error) {
 }
 
 // FetchWithCache fetches data from a URL with caching support
-func (c *Cache) FetchWithCache(url string, maxAge time.Duration) ([]byte, error) {
+// Optional bearerToken parameter can be provided to add Authorization header
+func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...string) ([]byte, error) {
 	if c == nil {
 		return nil, fmt.Errorf("cache not initialized")
 	}
@@ -62,7 +63,11 @@ func (c *Cache) FetchWithCache(url string, maxAge time.Duration) ([]byte, error)
 	if entry != nil {
 		existingETag = entry.ETag
 	}
-	data, etag, err := c.fetchFromURL(url, existingETag)
+	var token string
+	if len(bearerToken) > 0 {
+		token = bearerToken[0]
+	}
+	data, etag, err := c.fetchFromURL(url, existingETag, token)
 	if err != nil {
 		// If fetch fails but we have stale cache, use it
 		if entry != nil {
@@ -96,7 +101,8 @@ func (c *Cache) FetchWithCache(url string, maxAge time.Duration) ([]byte, error)
 
 // FetchFileWithCache fetches a binary file from a URL with efficient caching
 // This method stores the file directly on disk without JSON encoding
-func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration) (string, error) {
+// Optional bearerToken parameter can be provided to add Authorization header
+func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken ...string) (string, error) {
 	if c == nil {
 		return "", fmt.Errorf("cache not initialized")
 	}
@@ -139,6 +145,10 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration) (string, er
 
 	if meta.ETag != "" {
 		req.Header.Set("If-None-Match", meta.ETag)
+	}
+
+	if len(bearerToken) > 0 && bearerToken[0] != "" {
+		req.Header.Set("Authorization", "Bearer "+bearerToken[0])
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -271,7 +281,7 @@ func (c *Cache) saveCacheEntry(path string, entry *Entry) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-func (c *Cache) fetchFromURL(url string, etag string) ([]byte, string, error) {
+func (c *Cache) fetchFromURL(url string, etag string, bearerToken string) ([]byte, string, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, "", err
@@ -283,6 +293,10 @@ func (c *Cache) fetchFromURL(url string, etag string) ([]byte, string, error) {
 
 	if etag != "" {
 		req.Header.Set("If-None-Match", etag)
+	}
+
+	if bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+bearerToken)
 	}
 
 	resp, err := c.httpClient.Do(req)
