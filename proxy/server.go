@@ -270,12 +270,23 @@ func newFilteredLogger(verbose bool) *log.Logger {
 	}, "", 0)
 }
 
+var filteredMessageParts = []string{
+	"received GOAWAY",
+	"TLS handshake error",
+	"error reading preface from client",
+}
+
 func (fl *filteredLogger) Write(p []byte) (n int, err error) {
 	msg := string(p)
 
-	// If not verbose, filter out TLS handshake errors
-	if !fl.verbose && strings.Contains(msg, "TLS handshake error") {
-		return len(p), nil // Pretend we wrote it but don't actually log
+	// Only filter messages if not in verbose mode
+	if !fl.verbose {
+		// Check if the message contains any of the filtered parts
+		for _, part := range filteredMessageParts {
+			if strings.Contains(msg, part) {
+				return len(p), nil // Pretend we wrote it but don't actually log
+			}
+		}
 	}
 
 	// Otherwise, pass through to the underlying logger
