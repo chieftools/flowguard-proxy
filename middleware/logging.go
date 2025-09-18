@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -347,22 +348,14 @@ func (lm *LoggingMiddleware) runAxiomIngestion(ctx context.Context, dataset stri
 			lastChannelCheck = time.Now()
 		}
 
-		log.Printf("[middleware:logging] Starting Axiom ingestion to dataset %s (attempt #%d)",
-			dataset, consecutiveFailures+1)
+		log.Printf("[middleware:logging] Starting Axiom ingestion to dataset %s", dataset)
 
-		ingestionCtx, cancel := context.WithCancel(ctx)
+		ingestionStarted := time.Now()
 
-		go func() {
-			select {
-			case <-time.After(10 * time.Minute):
-				log.Printf("[middleware:logging] Axiom ingestion taking too long, restarting")
-				cancel()
-			case <-ingestionCtx.Done():
-			}
-		}()
+		// This blocks until context is cancelled or error occurs
+		_, err := client.IngestChannel(ctx, dataset, channel, ingest.SetTimestampField("timestamp"))
 
-		_, err := client.IngestChannel(ingestionCtx, dataset, channel, ingest.SetTimestampField("timestamp"))
-		cancel()
+		ingestionDuration := time.Since(ingestionStarted)
 
 		if ctx.Err() != nil {
 			log.Printf("[middleware:logging] Axiom ingestion stopped (main context cancelled)")
@@ -370,9 +363,16 @@ func (lm *LoggingMiddleware) runAxiomIngestion(ctx context.Context, dataset stri
 		}
 
 		if err != nil {
+			// Check if this is just a context cancellation from unknown source
+			if errors.Is(err, context.Canceled) {
+				log.Printf("[middleware:logging] Axiom ingestion cancelled after %v, reconnecting immediately", ingestionDuration)
+				// Don't treat context cancellation as failure - immediately retry
+				continue
+			}
+
+			// This is a real error
 			consecutiveFailures++
-			log.Printf("[middleware:logging] Axiom ingestion error (failure #%d): %v. Retrying in %v",
-				consecutiveFailures, err, retryDelay)
+			log.Printf("[middleware:logging] Axiom ingestion error (failure #%d) after %v: %v. Retrying in %v", consecutiveFailures, ingestionDuration, err, retryDelay)
 
 			select {
 			case <-ctx.Done():
@@ -384,9 +384,12 @@ func (lm *LoggingMiddleware) runAxiomIngestion(ctx context.Context, dataset stri
 				}
 			}
 		} else {
+			// IngestChannel returned without error (shouldn't normally happen)
 			if consecutiveFailures > 0 {
 				log.Printf("[middleware:logging] Axiom ingestion recovered after %d failures", consecutiveFailures)
 			}
+
+			log.Printf("[middleware:logging] Axiom ingestion completed normally after %v, reconnecting", ingestionDuration)
 			consecutiveFailures = 0
 			retryDelay = initialRetryDelay
 		}
