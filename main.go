@@ -25,10 +25,33 @@ func main() {
 		Version = "dev"
 	}
 
-	var (
-		// Setup flags
-		setupKey = flag.String("host-key", "", "Configure FlowGuard on the current host with the provided host key and exit")
+	// Check for setup subcommand first
+	if len(os.Args) >= 2 && os.Args[1] == "setup" {
+		if len(os.Args) < 3 {
+			log.Fatal("Usage: flowguard setup <host-key>")
+		}
+		hostKey := os.Args[2]
 
+		// Parse remaining flags for setup command
+		setupFlag := flag.NewFlagSet("setup", flag.ExitOnError)
+		configFile := setupFlag.String("config", "/etc/flowguard/config.json", "Path to the configuration file")
+
+		err := setupFlag.Parse(os.Args[3:])
+		if err != nil {
+			log.Printf("[ERROR] Failed to parse flags: %v", err)
+			os.Exit(1)
+		}
+
+		if err := setupHost(hostKey, *configFile); err != nil {
+			log.Printf("[ERROR] Failed to setup host: %v", err)
+			os.Exit(1)
+		}
+
+		log.Printf("[SUCCESS] Host configured successfully. Configuration saved to %s", *configFile)
+		os.Exit(0)
+	}
+
+	var (
 		// Proxy configuration
 		bindAddrs  = flag.String("bind", "", "Comma-separated list of IP addresses to bind to (default: auto-detect public IPs)")
 		httpPort   = flag.String("http-port", "11080", "Port for HTTP proxy server")
@@ -50,16 +73,6 @@ func main() {
 	cfg, err := loadConfigDefaults(*configFile)
 	if err != nil {
 		log.Printf("Failed to load configuration from %s: %v", *configFile, err)
-	}
-
-	// If setup key is provided, run setup and exit
-	if *setupKey != "" {
-		if err := setupHost(*setupKey, *configFile); err != nil {
-			log.Printf("[ERROR] Failed to setup host: %v", err)
-			os.Exit(1)
-		}
-		log.Printf("[SUCCESS] Host configured successfully. Configuration saved to %s", *configFile)
-		os.Exit(0)
 	}
 
 	// Override config with CLI flags if provided
