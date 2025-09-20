@@ -23,10 +23,11 @@ import (
 )
 
 const (
-	ContextKeyRuleID      contextKey = "ruleID"
-	ContextKeyStreamID    contextKey = "streamID"
-	ContextKeyStartTime   contextKey = "startTime"
-	ContextKeyActionTaken contextKey = "actionTaken"
+	ContextKeyRule       contextKey = "matched_rule"
+	ContextKeyAction     contextKey = "matched_action"
+	ContextKeyStreamID   contextKey = "stream_id"
+	ContextKeyStartTime  contextKey = "start_time"
+	ContextKeyRuleResult contextKey = "rule_result"
 )
 
 type RequestLogEntry struct {
@@ -61,8 +62,16 @@ type RequestLogEntryHostInfo struct {
 }
 
 type RequestLogEntryRuleInfo struct {
-	Result string `json:"result"`
 	ID     string `json:"id,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Result string `json:"result"`
+
+	Action *RequestLogEntryRuleActionInfo `json:"action,omitempty"`
+}
+
+type RequestLogEntryRuleActionInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
 }
 
 type RequestLogEntryIPASInfo struct {
@@ -500,25 +509,33 @@ func GetStartTime(r *http.Request) time.Time {
 	return time.Time{}
 }
 
-func SetRuleMatch(r *http.Request, ruleID string, action string) {
+func SetRuleMatch(r *http.Request, rule *config.Rule, action *config.RuleAction, result string) {
 	ctx := r.Context()
-	ctx = context.WithValue(ctx, ContextKeyRuleID, ruleID)
-	ctx = context.WithValue(ctx, ContextKeyActionTaken, action)
+	ctx = context.WithValue(ctx, ContextKeyRule, rule)
+	ctx = context.WithValue(ctx, ContextKeyAction, action)
+	ctx = context.WithValue(ctx, ContextKeyRuleResult, result)
 	*r = *r.WithContext(ctx)
 }
 
-func GetRuleIDMatched(r *http.Request) string {
-	if ruleID, ok := r.Context().Value(ContextKeyRuleID).(string); ok {
-		return ruleID
-	}
-	return ""
-}
-
-func GetRuleActionTaken(r *http.Request) string {
-	if actionTaken, ok := r.Context().Value(ContextKeyActionTaken).(string); ok {
+func GetRuleResult(r *http.Request) string {
+	if actionTaken, ok := r.Context().Value(ContextKeyRuleResult).(string); ok {
 		return actionTaken
 	}
 	return "proxy"
+}
+
+func GetRuleMatched(r *http.Request) *config.Rule {
+	if rule, ok := r.Context().Value(ContextKeyRule).(*config.Rule); ok {
+		return rule
+	}
+	return nil
+}
+
+func GetActionMatched(r *http.Request) *config.RuleAction {
+	if action, ok := r.Context().Value(ContextKeyAction).(*config.RuleAction); ok {
+		return action
+	}
+	return nil
 }
 
 func generateStreamID() string {
@@ -541,10 +558,23 @@ func getTLSInfo(r *http.Request) *RequestLogEntryTLSInfo {
 }
 
 func getRuleInfo(r *http.Request) RequestLogEntryRuleInfo {
-	return RequestLogEntryRuleInfo{
-		ID:     GetRuleIDMatched(r),
-		Result: GetRuleActionTaken(r),
+	info := RequestLogEntryRuleInfo{
+		Result: GetRuleResult(r),
 	}
+
+	if rule := GetRuleMatched(r); rule != nil {
+		info.ID = rule.ID
+		info.Name = rule.Name
+	}
+
+	if action := GetActionMatched(r); action != nil {
+		info.Action = &RequestLogEntryRuleActionInfo{
+			ID:   action.ID,
+			Name: action.Name,
+		}
+	}
+
+	return info
 }
 
 func getProxyInfo(r *http.Request) *RequestLogEntryIPInfo {

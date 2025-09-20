@@ -61,7 +61,7 @@ func (rm *RulesMiddleware) Handle(w http.ResponseWriter, r *http.Request, next h
 			switch action.Action {
 			case "allow":
 				// Mark the rule as matched and allow the request
-				SetRuleMatch(r, rule.ID, "proxy")
+				SetRuleMatch(r, rule, action, "proxy")
 
 				break
 			case "block":
@@ -70,7 +70,7 @@ func (rm *RulesMiddleware) Handle(w http.ResponseWriter, r *http.Request, next h
 
 			case "rate_limit":
 				// We only support one rate limit match per request
-				if GetRuleIDMatched(r) != "" {
+				if GetRuleMatched(r) != nil {
 					continue
 				}
 
@@ -90,8 +90,8 @@ func (rm *RulesMiddleware) Handle(w http.ResponseWriter, r *http.Request, next h
 					return
 				}
 
-				// We allow the request, but we do want to mark the rule matched
-				SetRuleMatch(r, rule.ID, "proxy")
+				// We allow the request, but we mark it as matched but without an action taken
+				SetRuleMatch(r, rule, nil, "proxy")
 
 				continue
 
@@ -382,7 +382,7 @@ func (rm *RulesMiddleware) Stop() {
 // blockRequest sends a block response based on the action configuration
 func blockRequest(w http.ResponseWriter, r *http.Request, action *config.RuleAction, rule *config.Rule) {
 	// Set rule match information in context for logging
-	SetRuleMatch(r, rule.ID, action.Action)
+	SetRuleMatch(r, rule, action, action.Action)
 
 	// Add Via header to blocked responses to match proxied responses and our stream ID
 	w.Header().Add("Via", fmt.Sprintf("%d.%d flowguard", r.ProtoMajor, r.ProtoMinor))

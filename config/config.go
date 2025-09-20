@@ -53,11 +53,14 @@ type TrustedProxiesConfig struct {
 
 type Rule struct {
 	ID         string          // Rule ID from the map key
+	Name       string          `json:"name"`
 	Action     string          `json:"action"`
 	Conditions *RuleConditions `json:"conditions"`
 }
 
 type RuleAction struct {
+	ID                string // Action ID from the map key
+	Name              string `json:"name"`
 	Action            string `json:"action"`                        // "block" or "rate_limit"
 	Status            int    `json:"status,omitempty"`              // HTTP status code (for block actions)
 	Message           string `json:"message,omitempty"`             // Response message (for block actions)
@@ -151,6 +154,22 @@ func (m *Manager) Load() error {
 		}
 	}
 
+	if config.Rules != nil {
+		for id, rule := range config.Rules {
+			rule.ID = id
+
+			if rule.Conditions != nil {
+				m.compileConditionRegex(rule.Conditions)
+			}
+		}
+	}
+
+	if config.Actions != nil {
+		for id, action := range config.Actions {
+			action.ID = id
+		}
+	}
+
 	// Update configuration atomically
 	m.mu.Lock()
 	oldConfig := m.config
@@ -173,19 +192,7 @@ func (m *Manager) Load() error {
 		}
 	}
 
-	// Set rule IDs from map keys and compile regex patterns
-	if config.Rules != nil {
-		for id, rule := range config.Rules {
-			rule.ID = id
-			// Compile regex patterns in conditions
-			if rule.Conditions != nil {
-				m.compileConditionRegex(rule.Conditions)
-			}
-		}
-	}
-
-	log.Printf("[config] Loaded configuration from %s (rules: %d, actions: %d, trusted proxies: %d networks)",
-		m.configPath, len(config.Rules), len(config.Actions), len(trustedProxyIPs))
+	log.Printf("[config] Loaded configuration from %s (rules: %d, actions: %d, trusted proxies: %d networks)", m.configPath, len(config.Rules), len(config.Actions), len(trustedProxyIPs))
 
 	return nil
 }

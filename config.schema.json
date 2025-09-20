@@ -87,6 +87,10 @@
             "type": "object",
             "description": "A security rule with conditions and an action",
             "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The human-readable name of this rule"
+                },
                 "action": {
                     "type": "string",
                     "description": "The action ID to execute when this rule matches"
@@ -209,6 +213,10 @@
             "type": "object",
             "description": "An action to take when a rule matches",
             "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The human-readable name of this action"
+                },
                 "action": {
                     "type": "string",
                     "enum": [
