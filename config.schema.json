@@ -109,8 +109,7 @@
                     "type": "string",
                     "enum": [
                         "AND",
-                        "OR",
-                        "NOT"
+                        "OR"
                     ],
                     "description": "Logical operator for combining conditions (default: AND)"
                 },
@@ -142,12 +141,10 @@
                 "type": {
                     "type": "string",
                     "enum": [
-                        "path",
                         "domain",
-                        "host",
-                        "agent",
-                        "user-agent",
+                        "path",
                         "header",
+                        "user-agent",
                         "ip",
                         "asn",
                         "ipset"
@@ -159,19 +156,16 @@
                     "enum": [
                         "equals",
                         "not-equals",
-                        "does-not-equal",
                         "contains",
                         "not-contains",
-                        "does-not-contain",
                         "starts-with",
                         "not-starts-with",
-                        "does-not-start-with",
                         "ends-with",
                         "not-ends-with",
-                        "does-not-end-with",
-                        "regex",
                         "in",
                         "not-in",
+                        "regex",
+                        "not-regex",
                         "exists",
                         "missing"
                     ],
@@ -218,6 +212,7 @@
                 "action": {
                     "type": "string",
                     "enum": [
+                        "allow",
                         "block",
                         "rate_limit"
                     ],

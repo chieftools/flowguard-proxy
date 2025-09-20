@@ -59,6 +59,11 @@ func (rm *RulesMiddleware) Handle(w http.ResponseWriter, r *http.Request, next h
 			}
 
 			switch action.Action {
+			case "allow":
+				// Mark the rule as matched and allow the request
+				SetRuleMatch(r, rule.ID, "proxy")
+
+				break
 			case "block":
 				blockRequest(w, r, action, rule)
 				return
@@ -125,28 +130,11 @@ func (rm *RulesMiddleware) matchesConditions(r *http.Request, conditions *config
 	// Handle group conditions (groups only)
 	if len(conditions.Matches) == 0 && len(conditions.Groups) > 0 {
 		switch operator {
-		case "AND":
-			for _, group := range conditions.Groups {
-				if !rm.matchesConditions(r, &group) {
-					return false
-				}
-			}
-			return true
 		case "OR":
 			for _, group := range conditions.Groups {
 				if rm.matchesConditions(r, &group) {
 					return true
 				}
-			}
-			return false
-		case "NOT":
-			// NOT should have exactly one group
-			if len(conditions.Groups) == 1 {
-				return !rm.matchesConditions(r, &conditions.Groups[0])
-			}
-			// For NOT with matches, evaluate as NOT(OR(matches))
-			if len(conditions.Matches) > 0 {
-				return !rm.evaluateMatches(r, "OR", conditions.Matches)
 			}
 			return false
 		default:
@@ -165,16 +153,6 @@ func (rm *RulesMiddleware) matchesConditions(r *http.Request, conditions *config
 		matchesResult := rm.evaluateMatches(r, "OR", conditions.Matches)
 
 		switch operator {
-		case "AND":
-			if !matchesResult {
-				return false
-			}
-			for _, group := range conditions.Groups {
-				if !rm.matchesConditions(r, &group) {
-					return false
-				}
-			}
-			return true
 		case "OR":
 			if matchesResult {
 				return true
@@ -216,13 +194,6 @@ func (rm *RulesMiddleware) evaluateMatches(r *http.Request, operator string, mat
 			}
 		}
 		return false
-	case "NOT":
-		for _, match := range matches {
-			if rm.evaluateMatch(r, &match) {
-				return false
-			}
-		}
-		return true
 	default:
 		// Default to AND
 		for _, match := range matches {
@@ -240,6 +211,8 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 
 	// Extract the value based on type
 	switch match.Type {
+	case "domain":
+		value = r.Host
 	case "path":
 		// Use raw path if raw_match is true, otherwise normalize for consistent matching
 		if match.RawMatch {
@@ -248,10 +221,6 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 			// Normalize the path for consistent matching (Cloudflare-style normalization)
 			value = normalization.NormalizePath(r.URL.Path)
 		}
-	case "domain", "host":
-		value = r.Host
-	case "agent", "user-agent":
-		value = r.Header.Get("User-Agent")
 	case "header":
 		// For header type, the value field contains the header name
 		value = r.Header.Get(match.Value)
@@ -262,8 +231,15 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 			return value == ""
 		}
 		return rm.matchesStringValue(value, match)
-	case "ipset":
-		return rm.matchesIPSet(r, match)
+	case "user-agent":
+		value = r.Header.Get("User-Agent")
+	case "ip":
+		clientIP := GetClientIP(r)
+		host, _, err := net.SplitHostPort(clientIP)
+		if err != nil {
+			host = clientIP
+		}
+		value = host
 	case "asn":
 		clientASNInfo := GetClientASN(r)
 		if clientASNInfo == nil {
@@ -274,13 +250,8 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 			return false
 		}
 		value = fmt.Sprintf("%d", clientASN)
-	case "ip":
-		clientIP := GetClientIP(r)
-		host, _, err := net.SplitHostPort(clientIP)
-		if err != nil {
-			host = clientIP
-		}
-		value = host
+	case "ipset":
+		return rm.matchesIPSet(r, match)
 	default:
 		log.Printf("[middleware:rules] Unknown match type: %s", match.Type)
 		return false
@@ -292,12 +263,16 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 // matchesStringValue checks if a string value matches the given criteria
 func (rm *RulesMiddleware) matchesStringValue(value string, match *config.MatchCondition) bool {
 	// Handle regex matching
-	if match.Match == "regex" {
+	if match.Match == "regex" || match.Match == "not-regex" {
 		re := match.GetCompiledRegex()
 		if re == nil {
 			return false
 		}
-		return re.MatchString(value)
+		matched := re.MatchString(value)
+		if match.Match == "not-regex" {
+			return !matched
+		}
+		return matched
 	}
 
 	// Apply case-insensitive matching if requested
@@ -344,19 +319,19 @@ func (rm *RulesMiddleware) matchesStringValue(value string, match *config.MatchC
 	switch match.Match {
 	case "equals":
 		return compareValue == matchValue
-	case "not-equals", "does-not-equal":
+	case "not-equals":
 		return compareValue != matchValue
 	case "contains":
 		return strings.Contains(compareValue, matchValue)
-	case "not-contains", "does-not-contain":
+	case "not-contains":
 		return !strings.Contains(compareValue, matchValue)
 	case "starts-with":
 		return strings.HasPrefix(compareValue, matchValue)
-	case "not-starts-with", "does-not-start-with":
+	case "not-starts-with":
 		return !strings.HasPrefix(compareValue, matchValue)
 	case "ends-with":
 		return strings.HasSuffix(compareValue, matchValue)
-	case "not-ends-with", "does-not-end-with":
+	case "not-ends-with":
 		return !strings.HasSuffix(compareValue, matchValue)
 	default:
 		log.Printf("[middleware:rules] Unknown match type: %s", match.Match)
