@@ -74,7 +74,7 @@ type RequestLogEntryIPASInfo struct {
 type RequestLogEntryRequestInfo struct {
 	Method      string `json:"method"`
 	Referrer    string `json:"referrer,omitempty"`
-	UserAgent   string `json:"user_agent,omitempty"`
+	UserAgent   string `json:"user_agent"`
 	HTTPVersion string `json:"http_version"`
 
 	TLS  *RequestLogEntryTLSInfo       `json:"tls,omitempty"`
