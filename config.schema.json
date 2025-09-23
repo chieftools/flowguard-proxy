@@ -41,6 +41,9 @@
         "logging": {
             "$ref": "#/definitions/logging"
         },
+        "realtime": {
+            "$ref": "#/definitions/realtime"
+        },
         "cache_dir": {
             "type": "string",
             "description": "Directory for caching external data (IP databases, etc.)"
@@ -342,6 +345,46 @@
                     "description": "The Axiom dataset to send logs to, leave empty to disable Axiom logging"
                 }
             },
+            "additionalProperties": false
+        },
+        "realtime": {
+            "type": "object",
+            "description": "WebSocket configuration for real-time messaging",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "WebSocket application key"
+                },
+                "host": {
+                    "type": "string",
+                    "description": "Host for the WebSocket server"
+                },
+                "port": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535,
+                    "description": "Port for the WebSocket server"
+                },
+                "channel": {
+                    "type": "string",
+                    "description": "Channel name to subscribe to for config update notifications (can be public or private)"
+                },
+                "auth_url": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "Authentication URL for private channel access. Required for private channels"
+                },
+                "encrypted": {
+                    "type": "boolean",
+                    "description": "Whether to use encrypted WebSocket connections (WSS instead of WS). Default: true"
+                }
+            },
+            "required": [
+                "key",
+                "host",
+                "port",
+                "channel"
+            ],
             "additionalProperties": false
         }
     }

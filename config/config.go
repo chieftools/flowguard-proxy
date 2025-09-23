@@ -14,6 +14,7 @@ import (
 
 	"flowguard/api"
 	"flowguard/cache"
+	"flowguard/pusher"
 )
 
 // Config represents the complete application configuration
@@ -24,6 +25,7 @@ type Config struct {
 	Logging        *LoggingConfig         `json:"logging"`
 	IPDatabase     *IPDatabaseConfig      `json:"ip_database"`
 	TrustedProxies *TrustedProxiesConfig  `json:"trusted_proxies"`
+	Realtime       *pusher.Config         `json:"realtime,omitempty"`
 	CacheDir       string                 `json:"cache_dir,omitempty"`
 	CertPath       string                 `json:"cert_path,omitempty"`
 }
@@ -90,19 +92,22 @@ type MatchCondition struct {
 // Manager manages the configuration with hot-reload support
 type Manager struct {
 	configPath      string
+	userAgent       string
+	verbose         bool
 	config          *Config
-	trustedProxyIPs []net.IPNet
+	cache           *cache.Cache
 	lastModified    time.Time
+	apiClient       *api.Client
+	realtimeClient  *pusher.Client
+	trustedProxyIPs []net.IPNet
+	callbacks       []func(*Config)
 	stopWatcher     chan struct{}
 	stopAPIRefresh  chan struct{}
-	callbacks       []func(*Config)
-	cache           *cache.Cache
-	apiClient       *api.Client
 	mu              sync.RWMutex
 }
 
 // NewManager creates a new configuration manager
-func NewManager(configPath string, userAgent string, cacheDir string) (*Manager, error) {
+func NewManager(configPath string, userAgent string, cacheDir string, verbose bool) (*Manager, error) {
 	// Create cache if cache directory is provided
 	var c *cache.Cache
 	if cacheDir != "" {
@@ -116,6 +121,8 @@ func NewManager(configPath string, userAgent string, cacheDir string) (*Manager,
 
 	m := &Manager{
 		cache:          c,
+		userAgent:      userAgent,
+		verbose:        verbose,
 		configPath:     configPath,
 		stopWatcher:    make(chan struct{}),
 		stopAPIRefresh: make(chan struct{}),
@@ -191,6 +198,9 @@ func (m *Manager) Load() error {
 
 	m.mu.Unlock()
 
+	// Update Realtime client configuration
+	m.updatePusherClient(&config)
+
 	// Notify all change listeners if config changed
 	if oldConfig != nil {
 		m.mu.RLock()
@@ -208,110 +218,6 @@ func (m *Manager) Load() error {
 	log.Printf("[config] Loaded configuration from %s (rules: %d, actions: %d, trusted proxies: %d networks)", m.configPath, len(config.Rules), len(config.Actions), len(trustedProxyIPs))
 
 	return nil
-}
-
-// parseTrustedProxies parses trusted proxy configuration
-func (m *Manager) parseTrustedProxies(proxies []string) ([]net.IPNet, error) {
-	var result []net.IPNet
-	seenNetworks := make(map[string]bool)
-
-	for _, proxy := range proxies {
-		if strings.HasPrefix(proxy, "http://") || strings.HasPrefix(proxy, "https://") {
-			// Fetch IP ranges from URL
-			ranges, err := m.fetchIPRangesFromURL(proxy)
-			if err != nil {
-				log.Printf("[config] Failed to fetch trusted proxies from %s: %v", proxy, err)
-				continue
-			}
-			for _, r := range ranges {
-				key := r.String()
-				if !seenNetworks[key] {
-					result = append(result, r)
-					seenNetworks[key] = true
-				}
-			}
-		} else {
-			// Parse as IP or CIDR
-			var ipNet net.IPNet
-			if strings.Contains(proxy, "/") {
-				// Parse as CIDR
-				_, network, err := net.ParseCIDR(proxy)
-				if err != nil {
-					return nil, fmt.Errorf("invalid CIDR %s: %w", proxy, err)
-				}
-				ipNet = *network
-			} else {
-				// Parse as single IP
-				ip := net.ParseIP(proxy)
-				if ip == nil {
-					return nil, fmt.Errorf("invalid IP address: %s", proxy)
-				}
-				// Create a /32 or /128 network for single IP
-				if ip.To4() != nil {
-					ipNet = net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}
-				} else {
-					ipNet = net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}
-				}
-			}
-
-			key := ipNet.String()
-			if !seenNetworks[key] {
-				result = append(result, ipNet)
-				seenNetworks[key] = true
-			}
-		}
-	}
-
-	return result, nil
-}
-
-// fetchIPRangesFromURL fetches IP ranges from a URL with caching
-func (m *Manager) fetchIPRangesFromURL(url string) ([]net.IPNet, error) {
-	var data []byte
-	var err error
-
-	// Get cache TTL from config
-	cacheTTL := 24 * time.Hour // default
-	m.mu.RLock()
-	if m.config != nil && m.config.TrustedProxies != nil && m.config.TrustedProxies.RefreshIntervalSeconds > 0 {
-		cacheTTL = time.Duration(m.config.TrustedProxies.RefreshIntervalSeconds) * time.Second
-	}
-	m.mu.RUnlock()
-
-	// Use cache if available
-	data, err = m.cache.FetchWithCache(url, cacheTTL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch %s: %w", url, err)
-	}
-
-	// Parse the data (one CIDR per line)
-	return m.parseIPRanges(data, url)
-}
-
-// parseIPRanges parses IP ranges from raw data
-func (m *Manager) parseIPRanges(data []byte, source string) ([]net.IPNet, error) {
-	var result []net.IPNet
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		_, network, err := net.ParseCIDR(line)
-		if err != nil {
-			log.Printf("[config] Invalid CIDR from %s: %s", source, line)
-			continue
-		}
-		result = append(result, *network)
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	return result, nil
 }
 
 // GetConfig returns a copy of the current configuration
@@ -439,6 +345,14 @@ func (m *Manager) checkAndReload() {
 func (m *Manager) Stop() {
 	close(m.stopAPIRefresh)
 	close(m.stopWatcher)
+
+	// Disconnect Realtime client
+	m.mu.Lock()
+	if m.realtimeClient != nil {
+		m.realtimeClient.Disconnect()
+		m.realtimeClient = nil
+	}
+	m.mu.Unlock()
 }
 
 // RefreshFromAPI fetches the latest configuration from the API and updates the config file
@@ -558,40 +472,6 @@ func (m *Manager) GetIPDatabaseRefreshInterval() time.Duration {
 	return 24 * time.Hour
 }
 
-// compileConditionRegex recursively compiles regex patterns in conditions
-func (m *Manager) compileConditionRegex(cond *RuleConditions) {
-	// Compile regex in matches
-	for i := range cond.Matches {
-		if cond.Matches[i].Match == "regex" {
-			pattern := cond.Matches[i].Value
-			if cond.Matches[i].CaseInsensitive {
-				pattern = "(?i)" + pattern
-			}
-			re, err := regexp.Compile(pattern)
-			if err != nil {
-				log.Printf("[config] Warning: Invalid regex pattern '%s': %v", cond.Matches[i].Value, err)
-			} else {
-				cond.Matches[i].compiledRegex = re
-			}
-		}
-	}
-
-	// Recursively compile in groups
-	for i := range cond.Groups {
-		m.compileConditionRegex(&cond.Groups[i])
-	}
-}
-
-// GetCompiledRegex returns the compiled regex for a MatchCondition
-func (m *MatchCondition) GetCompiledRegex() *regexp.Regexp {
-	return m.compiledRegex
-}
-
-// SetCompiledRegexInternal sets the compiled regex (for testing)
-func (m *MatchCondition) SetCompiledRegexInternal(re *regexp.Regexp) {
-	m.compiledRegex = re
-}
-
 // GetIPDatabasePath downloads the IP database if configured and returns the local path
 func (m *Manager) GetIPDatabasePath() (string, error) {
 	m.mu.RLock()
@@ -642,4 +522,185 @@ func (m *Manager) GetIPDatabasePath() (string, error) {
 	}
 
 	return cachedPath, nil
+}
+
+// parseTrustedProxies parses trusted proxy configuration
+func (m *Manager) parseTrustedProxies(proxies []string) ([]net.IPNet, error) {
+	var result []net.IPNet
+	seenNetworks := make(map[string]bool)
+
+	for _, proxy := range proxies {
+		if strings.HasPrefix(proxy, "http://") || strings.HasPrefix(proxy, "https://") {
+			// Fetch IP ranges from URL
+			ranges, err := m.fetchIPRangesFromURL(proxy)
+			if err != nil {
+				log.Printf("[config] Failed to fetch trusted proxies from %s: %v", proxy, err)
+				continue
+			}
+			for _, r := range ranges {
+				key := r.String()
+				if !seenNetworks[key] {
+					result = append(result, r)
+					seenNetworks[key] = true
+				}
+			}
+		} else {
+			// Parse as IP or CIDR
+			var ipNet net.IPNet
+			if strings.Contains(proxy, "/") {
+				// Parse as CIDR
+				_, network, err := net.ParseCIDR(proxy)
+				if err != nil {
+					return nil, fmt.Errorf("invalid CIDR %s: %w", proxy, err)
+				}
+				ipNet = *network
+			} else {
+				// Parse as single IP
+				ip := net.ParseIP(proxy)
+				if ip == nil {
+					return nil, fmt.Errorf("invalid IP address: %s", proxy)
+				}
+				// Create a /32 or /128 network for single IP
+				if ip.To4() != nil {
+					ipNet = net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}
+				} else {
+					ipNet = net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}
+				}
+			}
+
+			key := ipNet.String()
+			if !seenNetworks[key] {
+				result = append(result, ipNet)
+				seenNetworks[key] = true
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// fetchIPRangesFromURL fetches IP ranges from a URL with caching
+func (m *Manager) fetchIPRangesFromURL(url string) ([]net.IPNet, error) {
+	var data []byte
+	var err error
+
+	// Get cache TTL from config
+	cacheTTL := 24 * time.Hour // default
+	m.mu.RLock()
+	if m.config != nil && m.config.TrustedProxies != nil && m.config.TrustedProxies.RefreshIntervalSeconds > 0 {
+		cacheTTL = time.Duration(m.config.TrustedProxies.RefreshIntervalSeconds) * time.Second
+	}
+	m.mu.RUnlock()
+
+	// Use cache if available
+	data, err = m.cache.FetchWithCache(url, cacheTTL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch %s: %w", url, err)
+	}
+
+	// Parse the data (one CIDR per line)
+	return m.parseIPRanges(data, url)
+}
+
+// parseIPRanges parses IP ranges from raw data
+func (m *Manager) parseIPRanges(data []byte, source string) ([]net.IPNet, error) {
+	var result []net.IPNet
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		_, network, err := net.ParseCIDR(line)
+		if err != nil {
+			log.Printf("[config] Invalid CIDR from %s: %s", source, line)
+			continue
+		}
+		result = append(result, *network)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// updatePusherClient updates or creates the Realtime client based on configuration
+func (m *Manager) updatePusherClient(config *Config) {
+	// If no pusher config, disconnect any existing client
+	if config.Realtime == nil {
+		if m.realtimeClient != nil {
+			m.realtimeClient.Disconnect()
+			m.realtimeClient = nil
+			log.Printf("[config] Realtime client disconnected (no configuration)")
+		}
+		return
+	}
+
+	// If no existing client, create new one
+	if m.realtimeClient == nil {
+		m.realtimeClient = pusher.NewClient(config.Realtime, m.userAgent, config.Host.Key, m.verbose)
+
+		if m.realtimeClient != nil {
+			// Set up event handler for config updates
+			m.realtimeClient.OnEvent("config.updated", func(message pusher.Message) {
+				log.Printf("[config] Received config update event from realtime event")
+
+				if err := m.RefreshFromAPI(); err != nil {
+					log.Printf("[config] Failed to refresh config from API after realtime event: %v", err)
+				}
+			})
+
+			// Start connection in background
+			go func() {
+				if err := m.realtimeClient.Connect(); err != nil {
+					log.Printf("[config] Failed to connect to realtime server: %v", err)
+				}
+			}()
+
+			log.Printf("[config] Realtime client initialized")
+		}
+	} else {
+		// Update existing client configuration
+		if err := m.realtimeClient.UpdateConfig(config.Realtime); err != nil {
+			log.Printf("[config] Failed to update realtime client configuration: %v", err)
+		}
+	}
+}
+
+// compileConditionRegex recursively compiles regex patterns in conditions
+func (m *Manager) compileConditionRegex(cond *RuleConditions) {
+	// Compile regex in matches
+	for i := range cond.Matches {
+		if cond.Matches[i].Match == "regex" {
+			pattern := cond.Matches[i].Value
+			if cond.Matches[i].CaseInsensitive {
+				pattern = "(?i)" + pattern
+			}
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				log.Printf("[config] Warning: Invalid regex pattern '%s': %v", cond.Matches[i].Value, err)
+			} else {
+				cond.Matches[i].compiledRegex = re
+			}
+		}
+	}
+
+	// Recursively compile in groups
+	for i := range cond.Groups {
+		m.compileConditionRegex(&cond.Groups[i])
+	}
+}
+
+// GetCompiledRegex returns the compiled regex for a MatchCondition
+func (m *MatchCondition) GetCompiledRegex() *regexp.Regexp {
+	return m.compiledRegex
+}
+
+// SetCompiledRegexInternal sets the compiled regex (for testing)
+func (m *MatchCondition) SetCompiledRegexInternal(re *regexp.Regexp) {
+	m.compiledRegex = re
 }

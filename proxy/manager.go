@@ -35,7 +35,7 @@ type Manager struct {
 
 func NewManager(cfg *Config) *Manager {
 	// Create configuration manager
-	configMgr, err := config.NewManager(cfg.ConfigFile, cfg.UserAgent, cfg.CacheDir)
+	configMgr, err := config.NewManager(cfg.ConfigFile, cfg.UserAgent, cfg.CacheDir, cfg.Verbose)
 	if err != nil {
 		log.Printf("Failed to load configuration from %s: %v", cfg.ConfigFile, err)
 		os.Exit(1)
