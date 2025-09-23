@@ -9,6 +9,11 @@
             "type": "string",
             "description": "JSON Schema reference for IDE validation and autocomplete"
         },
+        "id": {
+            "type": "string",
+            "format": "ulid",
+            "description": "Unique identifier for this configuration version"
+        },
         "host": {
             "$ref": "#/definitions/host"
         },

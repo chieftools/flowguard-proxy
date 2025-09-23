@@ -19,6 +19,7 @@ import (
 
 // Config represents the complete application configuration
 type Config struct {
+	ID             string                 `json:"id,omitempty"`
 	Host           *HostConfig            `json:"host"`
 	Rules          map[string]*Rule       `json:"rules"`
 	Actions        map[string]*RuleAction `json:"actions"`
@@ -97,6 +98,7 @@ type Manager struct {
 	config          *Config
 	cache           *cache.Cache
 	lastModified    time.Time
+	currentConfigID string
 	apiClient       *api.Client
 	realtimeClient  *pusher.Client
 	trustedProxyIPs []net.IPNet
@@ -190,6 +192,7 @@ func (m *Manager) Load() error {
 	m.config = &config
 	m.trustedProxyIPs = trustedProxyIPs
 	m.lastModified = info.ModTime()
+	m.currentConfigID = config.ID
 
 	// Update API client with host key if available
 	if config.Host != nil && config.Host.Key != "" {
@@ -321,24 +324,79 @@ func (m *Manager) StartWatcher(interval time.Duration) {
 
 // checkAndReload checks if the config file has changed and reloads if necessary
 func (m *Manager) checkAndReload() {
-	info, err := os.Stat(m.configPath)
-	if err != nil {
-		log.Printf("[config] Failed to stat config file: %v", err)
-		return
-	}
-
-	m.mu.RLock()
-	lastMod := m.lastModified
-	m.mu.RUnlock()
-
-	if info.ModTime().After(lastMod) {
-		log.Printf("[config] Configuration file changed, reloading...")
+	shouldReload, reason := m.shouldReloadConfig()
+	if shouldReload {
+		log.Printf("[config] Configuration %s, reloading...", reason)
 		if err := m.Load(); err != nil {
 			log.Printf("[config] Failed to reload configuration: %v", err)
 		} else {
 			log.Printf("[config] Configuration reloaded successfully")
 		}
 	}
+}
+
+// shouldReloadConfig determines if the configuration should be reloaded
+// Returns true and reason if reload is needed, false otherwise
+func (m *Manager) shouldReloadConfig() (bool, string) {
+	// First check if file exists and get info
+	info, err := os.Stat(m.configPath)
+	if err != nil {
+		log.Printf("[config] Failed to stat config file: %v", err)
+		return false, ""
+	}
+
+	// Read the file to check for ID changes
+	data, err := os.ReadFile(m.configPath)
+	if err != nil {
+		log.Printf("[config] Failed to read config file for ID check: %v", err)
+		// Fall back to modification time check
+		m.mu.RLock()
+		lastMod := m.lastModified
+		m.mu.RUnlock()
+
+		if info.ModTime().After(lastMod) {
+			return true, "file modification time changed"
+		}
+		return false, ""
+	}
+
+	// Parse just enough to get the ID
+	var tempConfig struct {
+		ID string `json:"id,omitempty"`
+	}
+	if err := json.Unmarshal(data, &tempConfig); err != nil {
+		log.Printf("[config] Failed to parse config for ID check: %v", err)
+		// Fall back to modification time check
+		m.mu.RLock()
+		lastMod := m.lastModified
+		m.mu.RUnlock()
+
+		if info.ModTime().After(lastMod) {
+			return true, "file modification time changed (JSON parse failed)"
+		}
+		return false, ""
+	}
+
+	m.mu.RLock()
+	currentID := m.currentConfigID
+	lastMod := m.lastModified
+	m.mu.RUnlock()
+
+	// If we have an ID in the new config, use ID comparison
+	if tempConfig.ID != "" {
+		if tempConfig.ID != currentID {
+			return true, fmt.Sprintf("ID changed from '%s' to '%s'", currentID, tempConfig.ID)
+		}
+		// IDs match, no reload needed
+		return false, ""
+	}
+
+	// No ID in new config, fall back to modification time
+	if info.ModTime().After(lastMod) {
+		return true, "file modification time changed (no ID in config)"
+	}
+
+	return false, ""
 }
 
 // Stop stops the configuration file watcher
@@ -359,6 +417,7 @@ func (m *Manager) Stop() {
 func (m *Manager) RefreshFromAPI() error {
 	m.mu.RLock()
 	hasHostKey := m.config != nil && m.config.Host != nil && m.config.Host.Key != ""
+	currentConfigID := m.currentConfigID
 	m.mu.RUnlock()
 
 	// Only refresh if we have a host key
@@ -370,6 +429,22 @@ func (m *Manager) RefreshFromAPI() error {
 	body, err := m.apiClient.GetConfig()
 	if err != nil {
 		return fmt.Errorf("failed to fetch configuration from API: %w", err)
+	}
+
+	// Parse the new configuration to check ID
+	var newConfig struct {
+		ID string `json:"id,omitempty"`
+	}
+	if err := json.Unmarshal(body, &newConfig); err != nil {
+		return fmt.Errorf("failed to parse API configuration: %w", err)
+	}
+
+	// If we have an ID in the new config, check if it's different from current
+	if newConfig.ID != "" && newConfig.ID == currentConfigID {
+		if m.verbose {
+			log.Printf("[config] API configuration ID (%s) matches current, skipping update", newConfig.ID)
+		}
+		return nil
 	}
 
 	// Write to temporary file first for atomic update
@@ -384,7 +459,11 @@ func (m *Manager) RefreshFromAPI() error {
 		return fmt.Errorf("failed to save configuration: %w", err)
 	}
 
-	log.Printf("[config] Configuration refreshed from API successfully")
+	if newConfig.ID != "" {
+		log.Printf("[config] Configuration refreshed from API successfully (ID: %s -> %s)", currentConfigID, newConfig.ID)
+	} else {
+		log.Printf("[config] Configuration refreshed from API successfully (no ID)")
+	}
 
 	// The file watcher will detect the change and reload automatically
 	return nil
