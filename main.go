@@ -4,16 +4,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
+	"flowguard/api"
 	"flowguard/certmanager"
 	"flowguard/proxy"
 )
@@ -162,41 +160,18 @@ func loadConfigDefaults(configFile string) (*proxy.Config, error) {
 	}, nil
 }
 
-// setupHost downloads the host configuration from the FlowGuard API
+// setupHost downloads the host configuration from the FlowGuard API and saves it to disk
 func setupHost(hostKey, configFile string) error {
-	const apiURL = "https://flowguard.network/api/v1/config"
+	// Create API client
+	client := api.NewClient(hostKey, fmt.Sprintf("FlowGuard/%s", Version))
 
-	// Create HTTP client with timeout
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
+	// Show which API endpoint we're using (helpful for debugging)
+	log.Printf("Using API base: %s", client.GetBaseURL())
 
-	// Create request with authorization header
-	req, err := http.NewRequest("GET", apiURL, nil)
+	// Fetch configuration from API
+	body, err := client.GetConfig()
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+hostKey)
-	req.Header.Set("User-Agent", fmt.Sprintf("FlowGuard/%s", Version))
-
-	// Make the request
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to fetch configuration: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Check response status
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	// Read response body
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		return err
 	}
 
 	// Ensure directory exists

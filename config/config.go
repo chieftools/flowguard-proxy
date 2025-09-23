@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"flowguard/api"
 	"flowguard/cache"
 )
 
@@ -93,8 +94,10 @@ type Manager struct {
 	trustedProxyIPs []net.IPNet
 	lastModified    time.Time
 	stopWatcher     chan struct{}
+	stopAPIRefresh  chan struct{}
 	callbacks       []func(*Config)
 	cache           *cache.Cache
+	apiClient       *api.Client
 	mu              sync.RWMutex
 }
 
@@ -112,9 +115,12 @@ func NewManager(configPath string, userAgent string, cacheDir string) (*Manager,
 	}
 
 	m := &Manager{
-		cache:       c,
-		configPath:  configPath,
-		stopWatcher: make(chan struct{}),
+		cache:          c,
+		configPath:     configPath,
+		stopWatcher:    make(chan struct{}),
+		stopAPIRefresh: make(chan struct{}),
+		apiClient:      api.NewClient("", userAgent),
+		callbacks:      make([]func(*Config), 0),
 	}
 
 	// Load initial configuration
@@ -172,10 +178,17 @@ func (m *Manager) Load() error {
 
 	// Update configuration atomically
 	m.mu.Lock()
+
 	oldConfig := m.config
 	m.config = &config
 	m.trustedProxyIPs = trustedProxyIPs
 	m.lastModified = info.ModTime()
+
+	// Update API client with host key if available
+	if config.Host != nil && config.Host.Key != "" {
+		m.apiClient.SetHostKey(config.Host.Key)
+	}
+
 	m.mu.Unlock()
 
 	// Notify all change listeners if config changed
@@ -424,7 +437,67 @@ func (m *Manager) checkAndReload() {
 
 // Stop stops the configuration file watcher
 func (m *Manager) Stop() {
+	close(m.stopAPIRefresh)
 	close(m.stopWatcher)
+}
+
+// RefreshFromAPI fetches the latest configuration from the API and updates the config file
+func (m *Manager) RefreshFromAPI() error {
+	m.mu.RLock()
+	hasHostKey := m.config != nil && m.config.Host != nil && m.config.Host.Key != ""
+	m.mu.RUnlock()
+
+	// Only refresh if we have a host key
+	if !hasHostKey {
+		return nil
+	}
+
+	// Fetch configuration from API using the client
+	body, err := m.apiClient.GetConfig()
+	if err != nil {
+		return fmt.Errorf("failed to fetch configuration from API: %w", err)
+	}
+
+	// Write to temporary file first for atomic update
+	tmpFile := m.configPath + ".tmp"
+	if err := os.WriteFile(tmpFile, body, 0644); err != nil {
+		return fmt.Errorf("failed to write configuration: %w", err)
+	}
+
+	// Atomically rename to final location
+	if err := os.Rename(tmpFile, m.configPath); err != nil {
+		os.Remove(tmpFile)
+		return fmt.Errorf("failed to save configuration: %w", err)
+	}
+
+	log.Printf("[config] Configuration refreshed from API successfully")
+
+	// The file watcher will detect the change and reload automatically
+	return nil
+}
+
+// StartAPIRefresh starts a goroutine that periodically refreshes the configuration from the API
+func (m *Manager) StartAPIRefresh(interval time.Duration) {
+	go func() {
+		// Initial refresh on startup
+		if err := m.RefreshFromAPI(); err != nil {
+			log.Printf("[config] Initial API refresh failed: %v", err)
+		}
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				if err := m.RefreshFromAPI(); err != nil {
+					log.Printf("[config] API refresh failed: %v", err)
+				}
+			case <-m.stopAPIRefresh:
+				return
+			}
+		}
+	}()
 }
 
 // RefreshTrustedProxies refreshes trusted proxy lists from URLs

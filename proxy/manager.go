@@ -44,6 +44,12 @@ func NewManager(cfg *Config) *Manager {
 	// Start config file watcher for hot-reload
 	configMgr.StartWatcher(10 * time.Second)
 
+	// Start API refresh if host key is configured (default 15 minutes)
+	if configMgr.GetConfig().Host != nil && configMgr.GetConfig().Host.Key != "" {
+		configMgr.StartAPIRefresh(15 * time.Minute)
+		log.Printf("Started API configuration refresher")
+	}
+
 	// Create middleware chain with config-based middleware
 	middlewareChain := middleware.NewChain()
 
