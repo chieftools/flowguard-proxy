@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -15,6 +16,8 @@ import (
 	"flowguard/api"
 	"flowguard/cache"
 	"flowguard/pusher"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 // Config represents the complete application configuration
@@ -103,6 +106,7 @@ type Manager struct {
 	realtimeClient  *pusher.Client
 	trustedProxyIPs []net.IPNet
 	callbacks       []func(*Config)
+	watcher         *fsnotify.Watcher
 	stopWatcher     chan struct{}
 	stopAPIRefresh  chan struct{}
 	mu              sync.RWMutex
@@ -121,11 +125,18 @@ func NewManager(configPath string, userAgent string, cacheDir string, verbose bo
 		}
 	}
 
+	// Create fsnotify watcher
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("[config] Warning: Failed to create file watcher: %v. Configuration updates will not be automatic.", err)
+	}
+
 	m := &Manager{
 		cache:          c,
 		userAgent:      userAgent,
 		verbose:        verbose,
 		configPath:     configPath,
+		watcher:        watcher,
 		stopWatcher:    make(chan struct{}),
 		stopAPIRefresh: make(chan struct{}),
 		apiClient:      api.NewClient("", userAgent),
@@ -135,6 +146,20 @@ func NewManager(configPath string, userAgent string, cacheDir string, verbose bo
 	// Load initial configuration
 	if err := m.Load(); err != nil {
 		return nil, err
+	}
+
+	// Setup file watcher if available
+	if watcher != nil {
+		// Watch the directory containing the config file for changes
+		configDir := filepath.Dir(configPath)
+		err = watcher.Add(configDir)
+		if err != nil {
+			log.Printf("[config] Warning: Failed to watch configuration directory %s: %v", configDir, err)
+			watcher.Close()
+			m.watcher = nil
+		} else if verbose {
+			log.Printf("[config] Watching configuration directory %s for changes", configDir)
+		}
 	}
 
 	return m, nil
@@ -305,21 +330,84 @@ func (m *Manager) RemoveOnChange(callback func(*Config)) {
 	}
 }
 
-// StartWatcher starts watching the configuration file for changes
-func (m *Manager) StartWatcher(interval time.Duration) {
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
+// StartWatcher starts watching the configuration file for changes using fsnotify
+func (m *Manager) StartWatcher() {
+	if m.watcher == nil {
+		// Fall back to polling if fsnotify is not available
+		log.Printf("[config] fsnotify not available, falling back to polling every 10 seconds")
+		go func() {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
 
-		for {
-			select {
-			case <-ticker.C:
-				m.checkAndReload()
-			case <-m.stopWatcher:
+			for {
+				select {
+				case <-ticker.C:
+					m.checkAndReload()
+				case <-m.stopWatcher:
+					return
+				}
+			}
+		}()
+		return
+	}
+
+	go m.watchConfigFile()
+}
+
+// watchConfigFile implements the fsnotify-based file watching with debouncing
+func (m *Manager) watchConfigFile() {
+	if m.watcher == nil {
+		return
+	}
+
+	debounce := time.NewTimer(0)
+	<-debounce.C // Drain the initial timer
+	var pendingReload bool
+
+	configFileName := filepath.Base(m.configPath)
+
+	for {
+		select {
+		case event, ok := <-m.watcher.Events:
+			if !ok {
 				return
 			}
+
+			// Check if event is for our config file
+			eventFileName := filepath.Base(event.Name)
+			if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename) != 0 && eventFileName == configFileName {
+				// Ignore temporary files
+				if strings.HasPrefix(eventFileName, ".") || strings.HasSuffix(eventFileName, "~") || strings.HasSuffix(eventFileName, ".tmp") {
+					continue
+				}
+
+				if m.verbose {
+					log.Printf("[config] Detected change in configuration file: %s (%v)", configFileName, event.Op)
+				}
+
+				// Use debouncing to avoid multiple reloads for rapid changes
+				if !pendingReload {
+					pendingReload = true
+					debounce.Reset(100 * time.Millisecond)
+				}
+			}
+
+		case err, ok := <-m.watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Printf("[config] File watcher error: %v", err)
+
+		case <-debounce.C:
+			if pendingReload {
+				pendingReload = false
+				m.checkAndReload()
+			}
+
+		case <-m.stopWatcher:
+			return
 		}
-	}()
+	}
 }
 
 // checkAndReload checks if the config file has changed and reloads if necessary
@@ -403,6 +491,11 @@ func (m *Manager) shouldReloadConfig() (bool, string) {
 func (m *Manager) Stop() {
 	close(m.stopAPIRefresh)
 	close(m.stopWatcher)
+
+	// Close fsnotify watcher
+	if m.watcher != nil {
+		m.watcher.Close()
+	}
 
 	// Disconnect Realtime client
 	m.mu.Lock()

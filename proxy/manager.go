@@ -42,7 +42,7 @@ func NewManager(cfg *Config) *Manager {
 	}
 
 	// Start config file watcher for hot-reload
-	configMgr.StartWatcher(10 * time.Second)
+	configMgr.StartWatcher()
 
 	// Start API refresh if host key is configured (default 15 minutes)
 	if configMgr.GetConfig().Host != nil && configMgr.GetConfig().Host.Key != "" {
