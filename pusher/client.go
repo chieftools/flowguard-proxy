@@ -26,7 +26,7 @@ type Config struct {
 // Message represents a Pusher protocol message
 type Message struct {
 	Event   string          `json:"event"`
-	Data    json.RawMessage `json:"data,omitempty"`
+	Data    json.RawMessage `json:"data"`
 	Channel string          `json:"channel,omitempty"`
 }
 
@@ -306,7 +306,7 @@ func (c *Client) handlePusherMessage(msg Message) {
 
 	case "pusher:ping":
 		// Respond to ping with pong
-		c.sendPong()
+		c.sendMessage(Message{Event: "pusher:pong"})
 
 	case "pusher:pong":
 		// Received pong response, nothing to do
@@ -358,7 +358,7 @@ func (c *Client) startPingTicker(activityTimeout int) {
 		for {
 			select {
 			case <-c.pingTicker.C:
-				c.sendPing()
+				c.sendMessage(Message{Event: "pusher:ping"})
 			case <-c.stopChan:
 				return
 			}
@@ -366,28 +366,23 @@ func (c *Client) startPingTicker(activityTimeout int) {
 	}()
 }
 
-// sendPing sends a ping message to the server
-func (c *Client) sendPing() {
+func (c *Client) sendMessage(msg Message) error {
 	c.mu.RLock()
 	conn := c.conn
 	c.mu.RUnlock()
 
 	if conn != nil {
-		msg := Message{Event: "pusher:ping"}
-		conn.WriteJSON(msg)
+		if msg.Data == nil {
+			msg.Data = json.RawMessage(`{}`)
+		}
+		encoded, err := json.Marshal(msg)
+		if err != nil {
+			log.Printf("[realtime] Failed to encode ping message: %v", err)
+		}
+		conn.WriteMessage(1, encoded)
 	}
-}
 
-// sendPong sends a pong message to the server
-func (c *Client) sendPong() {
-	c.mu.RLock()
-	conn := c.conn
-	c.mu.RUnlock()
-
-	if conn != nil {
-		msg := Message{Event: "pusher:pong"}
-		conn.WriteJSON(msg)
-	}
+	return nil
 }
 
 // subscribeToChannel subscribes to the configured channel
@@ -432,7 +427,7 @@ func (c *Client) subscribeToChannel() error {
 		Data:  dataBytes,
 	}
 
-	if err := conn.WriteJSON(msg); err != nil {
+	if err := c.sendMessage(msg); err != nil {
 		return fmt.Errorf("failed to send subscribe message: %w", err)
 	}
 
