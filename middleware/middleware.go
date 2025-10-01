@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"bufio"
+	"net"
 	"net/http"
 )
 
@@ -73,15 +75,6 @@ type ResponseWriterWrapper struct {
 	ContentType string
 }
 
-func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
-	w.StatusCode = statusCode
-	// Capture content type if set
-	if ct := w.Header().Get("Content-Type"); ct != "" {
-		w.ContentType = ct
-	}
-	w.ResponseWriter.WriteHeader(statusCode)
-}
-
 func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 	// Capture content type if not already captured and WriteHeader wasn't called
 	if w.ContentType == "" {
@@ -95,4 +88,22 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 		w.BodySize += int64(n)
 	}
 	return n, err
+}
+
+func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
+	w.StatusCode = statusCode
+	// Capture content type if set
+	if ct := w.Header().Get("Content-Type"); ct != "" {
+		w.ContentType = ct
+	}
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+// Hijack implements http.Hijacker interface to support WebSocket upgrades
+// This method delegates to the underlying ResponseWriter if it supports hijacking
+func (w *ResponseWriterWrapper) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hijacker, ok := w.ResponseWriter.(http.Hijacker); ok {
+		return hijacker.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
 }
