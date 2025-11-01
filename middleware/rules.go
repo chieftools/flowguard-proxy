@@ -250,6 +250,30 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 			return false
 		}
 		value = fmt.Sprintf("%d", clientASN)
+	case "as-name":
+		clientASNInfo := GetClientASN(r)
+		if clientASNInfo == nil {
+			return false
+		}
+		value = clientASNInfo.ASName
+	case "as-domain":
+		clientASNInfo := GetClientASN(r)
+		if clientASNInfo == nil {
+			return false
+		}
+		value = clientASNInfo.ASDomain
+	case "country":
+		clientASNInfo := GetClientASN(r)
+		if clientASNInfo == nil {
+			return false
+		}
+		value = clientASNInfo.CountryCode
+	case "continent":
+		clientASNInfo := GetClientASN(r)
+		if clientASNInfo == nil {
+			return false
+		}
+		value = clientASNInfo.ContinentCode
 	case "ipset":
 		return rm.matchesIPSet(r, match)
 	default:

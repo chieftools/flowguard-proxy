@@ -159,6 +159,10 @@
                         "user-agent",
                         "ip",
                         "asn",
+                        "as-name",
+                        "as-domain",
+                        "country",
+                        "continent",
                         "ipset"
                     ],
                     "description": "The type of value to match against"
