@@ -95,6 +95,7 @@ func main() {
 
 	// Apply remaining CLI flags
 	cfg.Verbose = *verbose
+	cfg.Version = Version
 	cfg.HTTPPort = *httpPort
 	cfg.HTTPSPort = *httpsPort
 	cfg.BindAddrs = parseBindAddrsList(*bindAddrs)

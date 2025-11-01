@@ -14,6 +14,7 @@ import (
 
 type Config struct {
 	Verbose    bool
+	Version    string
 	CertPath   string
 	CacheDir   string
 	HTTPPort   string
@@ -35,7 +36,7 @@ type Manager struct {
 
 func NewManager(cfg *Config) *Manager {
 	// Create configuration manager
-	configMgr, err := config.NewManager(cfg.ConfigFile, cfg.UserAgent, cfg.CacheDir, cfg.Verbose)
+	configMgr, err := config.NewManager(cfg.ConfigFile, cfg.UserAgent, cfg.Version, cfg.CacheDir, cfg.Verbose)
 	if err != nil {
 		log.Printf("Failed to load configuration from %s: %v", cfg.ConfigFile, err)
 		os.Exit(1)

@@ -97,6 +97,7 @@ type MatchCondition struct {
 type Manager struct {
 	configPath      string
 	userAgent       string
+	version         string
 	verbose         bool
 	config          *Config
 	cache           *cache.Cache
@@ -113,7 +114,7 @@ type Manager struct {
 }
 
 // NewManager creates a new configuration manager
-func NewManager(configPath string, userAgent string, cacheDir string, verbose bool) (*Manager, error) {
+func NewManager(configPath string, userAgent string, version string, cacheDir string, verbose bool) (*Manager, error) {
 	// Create cache if cache directory is provided
 	var c *cache.Cache
 	if cacheDir != "" {
@@ -133,10 +134,11 @@ func NewManager(configPath string, userAgent string, cacheDir string, verbose bo
 
 	m := &Manager{
 		cache:          c,
-		userAgent:      userAgent,
+		version:        version,
 		verbose:        verbose,
-		configPath:     configPath,
 		watcher:        watcher,
+		userAgent:      userAgent,
+		configPath:     configPath,
 		stopWatcher:    make(chan struct{}),
 		stopAPIRefresh: make(chan struct{}),
 		apiClient:      api.NewClient("", userAgent),
@@ -285,6 +287,13 @@ func (m *Manager) GetRefreshInterval() time.Duration {
 	}
 
 	return time.Duration(m.config.TrustedProxies.RefreshIntervalSeconds) * time.Second
+}
+
+// GetVersion returns the application version
+func (m *Manager) GetVersion() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.version
 }
 
 // IsTrustedProxy checks if an IP is from a trusted proxy

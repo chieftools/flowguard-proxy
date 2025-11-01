@@ -56,9 +56,10 @@ type RequestLogEntryTLSInfo struct {
 }
 
 type RequestLogEntryHostInfo struct {
-	ID   string `json:"id,omitempty"`
-	Name string `json:"name"`
-	Team string `json:"team,omitempty"`
+	ID      string `json:"id,omitempty"`
+	Name    string `json:"name"`
+	Team    string `json:"team,omitempty"`
+	Version string `json:"version,omitempty"`
 }
 
 type RequestLogEntryRuleInfo struct {
@@ -120,6 +121,7 @@ type LoggingMiddleware struct {
 	configMgr          *config.Manager
 	logFile            *os.File
 	enabled            bool
+	version            string
 	config             *config.LoggingConfig
 	hostInfo           *RequestLogEntryHostInfo
 	axiomClient        *axiom.Client
@@ -133,6 +135,7 @@ type LoggingMiddleware struct {
 func NewLoggingMiddleware(configMgr *config.Manager) *LoggingMiddleware {
 	m := &LoggingMiddleware{
 		configMgr: configMgr,
+		version:   configMgr.GetVersion(), // Store version once at creation
 	}
 
 	m.onConfigChange(configMgr.GetConfig())
@@ -217,9 +220,10 @@ func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
 
 	lm.enabled = loggingCfg.FilePath != "" || (loggingCfg.AxiomDataset != "" && loggingCfg.AxiomToken != "")
 	lm.hostInfo = &RequestLogEntryHostInfo{
-		ID:   cfg.Host.ID,
-		Name: cfg.Host.Name,
-		Team: cfg.Host.Team,
+		ID:      cfg.Host.ID,
+		Name:    cfg.Host.Name,
+		Team:    cfg.Host.Team,
+		Version: lm.version,
 	}
 
 	err := lm.updateFileOutput(loggingCfg)
