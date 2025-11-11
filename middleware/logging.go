@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -82,10 +83,9 @@ type RequestLogEntryIPASInfo struct {
 }
 
 type RequestLogEntryRequestInfo struct {
-	Method      string `json:"method"`
-	Referrer    string `json:"referrer,omitempty"`
-	UserAgent   string `json:"user_agent"`
-	HTTPVersion string `json:"http_version"`
+	Method      string            `json:"method"`
+	Headers     map[string]string `json:"headers,omitempty"`
+	HTTPVersion string            `json:"http_version"`
 
 	TLS  *RequestLogEntryTLSInfo       `json:"tls,omitempty"`
 	URL  RequestLogEntryRequestURLInfo `json:"url"`
@@ -93,15 +93,15 @@ type RequestLogEntryRequestInfo struct {
 }
 
 type RequestLogEntryResponseInfo struct {
-	Status int   `json:"status"`
-	TimeMS int64 `json:"time_ms,omitempty"`
+	Status  int               `json:"status"`
+	TimeMS  int64             `json:"time_ms,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 
 	Body *RequestLogEntryBodyInfo `json:"body,omitempty"`
 }
 
 type RequestLogEntryBodyInfo struct {
-	Size        int64  `json:"body_size,omitempty"`
-	ContentType string `json:"content_type,omitempty"`
+	Size int64 `json:"body_size,omitempty"`
 }
 
 type RequestLogEntryRequestURLInfo struct {
@@ -621,11 +621,17 @@ func getClientInfo(r *http.Request) RequestLogEntryIPInfo {
 
 func getRequestInfo(r *http.Request) RequestLogEntryRequestInfo {
 	var bodyInfo *RequestLogEntryBodyInfo = nil
-	if r.Header.Get("Content-Type") != "" || r.ContentLength > 0 {
+	if r.ContentLength > 0 {
 		bodyInfo = &RequestLogEntryBodyInfo{
-			Size:        r.ContentLength,
-			ContentType: r.Header.Get("Content-Type"),
+			Size: r.ContentLength,
 		}
+	}
+
+	headers := simplifyHeaders(r.Header)
+
+	// Ensure User-Agent header is always present
+	if _, ok := headers["user-agent"]; !ok {
+		headers["user-agent"] = ""
 	}
 
 	return RequestLogEntryRequestInfo{
@@ -634,15 +640,15 @@ func getRequestInfo(r *http.Request) RequestLogEntryRequestInfo {
 		Body: bodyInfo,
 
 		Method:      r.Method,
-		Referrer:    r.Header.Get("Referer"),
-		UserAgent:   r.Header.Get("User-Agent"),
+		Headers:     headers,
 		HTTPVersion: r.Proto,
 	}
 }
 
 func getResponseInfo(r *http.Request, wrapper *ResponseWriterWrapper) RequestLogEntryResponseInfo {
 	responseInfo := RequestLogEntryResponseInfo{
-		Status: wrapper.StatusCode,
+		Status:  wrapper.StatusCode,
+		Headers: simplifyHeaders(wrapper.Headers),
 	}
 
 	startTime := GetStartTime(r)
@@ -653,10 +659,9 @@ func getResponseInfo(r *http.Request, wrapper *ResponseWriterWrapper) RequestLog
 		}
 	}
 
-	if wrapper.BodySize > 0 || wrapper.ContentType != "" {
+	if wrapper.BodySize > 0 {
 		responseInfo.Body = &RequestLogEntryBodyInfo{
-			Size:        wrapper.BodySize,
-			ContentType: wrapper.ContentType,
+			Size: wrapper.BodySize,
 		}
 	}
 
@@ -706,4 +711,14 @@ func getCloudflareInfo(r *http.Request) *RequestLogEntryCloudflareInfo {
 	return &RequestLogEntryCloudflareInfo{
 		RayID: r.Header.Get("CF-Ray"),
 	}
+}
+
+func simplifyHeaders(headers map[string][]string) map[string]string {
+	simple := make(map[string]string, len(headers))
+
+	for key, values := range headers {
+		simple[strings.ToLower(key)] = strings.Join(values, ", ")
+	}
+
+	return simple
 }

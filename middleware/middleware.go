@@ -70,17 +70,18 @@ func (mc *Chain) Stop() {
 type ResponseWriterWrapper struct {
 	http.ResponseWriter
 
-	BodySize    int64
-	StatusCode  int
-	ContentType string
+	GotHeaders bool
+
+	Headers    map[string][]string
+	BodySize   int64
+	StatusCode int
 }
 
 func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
-	// Capture content type if not already captured and WriteHeader wasn't called
-	if w.ContentType == "" {
-		if ct := w.Header().Get("Content-Type"); ct != "" {
-			w.ContentType = ct
-		}
+	// Capture headers on first write
+	if !w.GotHeaders {
+		w.Headers = w.Header()
+		w.GotHeaders = true
 	}
 
 	n, err := w.ResponseWriter.Write(data)
@@ -91,11 +92,9 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 }
 
 func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
+	w.Headers = w.Header()
+	w.GotHeaders = true
 	w.StatusCode = statusCode
-	// Capture content type if set
-	if ct := w.Header().Get("Content-Type"); ct != "" {
-		w.ContentType = ct
-	}
 	w.ResponseWriter.WriteHeader(statusCode)
 }
 
