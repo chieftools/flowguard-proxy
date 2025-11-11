@@ -187,9 +187,13 @@
                     ],
                     "description": "The matching operation to perform"
                 },
+                "key": {
+                    "type": "string",
+                    "description": "The header name to match against. Required for 'header' type matches."
+                },
                 "value": {
                     "type": "string",
-                    "description": "The value to match against. Required for most operations except 'in'/'not-in' (use 'values' instead). For 'header' type, this is the header name."
+                    "description": "The value to match against. Required for most operations except 'in'/'not-in' (use 'values' instead) and 'exists'/'missing'."
                 },
                 "values": {
                     "type": "array",
@@ -219,7 +223,23 @@
                 "type",
                 "match"
             ],
-            "additionalProperties": false
+            "additionalProperties": false,
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {
+                            "type": {
+                                "const": "header"
+                            }
+                        }
+                    },
+                    "then": {
+                        "required": [
+                            "key"
+                        ]
+                    }
+                }
+            ]
         },
         "action": {
             "type": "object",

@@ -222,8 +222,13 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 			value = normalization.NormalizePath(r.URL.Path)
 		}
 	case "header":
-		// For header type, the value field contains the header name
-		value = r.Header.Get(match.Value)
+		// For header type, the Key field contains the header name
+		headerName := match.Key
+		if headerName == "" {
+			log.Printf("[middleware:rules] Header match missing 'key' field for header name")
+			return false
+		}
+		value = r.Header.Get(headerName)
 		// For header existence checks
 		if match.Match == "exists" {
 			return value != ""
@@ -627,9 +632,12 @@ func (kg *RateLimitKeyGenerator) extractKeyParts(conditions *config.RuleConditio
 		case "path":
 			*keyParts = append(*keyParts, "path:"+r.URL.Path)
 		case "header":
-			headerValue := r.Header.Get(match.Value)
-			if headerValue != "" {
-				*keyParts = append(*keyParts, "header:"+match.Value+":"+headerValue)
+			headerName := match.Key
+			if headerName != "" {
+				headerValue := r.Header.Get(headerName)
+				if headerValue != "" {
+					*keyParts = append(*keyParts, "header:"+headerName+":"+headerValue)
+				}
 			}
 		case "asn":
 			clientASNInfo := GetClientASN(r)
