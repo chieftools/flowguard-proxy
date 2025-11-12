@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -735,6 +736,8 @@ func simplifyHeaders(headers map[string][]string, whitelist []string) (map[strin
 			simple[lowerKey] = strings.Join(values, ", ")
 		}
 	}
+
+	sort.Strings(names)
 
 	return simple, names
 }
