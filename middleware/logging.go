@@ -85,6 +85,7 @@ type RequestLogEntryIPASInfo struct {
 type RequestLogEntryRequestInfo struct {
 	Method      string            `json:"method"`
 	Headers     map[string]string `json:"headers,omitempty"`
+	HeaderNames []string          `json:"header_names,omitempty"`
 	HTTPVersion string            `json:"http_version"`
 
 	TLS  *RequestLogEntryTLSInfo       `json:"tls,omitempty"`
@@ -93,9 +94,10 @@ type RequestLogEntryRequestInfo struct {
 }
 
 type RequestLogEntryResponseInfo struct {
-	Status  int               `json:"status"`
-	TimeMS  int64             `json:"time_ms,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
+	Status      int               `json:"status"`
+	TimeMS      int64             `json:"time_ms,omitempty"`
+	Headers     map[string]string `json:"headers,omitempty"`
+	HeaderNames []string          `json:"header_names,omitempty"`
 
 	Body *RequestLogEntryBodyInfo `json:"body,omitempty"`
 }
@@ -124,6 +126,7 @@ type LoggingMiddleware struct {
 	version            string
 	config             *config.LoggingConfig
 	hostInfo           *RequestLogEntryHostInfo
+	headerWhitelist    []string
 	axiomClient        *axiom.Client
 	axiomChannel       chan axiom.Event
 	axiomCancelFunc    context.CancelFunc
@@ -162,8 +165,8 @@ func (lm *LoggingMiddleware) logRequest(r *http.Request, wrapper *ResponseWriter
 		Rule:       getRuleInfo(r),
 		Proxy:      getProxyInfo(r),
 		Client:     getClientInfo(r),
-		Request:    getRequestInfo(r),
-		Response:   getResponseInfo(r, wrapper),
+		Request:    getRequestInfo(r, lm.headerWhitelist),
+		Response:   getResponseInfo(r, wrapper, lm.headerWhitelist),
 		Cloudflare: getCloudflareInfo(r),
 	}
 
@@ -225,6 +228,7 @@ func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
 		Team:    cfg.Host.Team,
 		Version: lm.version,
 	}
+	lm.headerWhitelist = loggingCfg.HeaderWhitelist
 
 	err := lm.updateFileOutput(loggingCfg)
 	if err != nil {
@@ -619,7 +623,7 @@ func getClientInfo(r *http.Request) RequestLogEntryIPInfo {
 	return clientInfo
 }
 
-func getRequestInfo(r *http.Request) RequestLogEntryRequestInfo {
+func getRequestInfo(r *http.Request, whitelist []string) RequestLogEntryRequestInfo {
 	var bodyInfo *RequestLogEntryBodyInfo = nil
 	if r.ContentLength > 0 {
 		bodyInfo = &RequestLogEntryBodyInfo{
@@ -627,9 +631,9 @@ func getRequestInfo(r *http.Request) RequestLogEntryRequestInfo {
 		}
 	}
 
-	headers := simplifyHeaders(r.Header)
+	headers, headerNames := simplifyHeaders(r.Header, whitelist)
 
-	// Ensure User-Agent header is always present
+	// Ensure User-Agent header is always present in the filtered headers
 	if _, ok := headers["user-agent"]; !ok {
 		headers["user-agent"] = ""
 	}
@@ -641,14 +645,18 @@ func getRequestInfo(r *http.Request) RequestLogEntryRequestInfo {
 
 		Method:      r.Method,
 		Headers:     headers,
+		HeaderNames: headerNames,
 		HTTPVersion: r.Proto,
 	}
 }
 
-func getResponseInfo(r *http.Request, wrapper *ResponseWriterWrapper) RequestLogEntryResponseInfo {
+func getResponseInfo(r *http.Request, wrapper *ResponseWriterWrapper, whitelist []string) RequestLogEntryResponseInfo {
+	headers, headerNames := simplifyHeaders(wrapper.Headers, whitelist)
+
 	responseInfo := RequestLogEntryResponseInfo{
-		Status:  wrapper.StatusCode,
-		Headers: simplifyHeaders(wrapper.Headers),
+		Status:      wrapper.StatusCode,
+		Headers:     headers,
+		HeaderNames: headerNames,
 	}
 
 	startTime := GetStartTime(r)
@@ -713,12 +721,44 @@ func getCloudflareInfo(r *http.Request) *RequestLogEntryCloudflareInfo {
 	}
 }
 
-func simplifyHeaders(headers map[string][]string) map[string]string {
-	simple := make(map[string]string, len(headers))
+// simplifyHeaders converts headers to a filtered map and list of all header names
+// Values are only included for whitelisted headers
+func simplifyHeaders(headers map[string][]string, whitelist []string) (map[string]string, []string) {
+	simple := make(map[string]string)
+	names := make([]string, 0, len(headers))
 
 	for key, values := range headers {
-		simple[strings.ToLower(key)] = strings.Join(values, ", ")
+		lowerKey := strings.ToLower(key)
+		names = append(names, lowerKey)
+
+		if isHeaderWhitelisted(key, whitelist) {
+			simple[lowerKey] = strings.Join(values, ", ")
+		}
 	}
 
-	return simple
+	return simple, names
+}
+
+// isHeaderWhitelisted checks if a header name matches the whitelist
+// Supports both exact matches and prefix matches (entries ending with "-")
+// Both the header name and the whitelist patterns are expected to be in lower case
+func isHeaderWhitelisted(headerName string, whitelist []string) bool {
+	// Always include User-Agent header
+	if headerName == "user-agent" {
+		return true
+	}
+
+	if len(whitelist) == 0 {
+		return false
+	}
+
+	for _, pattern := range whitelist {
+		if headerName == pattern {
+			return true // exact match
+		} else if strings.HasSuffix(pattern, "-") && strings.HasPrefix(headerName, pattern) {
+			return true // prefix match
+		}
+	}
+
+	return false
 }

@@ -372,6 +372,14 @@
                 "axiom_dataset": {
                     "type": "string",
                     "description": "The Axiom dataset to send logs to, leave empty to disable Axiom logging"
+                },
+                "header_whitelist": {
+                    "type": "array",
+                    "description": "List of header names (or prefixes ending with '-') to log values for. If empty, no header values are logged. All header names are always logged regardless of whitelist. The User-Agent header is always logged regardless of this whitelist.",
+                    "items": {
+                        "type": "string",
+                        "examples": ["content-type", "user-agent", "sec-ch-", "cf-"]
+                    }
                 }
             },
             "additionalProperties": false
