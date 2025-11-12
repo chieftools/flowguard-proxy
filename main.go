@@ -57,8 +57,9 @@ func main() {
 		noRedirect = flag.Bool("no-redirect", false, "Skip iptables port redirection setup")
 
 		// Certificate configuration
-		certPath  = flag.String("cert-path", "/opt/psa/var/certificates", "Path to combined certificate files")
-		testCerts = flag.Bool("test-certs", false, "Test loading all certificates and exit")
+		certPath    = flag.String("cert-path", "", "Path to combined certificate files")
+		nginxConfig = flag.String("nginx-config", "", "Path to the Nginx configuration file")
+		testCerts   = flag.Bool("test-certs", false, "Test loading all certificates and exit")
 
 		// Behavior configuration
 		verbose    = flag.Bool("verbose", false, "Enable more verbose output")
@@ -80,15 +81,17 @@ func main() {
 		cfg.CacheDir = *cacheDir
 	}
 
-	if *certPath != "/opt/psa/var/certificates" {
+	// Apply CLI certificate paths if provided (needed for --test-certs)
+	if *certPath != "" {
 		cfg.CertPath = *certPath
-	} else if cfg.CertPath == "" {
-		cfg.CertPath = *certPath
+	}
+	if *nginxConfig != "" {
+		cfg.NginxConfigPath = *nginxConfig
 	}
 
 	// Certificate test mode
 	if *testCerts {
-		cm := certmanager.New(cfg.CertPath, "")
+		cm := certmanager.New(cfg.CertPath, cfg.NginxConfigPath, "", *verbose)
 		cm.TestCertificates()
 		os.Exit(0)
 	}
@@ -96,12 +99,14 @@ func main() {
 	// Apply remaining CLI flags
 	cfg.Verbose = *verbose
 	cfg.Version = Version
+	cfg.CertPath = *certPath
 	cfg.HTTPPort = *httpPort
 	cfg.HTTPSPort = *httpsPort
 	cfg.BindAddrs = parseBindAddrsList(*bindAddrs)
 	cfg.UserAgent = fmt.Sprintf("FlowGuard/%s", Version)
 	cfg.NoRedirect = *noRedirect
 	cfg.ConfigFile = *configFile
+	cfg.NginxConfigPath = *nginxConfig
 
 	proxyManager := proxy.NewManager(cfg)
 
@@ -141,8 +146,9 @@ func parseBindAddrsList(list string) []string {
 // loadConfigDefaults loads configuration defaults from config file
 func loadConfigDefaults(configFile string) (*proxy.Config, error) {
 	type ConfigDefaults struct {
-		CacheDir string `json:"cache_dir,omitempty"`
-		CertPath string `json:"cert_path,omitempty"`
+		CacheDir        string `json:"cache_dir,omitempty"`
+		CertPath        string `json:"cert_path,omitempty"`
+		NginxConfigPath string `json:"nginx_config_path,omitempty"`
 	}
 
 	data, err := os.ReadFile(configFile)
@@ -156,8 +162,9 @@ func loadConfigDefaults(configFile string) (*proxy.Config, error) {
 	}
 
 	return &proxy.Config{
-		CacheDir: defaults.CacheDir,
-		CertPath: defaults.CertPath,
+		CacheDir:        defaults.CacheDir,
+		CertPath:        defaults.CertPath,
+		NginxConfigPath: defaults.NginxConfigPath,
 	}, nil
 }
 

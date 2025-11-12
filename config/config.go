@@ -29,9 +29,10 @@ type Config struct {
 	Logging        *LoggingConfig         `json:"logging"`
 	IPDatabase     *IPDatabaseConfig      `json:"ip_database"`
 	TrustedProxies *TrustedProxiesConfig  `json:"trusted_proxies"`
-	Realtime       *pusher.Config         `json:"realtime,omitempty"`
-	CacheDir       string                 `json:"cache_dir,omitempty"`
-	CertPath       string                 `json:"cert_path,omitempty"`
+	Realtime        *pusher.Config         `json:"realtime,omitempty"`
+	CacheDir        string                 `json:"cache_dir,omitempty"`
+	CertPath        string                 `json:"cert_path,omitempty"`
+	NginxConfigPath string                 `json:"nginx_config_path,omitempty"`
 }
 
 type HostConfig struct {

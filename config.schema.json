@@ -55,7 +55,11 @@
         },
         "cert_path": {
             "type": "string",
-            "description": "Path to SSL certificate files directory"
+            "description": "Path to directory containing combined SSL certificate+key files. Optional - can be used alone or with nginx_config_path."
+        },
+        "nginx_config_path": {
+            "type": "string",
+            "description": "Path to NGINX configuration file to parse for SSL certificates. Optional - can be used alone or with cert_path."
         }
     },
     "additionalProperties": false,

@@ -13,16 +13,17 @@ import (
 )
 
 type Config struct {
-	Verbose    bool
-	Version    string
-	CertPath   string
-	CacheDir   string
-	HTTPPort   string
-	HTTPSPort  string
-	BindAddrs  []string
-	UserAgent  string
-	NoRedirect bool
-	ConfigFile string
+	Verbose         bool
+	Version         string
+	CertPath        string
+	NginxConfigPath string
+	CacheDir        string
+	HTTPPort        string
+	HTTPSPort       string
+	BindAddrs       []string
+	UserAgent       string
+	NoRedirect      bool
+	ConfigFile      string
 }
 
 type Manager struct {
@@ -74,9 +75,28 @@ func NewManager(cfg *Config) *Manager {
 		cfg.BindAddrs = publicIPs
 	}
 
+	// Get certificate paths from both CLI config and JSON config
+	certPath := cfg.CertPath
+	nginxConfigPath := cfg.NginxConfigPath
+
+	// Also check JSON config for cert/nginx paths (JSON config can override CLI)
+	if jsonCfg := configMgr.GetConfig(); jsonCfg != nil {
+		if jsonCfg.CertPath != "" {
+			certPath = jsonCfg.CertPath
+		}
+		if jsonCfg.NginxConfigPath != "" {
+			nginxConfigPath = jsonCfg.NginxConfigPath
+		}
+	}
+
+	defaultHostname := ""
+	if configMgr.GetConfig().Host != nil {
+		defaultHostname = configMgr.GetConfig().Host.DefaultHostname
+	}
+
 	return &Manager{
 		config:          cfg,
-		certManager:     certmanager.New(cfg.CertPath, configMgr.GetConfig().Host.DefaultHostname),
+		certManager:     certmanager.New(certPath, nginxConfigPath, defaultHostname, cfg.Verbose),
 		configManager:   configMgr,
 		middlewareChain: middlewareChain,
 	}
