@@ -731,7 +731,7 @@ func simplifyHeaders(headers map[string][]string, whitelist []string) (map[strin
 		lowerKey := strings.ToLower(key)
 		names = append(names, lowerKey)
 
-		if isHeaderWhitelisted(key, whitelist) {
+		if isHeaderWhitelisted(lowerKey, whitelist) {
 			simple[lowerKey] = strings.Join(values, ", ")
 		}
 	}
