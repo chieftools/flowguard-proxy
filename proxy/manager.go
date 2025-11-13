@@ -113,11 +113,11 @@ func NewManager(cfg *Config) *Manager {
 		var err error
 		ipListMgr, err = iplist.New(listsConfig, configMgr.GetCache())
 		if err != nil {
-			log.Printf("Failed to initialize IP list manager: %v", err)
+			log.Printf("[ip_list] Failed to initialize IP list manager: %v", err)
 		} else {
 			// Set the IP list manager on the rules middleware
 			rulesMiddleware.SetIPListManager(ipListMgr)
-			log.Printf("Initialized IP list manager with %d list(s)", len(listsConfig))
+			log.Printf("[ip_list] Initialized IP list manager with %d list(s)", len(listsConfig))
 		}
 	}
 

@@ -28,6 +28,8 @@ func main() {
 		Version = "dev"
 	}
 
+	log.Printf("FlowGuard version %s", Version)
+
 	// Check for setup subcommand first
 	if len(os.Args) >= 2 && os.Args[1] == "setup" {
 		if len(os.Args) < 3 {
@@ -60,6 +62,7 @@ func main() {
 		iplistFlag := flag.NewFlagSet("iplist", flag.ExitOnError)
 		configFile := iplistFlag.String("config", "/etc/flowguard/config.json", "Path to the configuration file")
 		cacheDir := iplistFlag.String("cache-dir", "/var/cache/flowguard", "Directory for caching external data")
+		verbose := iplistFlag.Bool("verbose", false, "Enable verbose output")
 
 		// Parse flags from os.Args[2:] to get config/cache-dir if provided
 		// We need to find where the actual command args start
@@ -83,7 +86,7 @@ func main() {
 		// Re-parse non-flag args after flag parsing
 		nonFlagArgs = iplistFlag.Args()
 
-		if err := handleIPListCommand(nonFlagArgs, *configFile, *cacheDir); err != nil {
+		if err := handleIPListCommand(nonFlagArgs, *configFile, *cacheDir, *verbose); err != nil {
 			log.Printf("[ERROR] %v", err)
 			os.Exit(1)
 		}
@@ -246,7 +249,7 @@ func setupHost(hostKey, configFile string) error {
 }
 
 // handleIPListCommand handles the iplist subcommand
-func handleIPListCommand(args []string, configFile, cacheDir string) error {
+func handleIPListCommand(args []string, configFile, cacheDir string, verbose bool) error {
 	// Load configuration to get IP lists
 	data, err := os.ReadFile(configFile)
 	if err != nil {
@@ -292,7 +295,7 @@ func handleIPListCommand(args []string, configFile, cacheDir string) error {
 	listCfg := (*cfg.IPLists)[listName]
 
 	// Create cache instance
-	cacheInstance, err := cache.NewCache(cacheDir, fmt.Sprintf("FlowGuard/%s", Version))
+	cacheInstance, err := cache.NewCache(cacheDir, fmt.Sprintf("FlowGuard/%s", Version), verbose)
 	if err != nil {
 		return fmt.Errorf("failed to create cache: %w", err)
 	}

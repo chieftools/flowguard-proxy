@@ -20,6 +20,7 @@ type Cache struct {
 	userAgent  string
 	apiBase    string
 	apiKey     string
+	verbose    bool
 	httpClient *http.Client
 }
 
@@ -31,7 +32,7 @@ type Entry struct {
 }
 
 // NewCache creates a new cache instance
-func NewCache(cacheDir string, userAgent string) (*Cache, error) {
+func NewCache(cacheDir string, userAgent string, verbose bool) (*Cache, error) {
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create cache directory: %w", err)
 	}
@@ -39,6 +40,7 @@ func NewCache(cacheDir string, userAgent string) (*Cache, error) {
 	return &Cache{
 		cacheDir:  cacheDir,
 		userAgent: userAgent,
+		verbose:   verbose,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -52,11 +54,12 @@ func (c *Cache) SetAPICredentials(apiBase, apiKey string) {
 }
 
 // FetchWithCache fetches data from a URL with caching support
+// Returns (data, wasUpdated, error) where wasUpdated indicates if data changed
 // Optional bearerToken parameter can be provided to add Authorization header
 // If URL starts with configured API base, the API key is automatically applied
-func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...string) ([]byte, error) {
+func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...string) ([]byte, bool, error) {
 	if c == nil {
-		return nil, fmt.Errorf("cache not initialized")
+		return nil, false, fmt.Errorf("cache not initialized")
 	}
 	cacheFile := c.getCacheFilePath(url)
 
@@ -64,7 +67,7 @@ func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...
 	entry, err := c.loadCacheEntry(cacheFile)
 	if err == nil && time.Since(entry.Timestamp) < maxAge {
 		log.Printf("[cache] Using cached data for %s (age: %v)", url, time.Since(entry.Timestamp))
-		return entry.Data, nil
+		return entry.Data, false, nil
 	}
 
 	// Fetch fresh data
@@ -84,9 +87,9 @@ func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...
 		// If fetch fails but we have stale cache, use it
 		if entry != nil {
 			log.Printf("[cache] Fetch failed, using stale cache for %s: %v", url, err)
-			return entry.Data, nil
+			return entry.Data, false, nil
 		}
-		return nil, err
+		return nil, false, err
 	}
 
 	// If server returned 304 Not Modified, update timestamp and use cached data
@@ -95,7 +98,8 @@ func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...
 		if err := c.saveCacheEntry(cacheFile, entry); err != nil {
 			log.Printf("[cache] Failed to update cache timestamp for %s: %v", url, err)
 		}
-		return entry.Data, nil
+		log.Printf("[cache] Not modified (304) for %s - using existing data", url)
+		return entry.Data, false, nil
 	}
 
 	// Save new data to cache
@@ -108,16 +112,18 @@ func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...
 		log.Printf("[cache] Failed to save to cache for %s: %v", url, err)
 	}
 
-	return data, nil
+	log.Printf("[cache] Successfully fetched fresh data for %s", url)
+	return data, true, nil
 }
 
 // FetchFileWithCache fetches a binary file from a URL with efficient caching
+// Returns (path, wasUpdated, error) where wasUpdated indicates if file changed
 // This method stores the file directly on disk without JSON encoding
 // Optional bearerToken parameter can be provided to add Authorization header
 // If URL starts with configured API base, the API key is automatically applied
-func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken ...string) (string, error) {
+func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken ...string) (string, bool, error) {
 	if c == nil {
-		return "", fmt.Errorf("cache not initialized")
+		return "", false, fmt.Errorf("cache not initialized")
 	}
 
 	// Use a different naming scheme for binary files
@@ -138,7 +144,7 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken
 				// Verify file exists
 				if _, err := os.Stat(cacheFile); err == nil {
 					log.Printf("[cache] Using cached file for %s (age: %v)", url, time.Since(meta.Timestamp))
-					return cacheFile, nil
+					return cacheFile, false, nil
 				}
 			}
 		}
@@ -149,7 +155,7 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	if c.userAgent != "" {
@@ -176,11 +182,16 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken
 		// If fetch fails but we have stale cache, use it
 		if _, err := os.Stat(cacheFile); err == nil {
 			log.Printf("[cache] Fetch failed, using stale cache for %s", url)
-			return cacheFile, nil
+			return cacheFile, false, nil
 		}
-		return "", err
+		return "", false, err
 	}
 	defer resp.Body.Close()
+
+	if c.verbose {
+		log.Printf("[cache] HTTP %d for %s (ETag sent: %v, ETag received: %s)",
+			resp.StatusCode, url, meta.ETag != "", resp.Header.Get("ETag"))
+	}
 
 	// Handle 304 Not Modified
 	if resp.StatusCode == http.StatusNotModified {
@@ -189,19 +200,19 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken
 		if metaData, err := json.Marshal(meta); err == nil {
 			os.WriteFile(metaFile, metaData, 0644)
 		}
-		log.Printf("[cache] File not modified for %s", url)
-		return cacheFile, nil
+		log.Printf("[cache] File not modified (304) for %s - using existing file", url)
+		return cacheFile, false, nil
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return "", false, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	// Create temporary file first
 	tempFile := cacheFile + ".tmp"
 	out, err := os.Create(tempFile)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	// Copy data
@@ -209,13 +220,13 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken
 	out.Close()
 	if err != nil {
 		os.Remove(tempFile)
-		return "", err
+		return "", false, err
 	}
 
 	// Move temp file to final location
 	if err := os.Rename(tempFile, cacheFile); err != nil {
 		os.Remove(tempFile)
-		return "", err
+		return "", false, err
 	}
 
 	// Save metadata
@@ -225,8 +236,8 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken
 		os.WriteFile(metaFile, metaData, 0644)
 	}
 
-	log.Printf("[cache] Downloaded and cached file from %s (size: %.2f MB)", url, float64(size)/1024/1024)
-	return cacheFile, nil
+	log.Printf("[cache] Successfully downloaded fresh file from %s (size: %.2f MB)", url, float64(size)/1024/1024)
+	return cacheFile, true, nil
 }
 
 // LoadFromCache loads data from cache without fetching
@@ -324,6 +335,11 @@ func (c *Cache) fetchFromURL(url string, etag string, bearerToken string) ([]byt
 		return nil, "", err
 	}
 	defer resp.Body.Close()
+
+	if c.verbose {
+		log.Printf("[cache] HTTP %d for %s (ETag sent: %v, ETag received: %s)",
+			resp.StatusCode, url, etag != "", resp.Header.Get("ETag"))
+	}
 
 	// Handle 304 Not Modified
 	if resp.StatusCode == http.StatusNotModified {

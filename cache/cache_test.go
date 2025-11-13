@@ -24,30 +24,36 @@ func TestCacheBasics(t *testing.T) {
 	defer ts.Close()
 
 	// Create cache
-	cache, err := NewCache(tempDir, "test-agent")
+	cache, err := NewCache(tempDir, "test-agent", false)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
 
 	// First fetch should hit the server
-	data1, err := cache.FetchWithCache(ts.URL, 1*time.Hour)
+	data1, updated1, err := cache.FetchWithCache(ts.URL, 1*time.Hour)
 	if err != nil {
 		t.Fatalf("First fetch failed: %v", err)
 	}
 	if string(data1) != "Response #1" {
 		t.Errorf("Expected 'Response #1', got '%s'", string(data1))
 	}
+	if !updated1 {
+		t.Errorf("Expected updated=true for first fetch")
+	}
 	if requestCount != 1 {
 		t.Errorf("Expected 1 request, got %d", requestCount)
 	}
 
 	// Second fetch should use cache
-	data2, err := cache.FetchWithCache(ts.URL, 1*time.Hour)
+	data2, updated2, err := cache.FetchWithCache(ts.URL, 1*time.Hour)
 	if err != nil {
 		t.Fatalf("Second fetch failed: %v", err)
 	}
 	if string(data2) != "Response #1" {
 		t.Errorf("Expected cached 'Response #1', got '%s'", string(data2))
+	}
+	if updated2 {
+		t.Errorf("Expected updated=false for cached data")
 	}
 	if requestCount != 1 {
 		t.Errorf("Expected still 1 request (cached), got %d", requestCount)
@@ -55,12 +61,15 @@ func TestCacheBasics(t *testing.T) {
 
 	// Third fetch with expired cache should hit server again
 	time.Sleep(2 * time.Millisecond) // Ensure cache is expired
-	data3, err := cache.FetchWithCache(ts.URL, 1*time.Millisecond)
+	data3, updated3, err := cache.FetchWithCache(ts.URL, 1*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Third fetch failed: %v", err)
 	}
 	if string(data3) != "Response #2" {
 		t.Errorf("Expected 'Response #2', got '%s'", string(data3))
+	}
+	if !updated3 {
+		t.Errorf("Expected updated=true for fresh fetch")
 	}
 	if requestCount != 2 {
 		t.Errorf("Expected 2 requests (cache expired), got %d", requestCount)
@@ -95,18 +104,21 @@ func TestCacheETag(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cache, err := NewCache(tempDir, "test-agent")
+	cache, err := NewCache(tempDir, "test-agent", false)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
 
 	// First fetch
-	data1, err := cache.FetchWithCache(ts.URL, 1*time.Hour)
+	data1, updated1, err := cache.FetchWithCache(ts.URL, 1*time.Hour)
 	if err != nil {
 		t.Fatalf("First fetch failed: %v", err)
 	}
 	if string(data1) != "Stable content" {
 		t.Errorf("Expected 'Stable content', got '%s'", string(data1))
+	}
+	if !updated1 {
+		t.Errorf("Expected updated=true for first fetch")
 	}
 	if requestCount != 1 {
 		t.Errorf("Expected 1 request, got %d", requestCount)
@@ -115,12 +127,15 @@ func TestCacheETag(t *testing.T) {
 	// Force re-fetch (with very short max age)
 	// Server should return 304 Not Modified
 	time.Sleep(2 * time.Millisecond) // Ensure cache is expired
-	data2, err := cache.FetchWithCache(ts.URL, 1*time.Millisecond)
+	data2, updated2, err := cache.FetchWithCache(ts.URL, 1*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Second fetch failed: %v", err)
 	}
 	if string(data2) != "Stable content" {
 		t.Errorf("Expected cached 'Stable content', got '%s'", string(data2))
+	}
+	if updated2 {
+		t.Errorf("Expected updated=false for 304 Not Modified response")
 	}
 	if requestCount != 2 {
 		t.Errorf("Expected 2 requests (but 304 response), got %d", requestCount)
@@ -135,13 +150,13 @@ func TestCacheClearOperations(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cache, err := NewCache(tempDir, "test-agent")
+	cache, err := NewCache(tempDir, "test-agent", false)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
 
 	// Fetch and cache data
-	_, err = cache.FetchWithCache(ts.URL, 1*time.Hour)
+	_, _, err = cache.FetchWithCache(ts.URL, 1*time.Hour)
 	if err != nil {
 		t.Fatalf("Fetch failed: %v", err)
 	}
@@ -167,7 +182,7 @@ func TestCacheClearOperations(t *testing.T) {
 	// Cache multiple entries
 	for i := 0; i < 3; i++ {
 		url := fmt.Sprintf("%s?id=%d", ts.URL, i)
-		_, err = cache.FetchWithCache(url, 1*time.Hour)
+		_, _, err = cache.FetchWithCache(url, 1*time.Hour)
 		if err != nil {
 			t.Fatalf("Fetch %d failed: %v", i, err)
 		}
@@ -213,28 +228,34 @@ func TestCacheFailover(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	cache, err := NewCache(tempDir, "test-agent")
+	cache, err := NewCache(tempDir, "test-agent", false)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
 
 	// First fetch should succeed
-	data1, err := cache.FetchWithCache(ts.URL, 1*time.Hour)
+	data1, updated1, err := cache.FetchWithCache(ts.URL, 1*time.Hour)
 	if err != nil {
 		t.Fatalf("First fetch failed: %v", err)
 	}
 	if string(data1) != "First response" {
 		t.Errorf("Expected 'First response', got '%s'", string(data1))
 	}
+	if !updated1 {
+		t.Errorf("Expected updated=true for first fetch")
+	}
 
 	// Second fetch with expired cache should try server, fail, but return stale cache
 	time.Sleep(2 * time.Millisecond) // Ensure cache is expired
-	data2, err := cache.FetchWithCache(ts.URL, 1*time.Millisecond)
+	data2, updated2, err := cache.FetchWithCache(ts.URL, 1*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Second fetch failed: %v", err)
 	}
 	if string(data2) != "First response" {
 		t.Errorf("Expected stale cached 'First response', got '%s'", string(data2))
+	}
+	if updated2 {
+		t.Errorf("Expected updated=false for stale cache fallback")
 	}
 	if requestCount != 2 {
 		t.Errorf("Expected 2 requests, got %d", requestCount)
@@ -264,7 +285,7 @@ func TestAPIKeyAutomatic(t *testing.T) {
 	}))
 	defer publicServer.Close()
 
-	cache, err := NewCache(tempDir, "test-agent")
+	cache, err := NewCache(tempDir, "test-agent", false)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
@@ -274,7 +295,7 @@ func TestAPIKeyAutomatic(t *testing.T) {
 
 	// Test 1: URL starting with API base should get automatic auth
 	receivedAuthHeader = ""
-	_, err = cache.FetchWithCache(apiServer.URL+"/database.mmdb", 1*time.Hour)
+	_, _, err = cache.FetchWithCache(apiServer.URL+"/database.mmdb", 1*time.Hour)
 	if err != nil {
 		t.Fatalf("API fetch failed: %v", err)
 	}
@@ -287,7 +308,7 @@ func TestAPIKeyAutomatic(t *testing.T) {
 
 	// Test 2: Public URL should NOT get auth header
 	publicAuthHeader = ""
-	_, err = cache.FetchWithCache(publicServer.URL+"/public.txt", 1*time.Hour)
+	_, _, err = cache.FetchWithCache(publicServer.URL+"/public.txt", 1*time.Hour)
 	if err != nil {
 		t.Fatalf("Public fetch failed: %v", err)
 	}
@@ -301,7 +322,7 @@ func TestAPIKeyAutomatic(t *testing.T) {
 	// Test 3: Explicit bearer token should override automatic
 	receivedAuthHeader = ""
 	apiRequestCount = 0
-	_, err = cache.FetchWithCache(apiServer.URL+"/override", 1*time.Hour, "explicit-token")
+	_, _, err = cache.FetchWithCache(apiServer.URL+"/override", 1*time.Hour, "explicit-token")
 	if err != nil {
 		t.Fatalf("API fetch with explicit token failed: %v", err)
 	}
@@ -321,7 +342,7 @@ func TestAPIKeyAutomaticFileCache(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	cache, err := NewCache(tempDir, "test-agent")
+	cache, err := NewCache(tempDir, "test-agent", false)
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
@@ -331,7 +352,7 @@ func TestAPIKeyAutomaticFileCache(t *testing.T) {
 
 	// Test: URL starting with API base should get automatic auth
 	receivedAuthHeader = ""
-	_, err = cache.FetchFileWithCache(apiServer.URL+"/database.bin", 1*time.Hour)
+	_, _, err = cache.FetchFileWithCache(apiServer.URL+"/database.bin", 1*time.Hour)
 	if err != nil {
 		t.Fatalf("API file fetch failed: %v", err)
 	}

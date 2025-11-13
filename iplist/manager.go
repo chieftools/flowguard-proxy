@@ -27,6 +27,7 @@ type IPList struct {
 	name   string
 	config ListConfig
 	trie   *iptrie.Trie
+	loaded bool // tracks if list has been loaded at least once
 	mu     sync.RWMutex
 }
 
@@ -90,6 +91,7 @@ func (l *IPList) load(cacheInstance *cache.Cache) error {
 	var data []byte
 	var err error
 	var source string
+	var wasUpdated bool
 
 	// Fetch data from URL or file
 	if l.config.URL != "" {
@@ -98,13 +100,14 @@ func (l *IPList) load(cacheInstance *cache.Cache) error {
 		if l.config.RefreshIntervalSeconds > 0 {
 			cacheTTL = time.Duration(l.config.RefreshIntervalSeconds) * time.Second
 		}
-		data, err = cacheInstance.FetchWithCache(l.config.URL, cacheTTL)
+		data, wasUpdated, err = cacheInstance.FetchWithCache(l.config.URL, cacheTTL)
 		if err != nil {
 			// Try local path as fallback
 			if l.config.Path != "" {
 				log.Printf("[ip_list] Failed to fetch %s from URL, trying local path: %v", l.name, err)
 				source = l.config.Path
 				data, err = os.ReadFile(l.config.Path)
+				wasUpdated = true // File read is always treated as updated
 			}
 			if err != nil {
 				return fmt.Errorf("failed to load from URL or path: %w", err)
@@ -113,11 +116,18 @@ func (l *IPList) load(cacheInstance *cache.Cache) error {
 	} else if l.config.Path != "" {
 		source = l.config.Path
 		data, err = os.ReadFile(l.config.Path)
+		wasUpdated = true // File read is always treated as updated
 		if err != nil {
 			return fmt.Errorf("failed to read file: %w", err)
 		}
 	} else {
 		return fmt.Errorf("no URL or path configured")
+	}
+
+	// Skip rebuilding if data hasn't changed AND list is already loaded
+	if !wasUpdated && l.loaded {
+		log.Printf("[ip_list] List '%s' not modified, skipping rebuild", l.name)
+		return nil
 	}
 
 	// Parse IPs and build new trie
@@ -129,6 +139,7 @@ func (l *IPList) load(cacheInstance *cache.Cache) error {
 	// Atomically swap the trie
 	l.mu.Lock()
 	l.trie = newTrie
+	l.loaded = true
 	l.mu.Unlock()
 
 	log.Printf("[ip_list] Loaded list '%s' from %s: %d entries", l.name, source, count)

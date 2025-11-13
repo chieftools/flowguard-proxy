@@ -134,7 +134,7 @@ func NewManager(configPath string, userAgent string, version string, cacheDir st
 	var c *cache.Cache
 	if cacheDir != "" {
 		var err error
-		c, err = cache.NewCache(cacheDir, userAgent)
+		c, err = cache.NewCache(cacheDir, userAgent, verbose)
 		if err != nil {
 			log.Printf("[config] Failed to create cache: %v", err)
 			os.Exit(1)
@@ -756,7 +756,7 @@ func (m *Manager) GetIPDatabasePath() (string, error) {
 	}
 
 	// Download/retrieve from cache (API key will be applied automatically if URL starts with API base)
-	cachedPath, err := m.cache.FetchFileWithCache(dbURL, cacheTTL)
+	cachedPath, _, err := m.cache.FetchFileWithCache(dbURL, cacheTTL)
 	if err != nil {
 		// Fallback to local file if download fails
 		if _, err := os.Stat("ipinfo_lite.mmdb"); err == nil {
@@ -766,6 +766,7 @@ func (m *Manager) GetIPDatabasePath() (string, error) {
 		return "", fmt.Errorf("failed to download IP database: %w", err)
 	}
 
+	// Note: Cache already logs the status (cache hit, 304, fresh file)
 	return cachedPath, nil
 }
 
@@ -826,9 +827,6 @@ func (m *Manager) parseTrustedProxies(proxies []string) ([]net.IPNet, error) {
 
 // fetchIPRangesFromURL fetches IP ranges from a URL with caching
 func (m *Manager) fetchIPRangesFromURL(url string) ([]net.IPNet, error) {
-	var data []byte
-	var err error
-
 	// Get cache TTL from config
 	cacheTTL := 24 * time.Hour // default
 	m.mu.RLock()
@@ -838,11 +836,12 @@ func (m *Manager) fetchIPRangesFromURL(url string) ([]net.IPNet, error) {
 	m.mu.RUnlock()
 
 	// Use cache if available
-	data, err = m.cache.FetchWithCache(url, cacheTTL)
+	data, _, err := m.cache.FetchWithCache(url, cacheTTL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch %s: %w", url, err)
 	}
 
+	// Note: Cache already logs the status (cache hit, 304, fresh data)
 	// Parse the data (one CIDR per line)
 	return m.parseIPRanges(data, url)
 }

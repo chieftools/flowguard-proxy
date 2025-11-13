@@ -172,7 +172,7 @@ func TestIPListLoad(t *testing.T) {
 	tmpFile.Close()
 
 	// Create a cache instance
-	cacheInstance, err := cache.NewCache("/tmp/flowguard-test-cache", "test-agent")
+	cacheInstance, err := cache.NewCache("/tmp/flowguard-test-cache", "test-agent", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestManagerContains(t *testing.T) {
 	tmpFile.Close()
 
 	// Create a cache instance
-	cacheInstance, err := cache.NewCache("/tmp/flowguard-test-cache", "test-agent")
+	cacheInstance, err := cache.NewCache("/tmp/flowguard-test-cache", "test-agent", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestManagerMultipleLists(t *testing.T) {
 	tmpFile2.Close()
 
 	// Create a cache instance
-	cacheInstance, err := cache.NewCache("/tmp/flowguard-test-cache", "test-agent")
+	cacheInstance, err := cache.NewCache("/tmp/flowguard-test-cache", "test-agent", false)
 	if err != nil {
 		t.Fatal(err)
 	}
