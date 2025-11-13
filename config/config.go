@@ -33,8 +33,6 @@ type Config struct {
 	IPLists        *IPListsConfig         `json:"ip_lists,omitempty"`
 	Realtime        *pusher.Config         `json:"realtime,omitempty"`
 	CacheDir        string                 `json:"cache_dir,omitempty"`
-	CertPath        string                 `json:"cert_path,omitempty"`
-	NginxConfigPath string                 `json:"nginx_config_path,omitempty"`
 }
 
 type HostConfig struct {
@@ -43,6 +41,8 @@ type HostConfig struct {
 	Name            string `json:"name"`
 	Team            string `json:"team,omitempty"`
 	DefaultHostname string `json:"default_hostname,omitempty"`
+	CertPath        string `json:"cert_path,omitempty"`
+	NginxConfigPath string `json:"nginx_config_path,omitempty"`
 }
 
 type LoggingConfig struct {

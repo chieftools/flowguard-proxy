@@ -83,12 +83,12 @@ func NewManager(cfg *Config) *Manager {
 	nginxConfigPath := cfg.NginxConfigPath
 
 	// Also check JSON config for cert/nginx paths (JSON config can override CLI)
-	if jsonCfg := configMgr.GetConfig(); jsonCfg != nil {
-		if jsonCfg.CertPath != "" {
-			certPath = jsonCfg.CertPath
+	if jsonCfg := configMgr.GetConfig(); jsonCfg != nil && jsonCfg.Host != nil {
+		if jsonCfg.Host.CertPath != "" {
+			certPath = jsonCfg.Host.CertPath
 		}
-		if jsonCfg.NginxConfigPath != "" {
-			nginxConfigPath = jsonCfg.NginxConfigPath
+		if jsonCfg.Host.NginxConfigPath != "" {
+			nginxConfigPath = jsonCfg.Host.NginxConfigPath
 		}
 	}
 

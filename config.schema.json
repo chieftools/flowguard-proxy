@@ -55,14 +55,6 @@
         "cache_dir": {
             "type": "string",
             "description": "Directory for caching external data (IP databases, etc.)"
-        },
-        "cert_path": {
-            "type": "string",
-            "description": "Path to directory containing combined SSL certificate+key files. Optional - can be used alone or with nginx_config_path."
-        },
-        "nginx_config_path": {
-            "type": "string",
-            "description": "Path to NGINX configuration file to parse for SSL certificates. Optional - can be used alone or with cert_path."
         }
     },
     "additionalProperties": false,
@@ -91,6 +83,14 @@
                 "default_hostname": {
                     "type": "string",
                     "description": "Default hostname to use when a certificate is not found"
+                },
+                "cert_path": {
+                    "type": "string",
+                    "description": "Path to directory containing combined SSL certificate+key files. Optional - can be used alone or with nginx_config_path."
+                },
+                "nginx_config_path": {
+                    "type": "string",
+                    "description": "Path to NGINX configuration file to parse for SSL certificates. Optional - can be used alone or with cert_path."
                 }
             },
             "required": [
