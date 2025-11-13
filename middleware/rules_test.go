@@ -147,7 +147,7 @@ func TestRateLimitKeyGenerator_GenerateKey(t *testing.T) {
 		Conditions: &config.RuleConditions{
 			Matches: []config.MatchCondition{
 				{
-					Type:  "agent",
+					Type:  "user-agent",
 					Match: "contains",
 					Value: "bot",
 				},
@@ -191,7 +191,7 @@ func TestRulesMiddleware_RateLimit_Handle(t *testing.T) {
 				Conditions: &config.RuleConditions{
 					Matches: []config.MatchCondition{
 						{
-							Type:            "agent",
+							Type:            "user-agent",
 							Match:           "contains",
 							Value:           "bot",
 							CaseInsensitive: true,
@@ -273,7 +273,7 @@ func TestRulesMiddleware_NoMatchingRateLimitRules(t *testing.T) {
 				Conditions: &config.RuleConditions{
 					Matches: []config.MatchCondition{
 						{
-							Type:  "agent",
+							Type:  "user-agent",
 							Match: "contains",
 							Value: "bot",
 						},
@@ -329,7 +329,7 @@ func TestRulesMiddleware_BlockAndRateLimit_Integration(t *testing.T) {
 				Conditions: &config.RuleConditions{
 					Matches: []config.MatchCondition{
 						{
-							Type:  "agent",
+							Type:  "user-agent",
 							Match: "contains",
 							Value: "badbot",
 						},
@@ -342,7 +342,7 @@ func TestRulesMiddleware_BlockAndRateLimit_Integration(t *testing.T) {
 				Conditions: &config.RuleConditions{
 					Matches: []config.MatchCondition{
 						{
-							Type:  "agent",
+							Type:  "user-agent",
 							Match: "contains",
 							Value: "goodbot",
 						},
@@ -570,7 +570,7 @@ func TestRegexMatcher(t *testing.T) {
 			name:  "Regex matches Chrome 80",
 			value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.149 Safari/537.36",
 			match: config.MatchCondition{
-				Type:  "agent",
+				Type:  "user-agent",
 				Match: "regex",
 				Value: "Chrome/8[0-9]\\.",
 			},
@@ -580,7 +580,7 @@ func TestRegexMatcher(t *testing.T) {
 			name:  "Regex matches Chrome 89",
 			value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.114 Safari/537.36",
 			match: config.MatchCondition{
-				Type:  "agent",
+				Type:  "user-agent",
 				Match: "regex",
 				Value: "Chrome/8[0-9]\\.",
 			},
@@ -590,7 +590,7 @@ func TestRegexMatcher(t *testing.T) {
 			name:  "Regex does not match Chrome 120",
 			value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 			match: config.MatchCondition{
-				Type:  "agent",
+				Type:  "user-agent",
 				Match: "regex",
 				Value: "Chrome/8[0-9]\\.",
 			},
@@ -600,7 +600,7 @@ func TestRegexMatcher(t *testing.T) {
 			name:  "Regex with case insensitive flag",
 			value: "Test PATTERN here",
 			match: config.MatchCondition{
-				Type:            "agent",
+				Type:            "user-agent",
 				Match:           "regex",
 				Value:           "pattern",
 				CaseInsensitive: true,
@@ -611,7 +611,7 @@ func TestRegexMatcher(t *testing.T) {
 			name:  "Regex without case insensitive flag",
 			value: "Test PATTERN here",
 			match: config.MatchCondition{
-				Type:  "agent",
+				Type:  "user-agent",
 				Match: "regex",
 				Value: "pattern",
 			},
