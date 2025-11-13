@@ -19,6 +19,7 @@ import (
 // ConfigProvider interface for accessing configuration
 type ConfigProvider interface {
 	GetRules() map[string]*config.Rule
+	GetSortedRules() []*config.Rule
 	GetActions() map[string]*config.RuleAction
 }
 
@@ -40,10 +41,11 @@ func NewRulesMiddleware(configMgr ConfigProvider) *RulesMiddleware {
 
 // Handle evaluates the request against all rules using HTTP middleware pattern
 func (rm *RulesMiddleware) Handle(w http.ResponseWriter, r *http.Request, next http.Handler) {
-	rules := rm.configMgr.GetRules()
+	// Get pre-sorted rules for efficient iteration
+	rules := rm.configMgr.GetSortedRules()
 
 	// No rules configured, allow by default
-	if rules == nil {
+	if rules == nil || len(rules) == 0 {
 		next.ServeHTTP(w, r)
 		return
 	}

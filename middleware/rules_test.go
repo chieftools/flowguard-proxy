@@ -20,6 +20,20 @@ func (m *MockConfigProvider) GetRules() map[string]*config.Rule {
 	return m.rules
 }
 
+func (m *MockConfigProvider) GetSortedRules() []*config.Rule {
+	// For tests, we can use the config manager's sorting logic
+	// or return a simple sorted slice
+	if m.rules == nil || len(m.rules) == 0 {
+		return nil
+	}
+
+	ruleList := make([]*config.Rule, 0, len(m.rules))
+	for _, rule := range m.rules {
+		ruleList = append(ruleList, rule)
+	}
+	return ruleList
+}
+
 func (m *MockConfigProvider) GetActions() map[string]*config.RuleAction {
 	return m.actions
 }

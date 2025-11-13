@@ -22,6 +22,20 @@ func (m *mockConfigManager) GetRules() map[string]*config.Rule {
 	return m.rules
 }
 
+func (m *mockConfigManager) GetSortedRules() []*config.Rule {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.rules == nil || len(m.rules) == 0 {
+		return nil
+	}
+
+	ruleList := make([]*config.Rule, 0, len(m.rules))
+	for _, rule := range m.rules {
+		ruleList = append(ruleList, rule)
+	}
+	return ruleList
+}
+
 func (m *mockConfigManager) GetActions() map[string]*config.RuleAction {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

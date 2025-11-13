@@ -107,6 +107,10 @@
                     "type": "string",
                     "description": "The action ID to execute when this rule matches"
                 },
+                "sort_order": {
+                    "type": "integer",
+                    "description": "Optional explicit ordering for rule processing. Lower values are processed first. Rules without sort_order are processed after ordered rules, sorted by rule ID."
+                },
                 "conditions": {
                     "$ref": "#/definitions/conditions"
                 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +65,7 @@ type Rule struct {
 	ID         string          // Rule ID from the map key
 	Name       string          `json:"name"`
 	Action     string          `json:"action"`
+	SortOrder  int             `json:"sort_order,omitempty"` // Optional: explicit ordering (lower = processed first)
 	Conditions *RuleConditions `json:"conditions"`
 }
 
@@ -103,6 +105,7 @@ type Manager struct {
 	version         string
 	verbose         bool
 	config          *Config
+	sortedRules     []*Rule // Pre-sorted rules for efficient iteration
 	cache           *cache.Cache
 	lastModified    time.Time
 	currentConfigID string
@@ -215,11 +218,15 @@ func (m *Manager) Load() error {
 		}
 	}
 
+	// Pre-compute sorted rules for efficient iteration during request processing
+	sortedRules := m.computeSortedRules(config.Rules)
+
 	// Update configuration atomically
 	m.mu.Lock()
 
 	oldConfig := m.config
 	m.config = &config
+	m.sortedRules = sortedRules
 	m.trustedProxyIPs = trustedProxyIPs
 	m.lastModified = info.ModTime()
 	m.currentConfigID = config.ID
@@ -278,6 +285,40 @@ func (m *Manager) GetActions() map[string]*RuleAction {
 		return nil
 	}
 	return m.config.Actions
+}
+
+// GetSortedRules returns the pre-sorted rules for efficient iteration
+func (m *Manager) GetSortedRules() []*Rule {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sortedRules
+}
+
+// computeSortedRules sorts rules by sort_order (if specified), then by ID
+func (m *Manager) computeSortedRules(rules map[string]*Rule) []*Rule {
+	if rules == nil || len(rules) == 0 {
+		return nil
+	}
+
+	// Convert map to slice
+	ruleList := make([]*Rule, 0, len(rules))
+	for _, rule := range rules {
+		ruleList = append(ruleList, rule)
+	}
+
+	// Sort by sort_order (primary), then by ID (secondary)
+	sort.Slice(ruleList, func(i, j int) bool {
+		// If both rules have sort_order, compare by sort_order
+		if ruleList[i].SortOrder != 0 || ruleList[j].SortOrder != 0 {
+			if ruleList[i].SortOrder != ruleList[j].SortOrder {
+				return ruleList[i].SortOrder < ruleList[j].SortOrder
+			}
+		}
+		// Fall back to ID comparison for deterministic ordering
+		return ruleList[i].ID < ruleList[j].ID
+	})
+
+	return ruleList
 }
 
 // GetRefreshInterval returns the configured refresh interval for trusted proxies
