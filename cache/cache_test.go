@@ -240,3 +240,102 @@ func TestCacheFailover(t *testing.T) {
 		t.Errorf("Expected 2 requests, got %d", requestCount)
 	}
 }
+
+func TestAPIKeyAutomatic(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create test API server that checks for auth header
+	apiRequestCount := 0
+	var receivedAuthHeader string
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiRequestCount++
+		receivedAuthHeader = r.Header.Get("Authorization")
+		fmt.Fprint(w, "API response")
+	}))
+	defer apiServer.Close()
+
+	// Create test public server that should NOT receive auth
+	publicRequestCount := 0
+	var publicAuthHeader string
+	publicServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		publicRequestCount++
+		publicAuthHeader = r.Header.Get("Authorization")
+		fmt.Fprint(w, "Public response")
+	}))
+	defer publicServer.Close()
+
+	cache, err := NewCache(tempDir, "test-agent")
+	if err != nil {
+		t.Fatalf("Failed to create cache: %v", err)
+	}
+
+	// Configure API credentials
+	cache.SetAPICredentials(apiServer.URL, "test-api-key-12345")
+
+	// Test 1: URL starting with API base should get automatic auth
+	receivedAuthHeader = ""
+	_, err = cache.FetchWithCache(apiServer.URL+"/database.mmdb", 1*time.Hour)
+	if err != nil {
+		t.Fatalf("API fetch failed: %v", err)
+	}
+	if receivedAuthHeader != "Bearer test-api-key-12345" {
+		t.Errorf("Expected 'Bearer test-api-key-12345', got '%s'", receivedAuthHeader)
+	}
+	if apiRequestCount != 1 {
+		t.Errorf("Expected 1 API request, got %d", apiRequestCount)
+	}
+
+	// Test 2: Public URL should NOT get auth header
+	publicAuthHeader = ""
+	_, err = cache.FetchWithCache(publicServer.URL+"/public.txt", 1*time.Hour)
+	if err != nil {
+		t.Fatalf("Public fetch failed: %v", err)
+	}
+	if publicAuthHeader != "" {
+		t.Errorf("Expected no auth header for public URL, got '%s'", publicAuthHeader)
+	}
+	if publicRequestCount != 1 {
+		t.Errorf("Expected 1 public request, got %d", publicRequestCount)
+	}
+
+	// Test 3: Explicit bearer token should override automatic
+	receivedAuthHeader = ""
+	apiRequestCount = 0
+	_, err = cache.FetchWithCache(apiServer.URL+"/override", 1*time.Hour, "explicit-token")
+	if err != nil {
+		t.Fatalf("API fetch with explicit token failed: %v", err)
+	}
+	if receivedAuthHeader != "Bearer explicit-token" {
+		t.Errorf("Expected 'Bearer explicit-token', got '%s'", receivedAuthHeader)
+	}
+}
+
+func TestAPIKeyAutomaticFileCache(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create test API server
+	var receivedAuthHeader string
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthHeader = r.Header.Get("Authorization")
+		fmt.Fprint(w, "Binary file content")
+	}))
+	defer apiServer.Close()
+
+	cache, err := NewCache(tempDir, "test-agent")
+	if err != nil {
+		t.Fatalf("Failed to create cache: %v", err)
+	}
+
+	// Configure API credentials
+	cache.SetAPICredentials(apiServer.URL, "file-api-key-67890")
+
+	// Test: URL starting with API base should get automatic auth
+	receivedAuthHeader = ""
+	_, err = cache.FetchFileWithCache(apiServer.URL+"/database.bin", 1*time.Hour)
+	if err != nil {
+		t.Fatalf("API file fetch failed: %v", err)
+	}
+	if receivedAuthHeader != "Bearer file-api-key-67890" {
+		t.Errorf("Expected 'Bearer file-api-key-67890', got '%s'", receivedAuthHeader)
+	}
+}

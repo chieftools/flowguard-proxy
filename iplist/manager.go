@@ -50,7 +50,7 @@ func New(listsConfig map[string]ListConfig, cacheInstance *cache.Cache) (*Manage
 	// Initialize each list
 	for name, config := range listsConfig {
 		if err := m.addList(name, config); err != nil {
-			log.Printf("[iplist] Failed to initialize list %s: %v", name, err)
+			log.Printf("[ip_list] Failed to initialize list %s: %v", name, err)
 			continue
 		}
 	}
@@ -102,7 +102,7 @@ func (l *IPList) load(cacheInstance *cache.Cache) error {
 		if err != nil {
 			// Try local path as fallback
 			if l.config.Path != "" {
-				log.Printf("[iplist] Failed to fetch %s from URL, trying local path: %v", l.name, err)
+				log.Printf("[ip_list] Failed to fetch %s from URL, trying local path: %v", l.name, err)
 				source = l.config.Path
 				data, err = os.ReadFile(l.config.Path)
 			}
@@ -131,7 +131,7 @@ func (l *IPList) load(cacheInstance *cache.Cache) error {
 	l.trie = newTrie
 	l.mu.Unlock()
 
-	log.Printf("[iplist] Loaded list '%s' from %s: %d entries", l.name, source, count)
+	log.Printf("[ip_list] Loaded list '%s' from %s: %d entries", l.name, source, count)
 	return nil
 }
 
@@ -155,7 +155,7 @@ func parseIPsToTrie(data []byte, source string) (*iptrie.Trie, int, error) {
 		if strings.Contains(line, "/") {
 			prefix, err := netip.ParsePrefix(line)
 			if err != nil {
-				log.Printf("[iplist] Invalid CIDR at line %d in %s: %s", lineNum, source, line)
+				log.Printf("[ip_list] Invalid CIDR at line %d in %s: %s", lineNum, source, line)
 				continue
 			}
 			newTrie.Insert(prefix, true)
@@ -164,7 +164,7 @@ func parseIPsToTrie(data []byte, source string) (*iptrie.Trie, int, error) {
 			// Parse as individual IP
 			addr, err := netip.ParseAddr(line)
 			if err != nil {
-				log.Printf("[iplist] Invalid IP at line %d in %s: %s", lineNum, source, line)
+				log.Printf("[ip_list] Invalid IP at line %d in %s: %s", lineNum, source, line)
 				continue
 			}
 			// Convert to /32 or /128 prefix
@@ -228,7 +228,7 @@ func (m *Manager) refreshLoop(name string, list *IPList) {
 		select {
 		case <-ticker.C:
 			if err := list.load(m.cache); err != nil {
-				log.Printf("[iplist] Failed to refresh list %s: %v", name, err)
+				log.Printf("[ip_list] Failed to refresh list %s: %v", name, err)
 			}
 		case <-m.stopChan:
 			return

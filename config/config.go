@@ -31,8 +31,8 @@ type Config struct {
 	IPDatabase     *IPDatabaseConfig      `json:"ip_database"`
 	TrustedProxies *TrustedProxiesConfig  `json:"trusted_proxies"`
 	IPLists        *IPListsConfig         `json:"ip_lists,omitempty"`
-	Realtime        *pusher.Config         `json:"realtime,omitempty"`
-	CacheDir        string                 `json:"cache_dir,omitempty"`
+	Realtime       *pusher.Config         `json:"realtime,omitempty"`
+	CacheDir       string                 `json:"cache_dir,omitempty"`
 }
 
 type HostConfig struct {
@@ -46,10 +46,10 @@ type HostConfig struct {
 }
 
 type LoggingConfig struct {
-	FilePath           string   `json:"file_path,omitempty"`
-	AxiomToken         string   `json:"axiom_token,omitempty"`
-	AxiomDataset       string   `json:"axiom_dataset,omitempty"`
-	HeaderWhitelist    []string `json:"header_whitelist,omitempty"`
+	FilePath        string   `json:"file_path,omitempty"`
+	AxiomToken      string   `json:"axiom_token,omitempty"`
+	AxiomDataset    string   `json:"axiom_dataset,omitempty"`
+	HeaderWhitelist []string `json:"header_whitelist,omitempty"`
 }
 
 type IPDatabaseConfig struct {
@@ -243,6 +243,12 @@ func (m *Manager) Load() error {
 	// Update API client with host key if available
 	if config.Host != nil && config.Host.Key != "" {
 		m.apiClient.SetHostKey(config.Host.Key)
+	}
+
+	// Update cache with API credentials
+	if m.cache != nil && config.Host != nil && config.Host.Key != "" {
+		apiBase := m.apiClient.GetBaseURL()
+		m.cache.SetAPICredentials(apiBase, config.Host.Key)
 	}
 
 	m.mu.Unlock()
@@ -631,6 +637,8 @@ func (m *Manager) RefreshFromAPI() error {
 
 // StartAPIRefresh starts a goroutine that periodically refreshes the configuration from the API
 func (m *Manager) StartAPIRefresh(interval time.Duration) {
+	log.Printf("[config] Started API configuration refresher")
+
 	go func() {
 		// Initial refresh on startup
 		if err := m.RefreshFromAPI(); err != nil {
@@ -716,12 +724,10 @@ func (m *Manager) GetIPDatabasePath() (string, error) {
 	m.mu.RLock()
 
 	var dbURL string
-	var dbBearer string
 	var refreshInterval time.Duration
 
 	if m.config != nil && m.config.IPDatabase != nil {
 		dbURL = m.config.IPDatabase.URL
-		dbBearer = m.config.Host.Key
 
 		if m.config.IPDatabase.RefreshIntervalSeconds > 0 {
 			refreshInterval = time.Duration(m.config.IPDatabase.RefreshIntervalSeconds) * time.Second
@@ -730,12 +736,12 @@ func (m *Manager) GetIPDatabasePath() (string, error) {
 
 	m.mu.RUnlock()
 
-	if dbURL == "" || dbBearer == "" {
+	if dbURL == "" {
 		// No database URL configured, use local file if exists
 		if _, err := os.Stat("ipinfo_lite.mmdb"); err == nil {
 			return "ipinfo_lite.mmdb", nil
 		}
-		return "", fmt.Errorf("no IP database or key configured")
+		return "", fmt.Errorf("no IP database configured")
 	}
 
 	// Use cache to download and store the database file
@@ -749,8 +755,8 @@ func (m *Manager) GetIPDatabasePath() (string, error) {
 		cacheTTL = refreshInterval
 	}
 
-	// Download/retrieve from cache
-	cachedPath, err := m.cache.FetchFileWithCache(dbURL, cacheTTL, dbBearer)
+	// Download/retrieve from cache (API key will be applied automatically if URL starts with API base)
+	cachedPath, err := m.cache.FetchFileWithCache(dbURL, cacheTTL)
 	if err != nil {
 		// Fallback to local file if download fails
 		if _, err := os.Stat("ipinfo_lite.mmdb"); err == nil {

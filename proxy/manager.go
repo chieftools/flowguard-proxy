@@ -51,7 +51,6 @@ func NewManager(cfg *Config) *Manager {
 	// Start API refresh if host key is configured (default 15 minutes)
 	if configMgr.GetConfig().Host != nil && configMgr.GetConfig().Host.Key != "" {
 		configMgr.StartAPIRefresh(15 * time.Minute)
-		log.Printf("Started API configuration refresher")
 	}
 
 	// Create middleware chain with config-based middleware
@@ -59,9 +58,9 @@ func NewManager(cfg *Config) *Manager {
 
 	// Add middleware in the order they should execute
 	// IP lookup MUST be before other middleware so they can see the enriched context
-	middlewareChain.Add(middleware.NewIPLookupMiddleware(configMgr))    // Enriches request with IP/ASN data (must be first!)
-	middlewareChain.Add(middleware.NewLoggingMiddleware(configMgr))     // Logs request and response with enriched data
-	rulesMiddleware := middleware.NewRulesMiddleware(configMgr)         // Evaluates user defined rules
+	middlewareChain.Add(middleware.NewIPLookupMiddleware(configMgr)) // Enriches request with IP/ASN data (must be first!)
+	middlewareChain.Add(middleware.NewLoggingMiddleware(configMgr))  // Logs request and response with enriched data
+	rulesMiddleware := middleware.NewRulesMiddleware(configMgr)      // Evaluates user defined rules
 	middlewareChain.Add(rulesMiddleware)
 
 	// Determine bind addresses based on configuration
@@ -133,7 +132,7 @@ func NewManager(cfg *Config) *Manager {
 
 func (p *Manager) Start() error {
 	trustedProxiesRefreshInterval := p.configManager.GetRefreshInterval()
-	log.Printf("Starting trusted proxy refresh with interval: %v", trustedProxiesRefreshInterval)
+	log.Printf("[trusted_proxy] Starting trusted proxy refresh with interval: %v", trustedProxiesRefreshInterval)
 
 	// Periodically refresh trusted proxy lists from URLs
 	go func() {
@@ -144,13 +143,13 @@ func (p *Manager) Start() error {
 			// Check if interval has changed in config
 			newInterval := p.configManager.GetRefreshInterval()
 			if newInterval != trustedProxiesRefreshInterval {
-				log.Printf("Refresh interval changed from %v to %v", trustedProxiesRefreshInterval, newInterval)
+				log.Printf("[trusted_proxy] Refresh interval changed from %v to %v", trustedProxiesRefreshInterval, newInterval)
 				ticker.Reset(newInterval)
 				trustedProxiesRefreshInterval = newInterval
 			}
 
 			if err := p.configManager.RefreshTrustedProxies(); err != nil {
-				log.Printf("Failed to refresh trusted proxy lists: %v", err)
+				log.Printf("[trusted_proxy] Failed to refresh trusted proxy lists: %v", err)
 			}
 		}
 	}()
@@ -264,6 +263,6 @@ func (p *Manager) Shutdown() error {
 	// Stop the middleware chain
 	p.middlewareChain.Stop()
 
-	log.Println("Proxy server shutdown complete")
+	log.Println("FlowGuard shutdown complete")
 	return nil
 }

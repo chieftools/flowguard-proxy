@@ -163,7 +163,7 @@ func main() {
 		log.Fatalf("[FATAL] Failed to start proxy: %v", err)
 	}
 
-	log.Println("HTTP Security Proxy is running...")
+	log.Println("FlowGuard is running and ready for requests...")
 	<-sigChan
 
 	if err := proxyManager.Shutdown(); err != nil {

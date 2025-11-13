@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -17,6 +18,8 @@ import (
 type Cache struct {
 	cacheDir   string
 	userAgent  string
+	apiBase    string
+	apiKey     string
 	httpClient *http.Client
 }
 
@@ -42,8 +45,15 @@ func NewCache(cacheDir string, userAgent string) (*Cache, error) {
 	}, nil
 }
 
+// SetAPICredentials configures the API base URL and key for automatic authentication
+func (c *Cache) SetAPICredentials(apiBase, apiKey string) {
+	c.apiBase = apiBase
+	c.apiKey = apiKey
+}
+
 // FetchWithCache fetches data from a URL with caching support
 // Optional bearerToken parameter can be provided to add Authorization header
+// If URL starts with configured API base, the API key is automatically applied
 func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...string) ([]byte, error) {
 	if c == nil {
 		return nil, fmt.Errorf("cache not initialized")
@@ -66,6 +76,8 @@ func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...
 	var token string
 	if len(bearerToken) > 0 {
 		token = bearerToken[0]
+	} else if c.shouldUseAPIKey(url) {
+		token = c.apiKey
 	}
 	data, etag, err := c.fetchFromURL(url, existingETag, token)
 	if err != nil {
@@ -102,6 +114,7 @@ func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...
 // FetchFileWithCache fetches a binary file from a URL with efficient caching
 // This method stores the file directly on disk without JSON encoding
 // Optional bearerToken parameter can be provided to add Authorization header
+// If URL starts with configured API base, the API key is automatically applied
 func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken ...string) (string, error) {
 	if c == nil {
 		return "", fmt.Errorf("cache not initialized")
@@ -147,8 +160,15 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken
 		req.Header.Set("If-None-Match", meta.ETag)
 	}
 
-	if len(bearerToken) > 0 && bearerToken[0] != "" {
-		req.Header.Set("Authorization", "Bearer "+bearerToken[0])
+	// Apply bearer token: explicit parameter or automatic API key
+	var token string
+	if len(bearerToken) > 0 {
+		token = bearerToken[0]
+	} else if c.shouldUseAPIKey(url) {
+		token = c.apiKey
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -321,4 +341,12 @@ func (c *Cache) fetchFromURL(url string, etag string, bearerToken string) ([]byt
 
 	newETag := resp.Header.Get("ETag")
 	return body, newETag, nil
+}
+
+// shouldUseAPIKey checks if a URL starts with the configured API base
+func (c *Cache) shouldUseAPIKey(url string) bool {
+	if c.apiBase == "" || c.apiKey == "" {
+		return false
+	}
+	return strings.HasPrefix(url, c.apiBase)
 }

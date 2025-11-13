@@ -17,15 +17,15 @@ import (
 
 // Manager handles SSL/TLS certificate loading and management
 type Manager struct {
-	certPath        string
-	nginxConfigPath string
-	defaultHostname string
-	verbose         bool
-	certCache       map[string]*tls.Certificate // Maps certificate file path to certificate
-	hostnameCache   map[string]*tls.Certificate // Maps hostname to certificate
-	cacheMutex      sync.RWMutex
-	watcher         *fsnotify.Watcher
-	stopChan        chan struct{}
+	certPath         string
+	nginxConfigPath  string
+	defaultHostname  string
+	verbose          bool
+	certCache        map[string]*tls.Certificate // Maps certificate file path to certificate
+	hostnameCache    map[string]*tls.Certificate // Maps hostname to certificate
+	cacheMutex       sync.RWMutex
+	watcher          *fsnotify.Watcher
+	stopChan         chan struct{}
 	nginxConfigFiles []string // List of NGINX config files to watch
 }
 
@@ -34,7 +34,7 @@ type Manager struct {
 func New(certPath, nginxConfigPath, defaultHostname string, verbose bool) *Manager {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Printf("[certmanager] Warning: Failed to create file watcher: %v. Certificate updates will not be automatic.", err)
+		log.Printf("[cert_manager] Warning: Failed to create file watcher: %v. Certificate updates will not be automatic.", err)
 	}
 
 	cm := &Manager{
@@ -55,10 +55,10 @@ func New(certPath, nginxConfigPath, defaultHostname string, verbose bool) *Manag
 	if watcher != nil && certPath != "" {
 		err = watcher.Add(certPath)
 		if err != nil {
-			log.Printf("[certmanager] Warning: Failed to watch certificate directory %s: %v", certPath, err)
+			log.Printf("[cert_manager] Warning: Failed to watch certificate directory %s: %v", certPath, err)
 		} else {
 			if verbose {
-				log.Printf("[certmanager] Watching certificate directory %s for changes", certPath)
+				log.Printf("[cert_manager] Watching certificate directory %s for changes", certPath)
 			}
 		}
 	}
@@ -79,11 +79,11 @@ func New(certPath, nginxConfigPath, defaultHostname string, verbose bool) *Manag
 
 			err = watcher.Add(configDir)
 			if err != nil {
-				log.Printf("[certmanager] Warning: Failed to watch NGINX config directory %s: %v", configDir, err)
+				log.Printf("[cert_manager] Warning: Failed to watch NGINX config directory %s: %v", configDir, err)
 			} else {
 				watchedDirs[configDir] = true
 				if verbose {
-					log.Printf("[certmanager] Watching NGINX config directory %s for changes", configDir)
+					log.Printf("[cert_manager] Watching NGINX config directory %s for changes", configDir)
 				}
 			}
 		}
@@ -161,7 +161,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	if cm.certPath != "" {
 		files, err := ioutil.ReadDir(cm.certPath)
 		if err != nil {
-			log.Printf("[certmanager] Error reading certificate directory %s: %v", cm.certPath, err)
+			log.Printf("[cert_manager] Error reading certificate directory %s: %v", cm.certPath, err)
 		} else {
 			for _, file := range files {
 				if file.IsDir() {
@@ -172,7 +172,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 				pemData, err := ioutil.ReadFile(certFile)
 				if err != nil {
 					if verbose {
-						log.Printf("[certmanager] Failed to read certificate file %s: %v", certFile, err)
+						log.Printf("[cert_manager] Failed to read certificate file %s: %v", certFile, err)
 					}
 					continue
 				}
@@ -180,7 +180,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 				cert, err := cm.parseCombinedPEM(pemData)
 				if err != nil {
 					if verbose {
-						log.Printf("[certmanager] Failed to parse certificate %s: %v", certFile, err)
+						log.Printf("[cert_manager] Failed to parse certificate %s: %v", certFile, err)
 					}
 					continue
 				}
@@ -188,7 +188,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 				// Check if certificate is expired
 				if cert.Leaf != nil && time.Now().After(cert.Leaf.NotAfter) {
 					if verbose {
-						log.Printf("[certmanager] Skipping expired certificate %s (expired %s)", certFile, cert.Leaf.NotAfter.Format("2006-01-02"))
+						log.Printf("[cert_manager] Skipping expired certificate %s (expired %s)", certFile, cert.Leaf.NotAfter.Format("2006-01-02"))
 					}
 					continue
 				}
@@ -211,7 +211,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	if cm.nginxConfigPath != "" {
 		pairs, configFiles, err := parseNginxConfig(cm.nginxConfigPath, verbose)
 		if err != nil {
-			log.Printf("[certmanager] Error parsing NGINX config %s: %v", cm.nginxConfigPath, err)
+			log.Printf("[cert_manager] Error parsing NGINX config %s: %v", cm.nginxConfigPath, err)
 		} else {
 			// Store the list of config files for watching
 			cm.nginxConfigFiles = configFiles
@@ -221,7 +221,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 				certPEM, err := ioutil.ReadFile(pair.CertPath)
 				if err != nil {
 					if verbose {
-						log.Printf("[certmanager] Failed to read certificate file %s: %v", pair.CertPath, err)
+						log.Printf("[cert_manager] Failed to read certificate file %s: %v", pair.CertPath, err)
 					}
 					continue
 				}
@@ -229,7 +229,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 				keyPEM, err := ioutil.ReadFile(pair.KeyPath)
 				if err != nil {
 					if verbose {
-						log.Printf("[certmanager] Failed to read key file %s: %v", pair.KeyPath, err)
+						log.Printf("[cert_manager] Failed to read key file %s: %v", pair.KeyPath, err)
 					}
 					continue
 				}
@@ -245,7 +245,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 				cert, err := cm.parseCombinedPEM(combinedPEM)
 				if err != nil {
 					if verbose {
-						log.Printf("[certmanager] Failed to parse certificate pair %s + %s: %v", pair.CertPath, pair.KeyPath, err)
+						log.Printf("[cert_manager] Failed to parse certificate pair %s + %s: %v", pair.CertPath, pair.KeyPath, err)
 					}
 					continue
 				}
@@ -253,7 +253,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 				// Check if certificate is expired
 				if cert.Leaf != nil && time.Now().After(cert.Leaf.NotAfter) {
 					if verbose {
-						log.Printf("[certmanager] Skipping expired certificate %s (expired %s)", pair.CertPath, cert.Leaf.NotAfter.Format("2006-01-02"))
+						log.Printf("[cert_manager] Skipping expired certificate %s (expired %s)", pair.CertPath, cert.Leaf.NotAfter.Format("2006-01-02"))
 					}
 					continue
 				}
@@ -292,7 +292,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 		sourceMsg = "0 certificates"
 	}
 
-	log.Printf("[certmanager] Loaded %d certificates (%s) covering %d hostnames", successCount, sourceMsg, len(tempHostnameCache))
+	log.Printf("[cert_manager] Loaded %d certificates (%s) covering %d hostnames", successCount, sourceMsg, len(tempHostnameCache))
 }
 
 // TestCertificates validates all certificates and displays their status
@@ -308,45 +308,45 @@ func (cm *Manager) TestCertificates() {
 		} else {
 			log.Printf("Testing certificates in directory %s...\n", cm.certPath)
 
-		for _, file := range files {
-			if file.IsDir() {
-				continue
-			}
+			for _, file := range files {
+				if file.IsDir() {
+					continue
+				}
 
-			certFile := filepath.Join(cm.certPath, file.Name())
-			pemData, err := ioutil.ReadFile(certFile)
-			if err != nil {
-				log.Printf("✗ %s: Failed to read file: %v", file.Name(), err)
-				failCount++
-				continue
-			}
-
-			cert, err := cm.parseCombinedPEM(pemData)
-			if err != nil {
-				log.Printf("✗ %s: Failed to parse: %v", file.Name(), err)
-				failCount++
-				continue
-			}
-
-			if cert.Leaf != nil {
-				hostnames := cm.getCertificateHostnames(cert.Leaf)
-				notAfter := cert.Leaf.NotAfter.Format("2006-01-02")
-
-				if time.Now().After(cert.Leaf.NotAfter) {
-					log.Printf("✗ %s: EXPIRED (expired %s) - Hosts: %v", file.Name(), notAfter, hostnames)
+				certFile := filepath.Join(cm.certPath, file.Name())
+				pemData, err := ioutil.ReadFile(certFile)
+				if err != nil {
+					log.Printf("✗ %s: Failed to read file: %v", file.Name(), err)
 					failCount++
-				} else if time.Now().Add(30 * 24 * time.Hour).After(cert.Leaf.NotAfter) {
-					log.Printf("⚠ %s: EXPIRING SOON (expires %s) - Hosts: %v", file.Name(), notAfter, hostnames)
-					successCount++
+					continue
+				}
+
+				cert, err := cm.parseCombinedPEM(pemData)
+				if err != nil {
+					log.Printf("✗ %s: Failed to parse: %v", file.Name(), err)
+					failCount++
+					continue
+				}
+
+				if cert.Leaf != nil {
+					hostnames := cm.getCertificateHostnames(cert.Leaf)
+					notAfter := cert.Leaf.NotAfter.Format("2006-01-02")
+
+					if time.Now().After(cert.Leaf.NotAfter) {
+						log.Printf("✗ %s: EXPIRED (expired %s) - Hosts: %v", file.Name(), notAfter, hostnames)
+						failCount++
+					} else if time.Now().Add(30 * 24 * time.Hour).After(cert.Leaf.NotAfter) {
+						log.Printf("⚠ %s: EXPIRING SOON (expires %s) - Hosts: %v", file.Name(), notAfter, hostnames)
+						successCount++
+					} else {
+						log.Printf("✓ %s: Valid until %s - Hosts: %v", file.Name(), notAfter, hostnames)
+						successCount++
+					}
 				} else {
-					log.Printf("✓ %s: Valid until %s - Hosts: %v", file.Name(), notAfter, hostnames)
+					log.Printf("✓ %s: Loaded successfully", file.Name())
 					successCount++
 				}
-			} else {
-				log.Printf("✓ %s: Loaded successfully", file.Name())
-				successCount++
 			}
-		}
 		}
 	}
 
@@ -358,55 +358,55 @@ func (cm *Manager) TestCertificates() {
 		} else {
 			log.Printf("\nTesting certificates from NGINX config %s...\n", cm.nginxConfigPath)
 
-		for _, pair := range pairs {
-			// Read cert and key files
-			certPEM, err := ioutil.ReadFile(pair.CertPath)
-			if err != nil {
-				log.Printf("✗ %s: Failed to read certificate: %v", pair.CertPath, err)
-				failCount++
-				continue
-			}
-
-			keyPEM, err := ioutil.ReadFile(pair.KeyPath)
-			if err != nil {
-				log.Printf("✗ %s: Failed to read key: %v", pair.KeyPath, err)
-				failCount++
-				continue
-			}
-
-			// Combine and parse
-			// Ensure there's a newline between cert and key
-			combinedPEM := certPEM
-			if len(certPEM) > 0 && certPEM[len(certPEM)-1] != '\n' {
-				combinedPEM = append(combinedPEM, '\n')
-			}
-			combinedPEM = append(combinedPEM, keyPEM...)
-			cert, err := cm.parseCombinedPEM(combinedPEM)
-			if err != nil {
-				log.Printf("✗ %s + %s: Failed to parse: %v", pair.CertPath, pair.KeyPath, err)
-				failCount++
-				continue
-			}
-
-			if cert.Leaf != nil {
-				hostnames := cm.getCertificateHostnames(cert.Leaf)
-				notAfter := cert.Leaf.NotAfter.Format("2006-01-02")
-
-				if time.Now().After(cert.Leaf.NotAfter) {
-					log.Printf("✗ %s: EXPIRED (expired %s) - Hosts: %v", pair.CertPath, notAfter, hostnames)
+			for _, pair := range pairs {
+				// Read cert and key files
+				certPEM, err := ioutil.ReadFile(pair.CertPath)
+				if err != nil {
+					log.Printf("✗ %s: Failed to read certificate: %v", pair.CertPath, err)
 					failCount++
-				} else if time.Now().Add(30 * 24 * time.Hour).After(cert.Leaf.NotAfter) {
-					log.Printf("⚠ %s: EXPIRING SOON (expires %s) - Hosts: %v", pair.CertPath, notAfter, hostnames)
-					successCount++
+					continue
+				}
+
+				keyPEM, err := ioutil.ReadFile(pair.KeyPath)
+				if err != nil {
+					log.Printf("✗ %s: Failed to read key: %v", pair.KeyPath, err)
+					failCount++
+					continue
+				}
+
+				// Combine and parse
+				// Ensure there's a newline between cert and key
+				combinedPEM := certPEM
+				if len(certPEM) > 0 && certPEM[len(certPEM)-1] != '\n' {
+					combinedPEM = append(combinedPEM, '\n')
+				}
+				combinedPEM = append(combinedPEM, keyPEM...)
+				cert, err := cm.parseCombinedPEM(combinedPEM)
+				if err != nil {
+					log.Printf("✗ %s + %s: Failed to parse: %v", pair.CertPath, pair.KeyPath, err)
+					failCount++
+					continue
+				}
+
+				if cert.Leaf != nil {
+					hostnames := cm.getCertificateHostnames(cert.Leaf)
+					notAfter := cert.Leaf.NotAfter.Format("2006-01-02")
+
+					if time.Now().After(cert.Leaf.NotAfter) {
+						log.Printf("✗ %s: EXPIRED (expired %s) - Hosts: %v", pair.CertPath, notAfter, hostnames)
+						failCount++
+					} else if time.Now().Add(30 * 24 * time.Hour).After(cert.Leaf.NotAfter) {
+						log.Printf("⚠ %s: EXPIRING SOON (expires %s) - Hosts: %v", pair.CertPath, notAfter, hostnames)
+						successCount++
+					} else {
+						log.Printf("✓ %s: Valid until %s - Hosts: %v", pair.CertPath, notAfter, hostnames)
+						successCount++
+					}
 				} else {
-					log.Printf("✓ %s: Valid until %s - Hosts: %v", pair.CertPath, notAfter, hostnames)
+					log.Printf("✓ %s: Loaded successfully", pair.CertPath)
 					successCount++
 				}
-			} else {
-				log.Printf("✓ %s: Loaded successfully", pair.CertPath)
-				successCount++
 			}
-		}
 		}
 	}
 
@@ -575,7 +575,7 @@ func (cm *Manager) watchCertificates() {
 					continue
 				}
 
-				log.Printf("[certmanager] Detected change in certificate file: %s (%v)", fileName, event.Op)
+				log.Printf("[cert_manager] Detected change in certificate file: %s (%v)", fileName, event.Op)
 
 				// Use debouncing to avoid multiple reloads for rapid changes
 				if !pendingReload {
@@ -588,7 +588,7 @@ func (cm *Manager) watchCertificates() {
 			if !ok {
 				return
 			}
-			log.Printf("[certmanager] File watcher error: %v", err)
+			log.Printf("[cert_manager] File watcher error: %v", err)
 
 		case <-debounce.C:
 			if pendingReload {
