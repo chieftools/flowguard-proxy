@@ -30,6 +30,7 @@ type Config struct {
 	Logging        *LoggingConfig         `json:"logging"`
 	IPDatabase     *IPDatabaseConfig      `json:"ip_database"`
 	TrustedProxies *TrustedProxiesConfig  `json:"trusted_proxies"`
+	IPLists        *IPListsConfig         `json:"ip_lists,omitempty"`
 	Realtime        *pusher.Config         `json:"realtime,omitempty"`
 	CacheDir        string                 `json:"cache_dir,omitempty"`
 	CertPath        string                 `json:"cert_path,omitempty"`
@@ -61,6 +62,14 @@ type TrustedProxiesConfig struct {
 	RefreshIntervalSeconds int      `json:"refresh_interval_seconds"`
 }
 
+type IPListsConfig map[string]*IPListConfig
+
+type IPListConfig struct {
+	URL                    string `json:"url,omitempty"`
+	Path                   string `json:"path,omitempty"`
+	RefreshIntervalSeconds int    `json:"refresh_interval_seconds,omitempty"`
+}
+
 type Rule struct {
 	ID         string          // Rule ID from the map key
 	Name       string          `json:"name"`
@@ -87,7 +96,7 @@ type RuleConditions struct {
 }
 
 type MatchCondition struct {
-	Type            string   `json:"type"`          // path, domain, ip, agent, header, asn, ipset
+	Type            string   `json:"type"`          // path, domain, ip, agent, header, asn, ipset, iplist
 	Match           string   `json:"match"`         // equals, contains, regex, in, not-in, etc.
 	Key             string   `json:"key,omitempty"` // For header matches: the header name
 	Value           string   `json:"value,omitempty"`
@@ -265,6 +274,11 @@ func (m *Manager) GetConfig() *Config {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.config
+}
+
+// GetCache returns the HTTP cache instance
+func (m *Manager) GetCache() *cache.Cache {
+	return m.cache
 }
 
 // GetRules returns the current rules configuration

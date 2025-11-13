@@ -23,11 +23,17 @@ type ConfigProvider interface {
 	GetActions() map[string]*config.RuleAction
 }
 
+// IPListManager interface for IP list lookups
+type IPListManager interface {
+	Contains(listName string, ip string) bool
+}
+
 // RulesMiddleware implements dynamic rule-based filtering
 type RulesMiddleware struct {
-	configMgr    ConfigProvider
-	rateLimiter  *RateLimiter
-	keyGenerator *RateLimitKeyGenerator
+	configMgr     ConfigProvider
+	rateLimiter   *RateLimiter
+	keyGenerator  *RateLimitKeyGenerator
+	ipListManager IPListManager
 }
 
 // NewRulesMiddleware creates a new rules-based middleware with integrated rate limiting
@@ -37,6 +43,11 @@ func NewRulesMiddleware(configMgr ConfigProvider) *RulesMiddleware {
 		rateLimiter:  NewRateLimiter(time.Minute * 10), // Stop every 10 minutes
 		keyGenerator: NewRateLimitKeyGenerator(),
 	}
+}
+
+// SetIPListManager sets the IP list manager for iplist rule matching
+func (rm *RulesMiddleware) SetIPListManager(manager IPListManager) {
+	rm.ipListManager = manager
 }
 
 // Handle evaluates the request against all rules using HTTP middleware pattern
@@ -284,6 +295,8 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 		value = clientASNInfo.ContinentCode
 	case "ipset":
 		return rm.matchesIPSet(r, match)
+	case "iplist":
+		return rm.matchesIPList(r, match)
 	default:
 		log.Printf("[middleware:rules] Unknown match type: %s", match.Type)
 		return false
@@ -402,6 +415,36 @@ func (rm *RulesMiddleware) matchesIPSet(r *http.Request, match *config.MatchCond
 		return err != nil // IP is NOT in the set
 	}
 	return err == nil // IP IS in the set
+}
+
+// matchesIPList checks if the client IP is in the specified in-memory IP list
+func (rm *RulesMiddleware) matchesIPList(r *http.Request, match *config.MatchCondition) bool {
+	// Check if IP list manager is available
+	if rm.ipListManager == nil {
+		log.Printf("[middleware:rules] IPList manager not initialized, cannot check list %s", match.Value)
+		return false
+	}
+
+	clientIP := GetClientIP(r)
+	host, _, err := net.SplitHostPort(clientIP)
+	if err != nil {
+		host = clientIP
+	}
+
+	// Parse IP to validate it
+	parsedIP := net.ParseIP(host)
+	if parsedIP == nil {
+		return false
+	}
+
+	// Check if IP is in the named list
+	contains := rm.ipListManager.Contains(match.Value, host)
+
+	// Handle "in" vs "not-in"
+	if match.Match == "not-in" {
+		return !contains // IP is NOT in the list
+	}
+	return contains // IP IS in the list
 }
 
 // Stop stops the rate limiter cleanup process

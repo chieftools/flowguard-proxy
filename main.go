@@ -8,11 +8,16 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"flowguard/api"
+	"flowguard/cache"
 	"flowguard/certmanager"
+	"flowguard/config"
+	"flowguard/iplist"
 	"flowguard/proxy"
 )
 
@@ -46,6 +51,42 @@ func main() {
 		}
 
 		log.Printf("[SUCCESS] Host configured successfully. Configuration saved to %s", *configFile)
+		os.Exit(0)
+	}
+
+	// Check for iplist subcommand
+	if len(os.Args) >= 2 && os.Args[1] == "iplist" {
+		// Parse flags for iplist command
+		iplistFlag := flag.NewFlagSet("iplist", flag.ExitOnError)
+		configFile := iplistFlag.String("config", "/etc/flowguard/config.json", "Path to the configuration file")
+		cacheDir := iplistFlag.String("cache-dir", "/var/cache/flowguard", "Directory for caching external data")
+
+		// Parse flags from os.Args[2:] to get config/cache-dir if provided
+		// We need to find where the actual command args start
+		args := os.Args[2:]
+		nonFlagArgs := []string{}
+		for i := 0; i < len(args); i++ {
+			if strings.HasPrefix(args[i], "-") {
+				// This is a flag, skip it and its value
+				i++
+			} else {
+				nonFlagArgs = append(nonFlagArgs, args[i])
+			}
+		}
+
+		err := iplistFlag.Parse(os.Args[2:])
+		if err != nil {
+			log.Printf("[ERROR] Failed to parse flags: %v", err)
+			os.Exit(1)
+		}
+
+		// Re-parse non-flag args after flag parsing
+		nonFlagArgs = iplistFlag.Args()
+
+		if err := handleIPListCommand(nonFlagArgs, *configFile, *cacheDir); err != nil {
+			log.Printf("[ERROR] %v", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
@@ -202,4 +243,203 @@ func setupHost(hostKey, configFile string) error {
 	}
 
 	return nil
+}
+
+// handleIPListCommand handles the iplist subcommand
+func handleIPListCommand(args []string, configFile, cacheDir string) error {
+	// Load configuration to get IP lists
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	var cfg config.Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	// Case 1: No args - list all configured IP lists
+	if len(args) == 0 {
+		if cfg.IPLists == nil || len(*cfg.IPLists) == 0 {
+			fmt.Println("No IP lists configured in", configFile)
+			return nil
+		}
+
+		fmt.Printf("Configured IP lists in %s:\n\n", configFile)
+		for name, listCfg := range *cfg.IPLists {
+			fmt.Printf("  %s:\n", name)
+			if listCfg.URL != "" {
+				fmt.Printf("    Source: %s\n", listCfg.URL)
+				if listCfg.RefreshIntervalSeconds > 0 {
+					fmt.Printf("    Refresh: every %d seconds\n", listCfg.RefreshIntervalSeconds)
+				}
+			}
+			if listCfg.Path != "" {
+				fmt.Printf("    Source: %s (local file)\n", listCfg.Path)
+			}
+			fmt.Println()
+		}
+		return nil
+	}
+
+	listName := args[0]
+
+	// Check if the list exists in config
+	if cfg.IPLists == nil || (*cfg.IPLists)[listName] == nil {
+		return fmt.Errorf("IP list '%s' not found in configuration", listName)
+	}
+
+	listCfg := (*cfg.IPLists)[listName]
+
+	// Create cache instance
+	cacheInstance, err := cache.NewCache(cacheDir, fmt.Sprintf("FlowGuard/%s", Version))
+	if err != nil {
+		return fmt.Errorf("failed to create cache: %w", err)
+	}
+
+	// Case 2: Load list and show stats (no contains command)
+	if len(args) == 1 {
+		return loadAndShowStats(listName, listCfg, cacheInstance)
+	}
+
+	// Case 3: Check if IP is in list
+	if len(args) == 3 && args[1] == "contains" {
+		ipAddr := args[2]
+		return checkIPInList(listName, listCfg, ipAddr, cacheInstance)
+	}
+
+	return fmt.Errorf("invalid arguments. Usage:\n  flowguard iplist\n  flowguard iplist <name>\n  flowguard iplist <name> contains <ip>")
+}
+
+// loadAndShowStats loads a list and displays statistics
+func loadAndShowStats(listName string, listCfg *config.IPListConfig, cacheInstance *cache.Cache) error {
+	fmt.Printf("Loading IP list '%s'...\n\n", listName)
+
+	// Measure memory before loading
+	var memBefore runtime.MemStats
+	runtime.GC() // Force GC to get accurate baseline
+	runtime.ReadMemStats(&memBefore)
+
+	// Measure load time
+	startTime := time.Now()
+
+	// Convert config to iplist.ListConfig
+	iplistCfg := iplist.ListConfig{
+		URL:                    listCfg.URL,
+		Path:                   listCfg.Path,
+		RefreshIntervalSeconds: listCfg.RefreshIntervalSeconds,
+	}
+
+	// Create a temporary manager with just this list
+	listsConfig := map[string]iplist.ListConfig{
+		listName: iplistCfg,
+	}
+
+	manager, err := iplist.New(listsConfig, cacheInstance)
+	if err != nil {
+		return fmt.Errorf("failed to load list: %w", err)
+	}
+	defer manager.Stop()
+
+	loadDuration := time.Since(startTime)
+
+	// Measure memory after loading
+	var memAfter runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&memAfter)
+
+	memUsed := memAfter.Alloc - memBefore.Alloc
+
+	// Display statistics
+	fmt.Printf("List Statistics:\n")
+	fmt.Printf("  Name:        %s\n", listName)
+	if listCfg.URL != "" {
+		fmt.Printf("  Source:      %s\n", listCfg.URL)
+	} else {
+		fmt.Printf("  Source:      %s\n", listCfg.Path)
+	}
+	fmt.Printf("  Load Time:   %v\n", loadDuration)
+	fmt.Printf("  Memory Used: ~%s\n", formatBytes(memUsed))
+	fmt.Println()
+
+	return nil
+}
+
+// checkIPInList checks if an IP is in the list and shows timing
+func checkIPInList(listName string, listCfg *config.IPListConfig, ipAddr string, cacheInstance *cache.Cache) error {
+	fmt.Printf("Loading IP list '%s'...\n", listName)
+
+	// Measure memory before loading
+	var memBefore runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&memBefore)
+
+	// Measure load time
+	startLoad := time.Now()
+
+	// Convert config to iplist.ListConfig
+	iplistCfg := iplist.ListConfig{
+		URL:                    listCfg.URL,
+		Path:                   listCfg.Path,
+		RefreshIntervalSeconds: listCfg.RefreshIntervalSeconds,
+	}
+
+	// Create a temporary manager with just this list
+	listsConfig := map[string]iplist.ListConfig{
+		listName: iplistCfg,
+	}
+
+	manager, err := iplist.New(listsConfig, cacheInstance)
+	if err != nil {
+		return fmt.Errorf("failed to load list: %w", err)
+	}
+	defer manager.Stop()
+
+	loadDuration := time.Since(startLoad)
+
+	// Measure memory after loading
+	var memAfter runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&memAfter)
+
+	memUsed := memAfter.Alloc - memBefore.Alloc
+
+	// Perform the lookup with timing
+	startLookup := time.Now()
+	contains := manager.Contains(listName, ipAddr)
+	lookupDuration := time.Since(startLookup)
+
+	// Display results
+	fmt.Println()
+	fmt.Printf("Results:\n")
+	fmt.Printf("  IP Address:     %s\n", ipAddr)
+	fmt.Printf("  In List:        %v\n", contains)
+	fmt.Println()
+	fmt.Printf("Performance:\n")
+	fmt.Printf("  List Load Time: %v\n", loadDuration)
+	fmt.Printf("  Lookup Time:    %v\n", lookupDuration)
+	fmt.Printf("  Memory Used:    ~%s\n", formatBytes(memUsed))
+	fmt.Println()
+
+	if contains {
+		os.Exit(0)
+	} else {
+		os.Exit(1)
+	}
+
+	return nil
+}
+
+// formatBytes formats bytes into human-readable format
+func formatBytes(bytes uint64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := uint64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }

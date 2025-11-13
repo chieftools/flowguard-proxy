@@ -9,6 +9,7 @@ import (
 
 	"flowguard/certmanager"
 	"flowguard/config"
+	"flowguard/iplist"
 	"flowguard/middleware"
 )
 
@@ -31,6 +32,7 @@ type Manager struct {
 	servers         []*Server
 	certManager     *certmanager.Manager
 	configManager   *config.Manager
+	ipListManager   *iplist.Manager
 	middlewareChain *middleware.Chain
 	mu              sync.RWMutex
 }
@@ -57,9 +59,10 @@ func NewManager(cfg *Config) *Manager {
 
 	// Add middleware in the order they should execute
 	// IP lookup MUST be before other middleware so they can see the enriched context
-	middlewareChain.Add(middleware.NewIPLookupMiddleware(configMgr)) // Enriches request with IP/ASN data (must be first!)
-	middlewareChain.Add(middleware.NewLoggingMiddleware(configMgr))  // Logs request and response with enriched data
-	middlewareChain.Add(middleware.NewRulesMiddleware(configMgr))    // Evaluates user defined rules
+	middlewareChain.Add(middleware.NewIPLookupMiddleware(configMgr))    // Enriches request with IP/ASN data (must be first!)
+	middlewareChain.Add(middleware.NewLoggingMiddleware(configMgr))     // Logs request and response with enriched data
+	rulesMiddleware := middleware.NewRulesMiddleware(configMgr)         // Evaluates user defined rules
+	middlewareChain.Add(rulesMiddleware)
 
 	// Determine bind addresses based on configuration
 	bindAddrs := cfg.BindAddrs
@@ -94,10 +97,36 @@ func NewManager(cfg *Config) *Manager {
 		defaultHostname = configMgr.GetConfig().Host.DefaultHostname
 	}
 
+	// Initialize IP list manager if IP lists are configured
+	var ipListMgr *iplist.Manager
+	if jsonCfg := configMgr.GetConfig(); jsonCfg != nil && jsonCfg.IPLists != nil && len(*jsonCfg.IPLists) > 0 {
+		// Convert config.IPListConfig to iplist.ListConfig
+		listsConfig := make(map[string]iplist.ListConfig)
+		for name, cfg := range *jsonCfg.IPLists {
+			listsConfig[name] = iplist.ListConfig{
+				URL:                    cfg.URL,
+				Path:                   cfg.Path,
+				RefreshIntervalSeconds: cfg.RefreshIntervalSeconds,
+			}
+		}
+
+		// Create the IP list manager with the cache instance
+		var err error
+		ipListMgr, err = iplist.New(listsConfig, configMgr.GetCache())
+		if err != nil {
+			log.Printf("Failed to initialize IP list manager: %v", err)
+		} else {
+			// Set the IP list manager on the rules middleware
+			rulesMiddleware.SetIPListManager(ipListMgr)
+			log.Printf("Initialized IP list manager with %d list(s)", len(listsConfig))
+		}
+	}
+
 	return &Manager{
 		config:          cfg,
 		certManager:     certmanager.New(certPath, nginxConfigPath, defaultHostname, cfg.Verbose),
 		configManager:   configMgr,
+		ipListManager:   ipListMgr,
 		middlewareChain: middlewareChain,
 	}
 }
@@ -206,6 +235,11 @@ func (p *Manager) Shutdown() error {
 
 	// Stop the certificate manager
 	p.certManager.Stop()
+
+	// Stop the IP list manager if initialized
+	if p.ipListManager != nil {
+		p.ipListManager.Stop()
+	}
 
 	// Small delay before we shut down the servers
 	time.Sleep(100 * time.Millisecond)

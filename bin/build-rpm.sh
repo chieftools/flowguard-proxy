@@ -116,7 +116,8 @@ Source1:        flowguard.service
 %global _build_id_links none
 %define _binaries_in_noarch_packages_terminate_build 0
 
-Requires:       iptables, ipset
+Requires:       iptables
+Recommends:     ipset
 
 %description
 FlowGuard is a high-performance Go-based reverse proxy with

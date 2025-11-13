@@ -43,6 +43,9 @@
         "trusted_proxies": {
             "$ref": "#/definitions/trustedProxies"
         },
+        "ip_lists": {
+            "$ref": "#/definitions/ipLists"
+        },
         "logging": {
             "$ref": "#/definitions/logging"
         },
@@ -171,7 +174,8 @@
                         "as-domain",
                         "country",
                         "continent",
-                        "ipset"
+                        "ipset",
+                        "iplist"
                     ],
                     "description": "The type of value to match against"
                 },
@@ -362,6 +366,45 @@
             },
             "required": [
                 "ipnets"
+            ],
+            "additionalProperties": false
+        },
+        "ipLists": {
+            "type": "object",
+            "description": "In-memory IP list configurations for high-performance IP matching",
+            "patternProperties": {
+                "^[a-zA-Z0-9_-]+$": {
+                    "$ref": "#/definitions/ipListConfig"
+                }
+            },
+            "additionalProperties": false
+        },
+        "ipListConfig": {
+            "type": "object",
+            "description": "Configuration for a single IP list",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "URL to fetch IP list from (one IP or CIDR per line)"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Local file path to load IP list from (one IP or CIDR per line)"
+                },
+                "refresh_interval_seconds": {
+                    "type": "integer",
+                    "minimum": 60,
+                    "description": "How often to refresh the list from URL in seconds"
+                }
+            },
+            "oneOf": [
+                {
+                    "required": ["url"]
+                },
+                {
+                    "required": ["path"]
+                }
             ],
             "additionalProperties": false
         },
