@@ -96,38 +96,104 @@ func NewManager(cfg *Config) *Manager {
 		defaultHostname = configMgr.GetConfig().Host.DefaultHostname
 	}
 
-	// Initialize IP list manager if IP lists are configured
-	var ipListMgr *iplist.Manager
-	if jsonCfg := configMgr.GetConfig(); jsonCfg != nil && jsonCfg.IPLists != nil && len(*jsonCfg.IPLists) > 0 {
-		// Convert config.IPListConfig to iplist.ListConfig
-		listsConfig := make(map[string]iplist.ListConfig)
-		for name, cfg := range *jsonCfg.IPLists {
-			listsConfig[name] = iplist.ListConfig{
-				URL:                    cfg.URL,
-				Path:                   cfg.Path,
-				RefreshIntervalSeconds: cfg.RefreshIntervalSeconds,
-			}
-		}
-
-		// Create the IP list manager with the cache instance
-		var err error
-		ipListMgr, err = iplist.New(listsConfig, configMgr.GetCache())
-		if err != nil {
-			log.Printf("[ip_list] Failed to initialize IP list manager: %v", err)
-		} else {
-			// Set the IP list manager on the rules middleware
-			rulesMiddleware.SetIPListManager(ipListMgr)
-			log.Printf("[ip_list] Initialized IP list manager with %d list(s)", len(listsConfig))
-		}
-	}
-
-	return &Manager{
+	// Create the proxy manager
+	pm := &Manager{
 		config:          cfg,
 		certManager:     certmanager.New(certPath, nginxConfigPath, defaultHostname, cfg.Verbose),
 		configManager:   configMgr,
-		ipListManager:   ipListMgr,
 		middlewareChain: middlewareChain,
 	}
+
+	// Initialize IP list manager with current config
+	pm.initializeIPListManager(configMgr.GetConfig(), rulesMiddleware)
+
+	// Register callback to handle IP list configuration changes
+	configMgr.OnChange(func(newConfig *config.Config) {
+		pm.handleIPListConfigChange(newConfig, rulesMiddleware)
+	})
+
+	return pm
+}
+
+// initializeIPListManager creates and initializes the IP list manager from config
+func (p *Manager) initializeIPListManager(cfg *config.Config, rulesMiddleware *middleware.RulesMiddleware) {
+	if cfg == nil || cfg.IPLists == nil || len(*cfg.IPLists) == 0 {
+		log.Printf("[ip_list] No IP lists configured")
+		return
+	}
+
+	// Convert config.IPListConfig to iplist.ListConfig
+	listsConfig := make(map[string]iplist.ListConfig)
+	for name, listCfg := range *cfg.IPLists {
+		listsConfig[name] = iplist.ListConfig{
+			URL:                    listCfg.URL,
+			Path:                   listCfg.Path,
+			RefreshIntervalSeconds: listCfg.RefreshIntervalSeconds,
+		}
+	}
+
+	// Create the IP list manager with the cache instance
+	ipListMgr, err := iplist.New(listsConfig, p.configManager.GetCache())
+	if err != nil {
+		log.Printf("[ip_list] Failed to initialize IP list manager: %v", err)
+		return
+	}
+
+	// Store and set the IP list manager
+	p.mu.Lock()
+	oldManager := p.ipListManager
+	p.ipListManager = ipListMgr
+	p.mu.Unlock()
+
+	// Stop the old manager if it exists
+	if oldManager != nil {
+		oldManager.Stop()
+	}
+
+	// Set the IP list manager on the rules middleware
+	rulesMiddleware.SetIPListManager(ipListMgr)
+	log.Printf("[ip_list] Initialized IP list manager with %d list(s)", len(listsConfig))
+}
+
+// handleIPListConfigChange handles changes to IP list configuration during hot-reload
+func (p *Manager) handleIPListConfigChange(newConfig *config.Config, rulesMiddleware *middleware.RulesMiddleware) {
+	// Check if IP lists configuration exists and has changed
+	hasIPLists := newConfig != nil && newConfig.IPLists != nil && len(*newConfig.IPLists) > 0
+
+	p.mu.RLock()
+	hadIPListManager := p.ipListManager != nil
+	p.mu.RUnlock()
+
+	// Case 1: IP lists were added (didn't have manager, now have config)
+	if !hadIPListManager && hasIPLists {
+		log.Printf("[ip_list] IP lists added to configuration, initializing manager")
+		p.initializeIPListManager(newConfig, rulesMiddleware)
+		return
+	}
+
+	// Case 2: IP lists were removed (had manager, now no config)
+	if hadIPListManager && !hasIPLists {
+		log.Printf("[ip_list] IP lists removed from configuration, stopping manager")
+		p.mu.Lock()
+		oldManager := p.ipListManager
+		p.ipListManager = nil
+		p.mu.Unlock()
+
+		if oldManager != nil {
+			oldManager.Stop()
+		}
+		rulesMiddleware.SetIPListManager(nil)
+		return
+	}
+
+	// Case 3: IP lists were modified (had manager, still have config)
+	if hadIPListManager && hasIPLists {
+		log.Printf("[ip_list] IP lists configuration changed, reinitializing manager")
+		p.initializeIPListManager(newConfig, rulesMiddleware)
+		return
+	}
+
+	// Case 4: No IP lists before or after - nothing to do
 }
 
 func (p *Manager) Start() error {
