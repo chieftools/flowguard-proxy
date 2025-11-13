@@ -35,7 +35,7 @@ mkdir -p "${DEB_DIR}/usr/share/doc/flowguard"
 
 # Build the binary for Linux AMD64
 echo -e "${YELLOW}Building FlowGuard binary...${NC}"
-GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.Version=${VERSION}" -o "${DEB_DIR}/usr/bin/flowguard" .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -tags netgo,osusergo -buildvcs=false -o "${DEB_DIR}/usr/bin/flowguard" .
 
 # Strip the binary to reduce size
 strip "${DEB_DIR}/usr/bin/flowguard" 2>/dev/null || true
