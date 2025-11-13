@@ -50,6 +50,7 @@ func (rm *RulesMiddleware) Handle(w http.ResponseWriter, r *http.Request, next h
 		return
 	}
 
+ruleLoop:
 	for _, rule := range rules {
 		if rm.matchesRule(r, rule) {
 			actions := rm.configMgr.GetActions()
@@ -65,7 +66,7 @@ func (rm *RulesMiddleware) Handle(w http.ResponseWriter, r *http.Request, next h
 				// Mark the rule as matched and allow the request
 				SetRuleMatch(r, rule, action, "proxy")
 
-				break
+				break ruleLoop
 			case "block":
 				blockRequest(w, r, action, rule)
 				return
