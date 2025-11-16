@@ -135,7 +135,11 @@ func main() {
 
 	// Certificate test mode
 	if *testCerts {
-		cm := certmanager.New(cfg.CertPath, cfg.NginxConfigPath, "", *verbose)
+		cm := certmanager.New(certmanager.Config{
+			Verbose:         cfg.Verbose,
+			CertPath:        cfg.CertPath,
+			NginxConfigPath: cfg.NginxConfigPath,
+		})
 		cm.TestCertificates()
 		os.Exit(0)
 	}

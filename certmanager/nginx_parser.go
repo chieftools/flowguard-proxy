@@ -9,41 +9,41 @@ import (
 	"strings"
 )
 
-// CertKeyPair represents a certificate and key file pair from NGINX config
-type CertKeyPair struct {
+// Certificate represents a certificate and key file pair from NGINX config
+type Certificate struct {
 	CertPath string
 	KeyPath  string
 }
 
-// nginxParser parses NGINX configuration files to extract SSL certificate information
-type nginxParser struct {
+// parser parses NGINX configuration files to extract SSL certificate information
+type parser struct {
 	verbose          bool
 	visitedFiles     map[string]bool         // Track files we've already parsed
-	certKeyPairs     map[string]*CertKeyPair // Map cert path to pair (to match with key)
+	certKeyPairs     map[string]*Certificate // Map cert path to pair (to match with key)
 	lastUnpairedCert string                  // Track the last cert without a key for sequential matching
 	nginxBaseDir     string                  // Base directory of main nginx.conf for resolving relative paths
 }
 
 // Regular expressions for parsing NGINX config
 var (
-	sslCertRegex     = regexp.MustCompile(`^\s*ssl_certificate\s+(.+?);`)
-	sslKeyRegex      = regexp.MustCompile(`^\s*ssl_certificate_key\s+(.+?);`)
-	includeRegex     = regexp.MustCompile(`^\s*include\s+(.+?);`)
-	commentRegex     = regexp.MustCompile(`#.*$`)
+	sslCertRegex = regexp.MustCompile(`^\s*ssl_certificate\s+(.+?);`)
+	sslKeyRegex  = regexp.MustCompile(`^\s*ssl_certificate_key\s+(.+?);`)
+	includeRegex = regexp.MustCompile(`^\s*include\s+(.+?);`)
+	commentRegex = regexp.MustCompile(`#.*$`)
 )
 
 // parseNginxConfig parses an NGINX config file and returns all certificate/key pairs
-func parseNginxConfig(configPath string, verbose bool) ([]CertKeyPair, []string, error) {
+func parseNginxConfig(configPath string, verbose bool) ([]Certificate, []string, error) {
 	// Get absolute path for main config
 	absConfigPath, err := filepath.Abs(configPath)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	parser := &nginxParser{
+	parser := &parser{
 		verbose:      verbose,
 		visitedFiles: make(map[string]bool),
-		certKeyPairs: make(map[string]*CertKeyPair),
+		certKeyPairs: make(map[string]*Certificate),
 		nginxBaseDir: filepath.Dir(absConfigPath), // Store base directory for relative path resolution
 	}
 
@@ -61,7 +61,7 @@ func parseNginxConfig(configPath string, verbose bool) ([]CertKeyPair, []string,
 	}
 
 	// Convert map to slice
-	var pairs []CertKeyPair
+	var pairs []Certificate
 	for _, pair := range parser.certKeyPairs {
 		// Only include pairs that have both cert and key
 		if pair.CertPath != "" && pair.KeyPath != "" {
@@ -73,7 +73,7 @@ func parseNginxConfig(configPath string, verbose bool) ([]CertKeyPair, []string,
 }
 
 // parseFile recursively parses a config file and any included files
-func (p *nginxParser) parseFile(path string) error {
+func (p *parser) parseFile(path string) error {
 	// Resolve to absolute path
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -113,10 +113,10 @@ func (p *nginxParser) parseFile(path string) error {
 		// Check for ssl_certificate directive
 		if matches := sslCertRegex.FindStringSubmatch(line); len(matches) > 1 {
 			certPath := p.cleanPath(matches[1])
-			certPath = p.resolvePath(certPath, absPath)
+			certPath = p.resolvePath(certPath)
 
 			// Create new pair for this cert
-			pair := &CertKeyPair{CertPath: certPath}
+			pair := &Certificate{CertPath: certPath}
 			p.certKeyPairs[certPath] = pair
 			p.lastUnpairedCert = certPath
 
@@ -128,7 +128,7 @@ func (p *nginxParser) parseFile(path string) error {
 		// Check for ssl_certificate_key directive
 		if matches := sslKeyRegex.FindStringSubmatch(line); len(matches) > 1 {
 			keyPath := p.cleanPath(matches[1])
-			keyPath = p.resolvePath(keyPath, absPath)
+			keyPath = p.resolvePath(keyPath)
 
 			// Match with the most recent unpaired cert (sequential matching)
 			// In NGINX config, ssl_certificate_key typically comes right after ssl_certificate
@@ -162,7 +162,7 @@ func (p *nginxParser) parseFile(path string) error {
 		// Check for include directive
 		if matches := includeRegex.FindStringSubmatch(line); len(matches) > 1 {
 			includePath := p.cleanPath(matches[1])
-			includePath = p.resolvePath(includePath, absPath)
+			includePath = p.resolvePath(includePath)
 
 			// Handle glob patterns
 			if strings.ContainsAny(includePath, "*?[]") {
@@ -194,14 +194,14 @@ func (p *nginxParser) parseFile(path string) error {
 }
 
 // cleanPath removes quotes and extra whitespace from a path
-func (p *nginxParser) cleanPath(path string) string {
+func (p *parser) cleanPath(path string) string {
 	path = strings.TrimSpace(path)
 	path = strings.Trim(path, `"'`)
 	return path
 }
 
 // resolvePath converts a potentially relative path to absolute based on nginx base directory
-func (p *nginxParser) resolvePath(path, configPath string) string {
+func (p *parser) resolvePath(path string) string {
 	// If already absolute, return as-is
 	if filepath.IsAbs(path) {
 		return path

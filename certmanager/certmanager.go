@@ -5,8 +5,8 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"io/ioutil"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,12 +15,17 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// Config holds configuration for the certificate manager
+type Config struct {
+	CertPath        string
+	NginxConfigPath string
+	DefaultHostname string
+	Verbose         bool
+}
+
 // Manager handles SSL/TLS certificate loading and management
 type Manager struct {
-	certPath         string
-	nginxConfigPath  string
-	defaultHostname  string
-	verbose          bool
+	config           Config
 	certCache        map[string]*tls.Certificate // Maps certificate file path to certificate
 	hostnameCache    map[string]*tls.Certificate // Maps hostname to certificate
 	cacheMutex       sync.RWMutex
@@ -31,17 +36,14 @@ type Manager struct {
 
 // New creates a new certificate manager
 // Both certPath and nginxConfigPath are optional - at least one should be provided
-func New(certPath, nginxConfigPath, defaultHostname string, verbose bool) *Manager {
+func New(config Config) *Manager {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Printf("[cert_manager] Warning: Failed to create file watcher: %v. Certificate updates will not be automatic.", err)
 	}
 
 	cm := &Manager{
-		certPath:         certPath,
-		nginxConfigPath:  nginxConfigPath,
-		defaultHostname:  defaultHostname,
-		verbose:          verbose,
+		config:           config,
 		certCache:        make(map[string]*tls.Certificate),
 		hostnameCache:    make(map[string]*tls.Certificate),
 		watcher:          watcher,
@@ -52,19 +54,19 @@ func New(certPath, nginxConfigPath, defaultHostname string, verbose bool) *Manag
 	cm.loadAllCertificates(false)
 
 	// Watch certificate directory if provided
-	if watcher != nil && certPath != "" {
-		err = watcher.Add(certPath)
+	if watcher != nil && config.CertPath != "" {
+		err = watcher.Add(config.CertPath)
 		if err != nil {
-			log.Printf("[cert_manager] Warning: Failed to watch certificate directory %s: %v", certPath, err)
+			log.Printf("[cert_manager] Warning: Failed to watch certificate directory %s: %v", config.CertPath, err)
 		} else {
-			if verbose {
-				log.Printf("[cert_manager] Watching certificate directory %s for changes", certPath)
+			if config.Verbose {
+				log.Printf("[cert_manager] Watching certificate directory %s for changes", config.CertPath)
 			}
 		}
 	}
 
 	// Watch NGINX config files if provided
-	if watcher != nil && nginxConfigPath != "" {
+	if watcher != nil && config.NginxConfigPath != "" {
 		// Track which directories we've already added to avoid duplicates
 		watchedDirs := make(map[string]bool)
 
@@ -82,7 +84,7 @@ func New(certPath, nginxConfigPath, defaultHostname string, verbose bool) *Manag
 				log.Printf("[cert_manager] Warning: Failed to watch NGINX config directory %s: %v", configDir, err)
 			} else {
 				watchedDirs[configDir] = true
-				if verbose {
+				if config.Verbose {
 					log.Printf("[cert_manager] Watching NGINX config directory %s for changes", configDir)
 				}
 			}
@@ -90,7 +92,7 @@ func New(certPath, nginxConfigPath, defaultHostname string, verbose bool) *Manag
 	}
 
 	// Start watching if we have any paths to watch
-	if watcher != nil && (certPath != "" || nginxConfigPath != "") {
+	if watcher != nil && (config.CertPath != "" || config.NginxConfigPath != "") {
 		go cm.watchCertificates()
 	} else if watcher != nil {
 		// No paths to watch, close the watcher
@@ -158,18 +160,18 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	fromNginx := 0
 
 	// Load from certificate directory if provided
-	if cm.certPath != "" {
-		files, err := ioutil.ReadDir(cm.certPath)
+	if cm.config.CertPath != "" {
+		files, err := os.ReadDir(cm.config.CertPath)
 		if err != nil {
-			log.Printf("[cert_manager] Error reading certificate directory %s: %v", cm.certPath, err)
+			log.Printf("[cert_manager] Error reading certificate directory %s: %v", cm.config.CertPath, err)
 		} else {
 			for _, file := range files {
 				if file.IsDir() {
 					continue
 				}
 
-				certFile := filepath.Join(cm.certPath, file.Name())
-				pemData, err := ioutil.ReadFile(certFile)
+				certFile := filepath.Join(cm.config.CertPath, file.Name())
+				pemData, err := os.ReadFile(certFile)
 				if err != nil {
 					if verbose {
 						log.Printf("[cert_manager] Failed to read certificate file %s: %v", certFile, err)
@@ -208,17 +210,17 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	}
 
 	// Load from NGINX config if provided
-	if cm.nginxConfigPath != "" {
-		pairs, configFiles, err := parseNginxConfig(cm.nginxConfigPath, verbose)
+	if cm.config.NginxConfigPath != "" {
+		pairs, configFiles, err := parseNginxConfig(cm.config.NginxConfigPath, verbose)
 		if err != nil {
-			log.Printf("[cert_manager] Error parsing NGINX config %s: %v", cm.nginxConfigPath, err)
+			log.Printf("[cert_manager] Error parsing NGINX config %s: %v", cm.config.NginxConfigPath, err)
 		} else {
 			// Store the list of config files for watching
 			cm.nginxConfigFiles = configFiles
 
 			for _, pair := range pairs {
 				// Read cert and key files separately
-				certPEM, err := ioutil.ReadFile(pair.CertPath)
+				certPEM, err := os.ReadFile(pair.CertPath)
 				if err != nil {
 					if verbose {
 						log.Printf("[cert_manager] Failed to read certificate file %s: %v", pair.CertPath, err)
@@ -226,7 +228,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 					continue
 				}
 
-				keyPEM, err := ioutil.ReadFile(pair.KeyPath)
+				keyPEM, err := os.ReadFile(pair.KeyPath)
 				if err != nil {
 					if verbose {
 						log.Printf("[cert_manager] Failed to read key file %s: %v", pair.KeyPath, err)
@@ -301,20 +303,20 @@ func (cm *Manager) TestCertificates() {
 	failCount := 0
 
 	// Test certificates from directory if provided
-	if cm.certPath != "" {
-		files, err := ioutil.ReadDir(cm.certPath)
+	if cm.config.CertPath != "" {
+		files, err := os.ReadDir(cm.config.CertPath)
 		if err != nil {
-			log.Printf("Warning: Error reading certificate directory %s: %v", cm.certPath, err)
+			log.Printf("Warning: Error reading certificate directory %s: %v", cm.config.CertPath, err)
 		} else {
-			log.Printf("Testing certificates in directory %s...\n", cm.certPath)
+			log.Printf("Testing certificates in directory %s...\n", cm.config.CertPath)
 
 			for _, file := range files {
 				if file.IsDir() {
 					continue
 				}
 
-				certFile := filepath.Join(cm.certPath, file.Name())
-				pemData, err := ioutil.ReadFile(certFile)
+				certFile := filepath.Join(cm.config.CertPath, file.Name())
+				pemData, err := os.ReadFile(certFile)
 				if err != nil {
 					log.Printf("✗ %s: Failed to read file: %v", file.Name(), err)
 					failCount++
@@ -351,23 +353,23 @@ func (cm *Manager) TestCertificates() {
 	}
 
 	// Test certificates from NGINX config if provided
-	if cm.nginxConfigPath != "" {
-		pairs, _, err := parseNginxConfig(cm.nginxConfigPath, cm.verbose)
+	if cm.config.NginxConfigPath != "" {
+		pairs, _, err := parseNginxConfig(cm.config.NginxConfigPath, cm.config.Verbose)
 		if err != nil {
-			log.Printf("Warning: Error parsing NGINX config %s: %v", cm.nginxConfigPath, err)
+			log.Printf("Warning: Error parsing NGINX config %s: %v", cm.config.NginxConfigPath, err)
 		} else {
-			log.Printf("\nTesting certificates from NGINX config %s...\n", cm.nginxConfigPath)
+			log.Printf("\nTesting certificates from NGINX config %s...\n", cm.config.NginxConfigPath)
 
 			for _, pair := range pairs {
 				// Read cert and key files
-				certPEM, err := ioutil.ReadFile(pair.CertPath)
+				certPEM, err := os.ReadFile(pair.CertPath)
 				if err != nil {
 					log.Printf("✗ %s: Failed to read certificate: %v", pair.CertPath, err)
 					failCount++
 					continue
 				}
 
-				keyPEM, err := ioutil.ReadFile(pair.KeyPath)
+				keyPEM, err := os.ReadFile(pair.KeyPath)
 				if err != nil {
 					log.Printf("✗ %s: Failed to read key: %v", pair.KeyPath, err)
 					failCount++
@@ -533,8 +535,8 @@ func (cm *Manager) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate,
 	}
 
 	// Finally, try to find any default certificate in cache if we were given a default hostname
-	if cm.defaultHostname != "" {
-		if cert, exists := cm.hostnameCache[cm.defaultHostname]; exists {
+	if cm.config.DefaultHostname != "" {
+		if cert, exists := cm.hostnameCache[cm.config.DefaultHostname]; exists {
 			return cert, nil
 		}
 	}

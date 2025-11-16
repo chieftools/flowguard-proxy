@@ -98,8 +98,13 @@ func NewManager(cfg *Config) *Manager {
 
 	// Create the proxy manager
 	pm := &Manager{
-		config:          cfg,
-		certManager:     certmanager.New(certPath, nginxConfigPath, defaultHostname, cfg.Verbose),
+		config: cfg,
+		certManager: certmanager.New(certmanager.Config{
+			Verbose:         cfg.Verbose,
+			CertPath:        certPath,
+			NginxConfigPath: nginxConfigPath,
+			DefaultHostname: defaultHostname,
+		}),
 		configManager:   configMgr,
 		middlewareChain: middlewareChain,
 	}
