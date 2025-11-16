@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -30,80 +29,12 @@ func main() {
 
 	log.Printf("FlowGuard version %s", Version)
 
-	// Check for setup subcommand first
-	if len(os.Args) >= 2 && os.Args[1] == "setup" {
-		if len(os.Args) < 3 {
-			log.Fatal("Usage: flowguard setup <host-key>")
-		}
-		hostKey := os.Args[2]
-
-		// Parse remaining flags for setup command
-		setupFlag := flag.NewFlagSet("setup", flag.ExitOnError)
-		configFile := setupFlag.String("config", "/etc/flowguard/config.json", "Path to the configuration file")
-
-		err := setupFlag.Parse(os.Args[3:])
-		if err != nil {
-			log.Printf("[ERROR] Failed to parse flags: %v", err)
-			os.Exit(1)
-		}
-
-		if err := setupHost(hostKey, *configFile); err != nil {
-			log.Printf("[ERROR] Failed to setup host: %v", err)
-			os.Exit(1)
-		}
-
-		log.Printf("[SUCCESS] Host configured successfully. Configuration saved to %s", *configFile)
-		os.Exit(0)
-	}
-
-	// Check for iplist subcommand
-	if len(os.Args) >= 2 && os.Args[1] == "iplist" {
-		// Parse flags for iplist command
-		iplistFlag := flag.NewFlagSet("iplist", flag.ExitOnError)
-		configFile := iplistFlag.String("config", "/etc/flowguard/config.json", "Path to the configuration file")
-		cacheDir := iplistFlag.String("cache-dir", "/var/cache/flowguard", "Directory for caching external data")
-		verbose := iplistFlag.Bool("verbose", false, "Enable verbose output")
-
-		// Parse flags from os.Args[2:] to get config/cache-dir if provided
-		// We need to find where the actual command args start
-		args := os.Args[2:]
-		nonFlagArgs := []string{}
-		for i := 0; i < len(args); i++ {
-			if strings.HasPrefix(args[i], "-") {
-				// This is a flag, skip it and its value
-				i++
-			} else {
-				nonFlagArgs = append(nonFlagArgs, args[i])
-			}
-		}
-
-		err := iplistFlag.Parse(os.Args[2:])
-		if err != nil {
-			log.Printf("[ERROR] Failed to parse flags: %v", err)
-			os.Exit(1)
-		}
-
-		// Re-parse non-flag args after flag parsing
-		nonFlagArgs = iplistFlag.Args()
-
-		if err := handleIPListCommand(nonFlagArgs, *configFile, *cacheDir, *verbose); err != nil {
-			log.Printf("[ERROR] %v", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-
 	var (
 		// Proxy configuration
 		bindAddrs  = flag.String("bind", "", "Comma-separated list of IP addresses to bind to (default: auto-detect public IPs)")
 		httpPort   = flag.String("http-port", "11080", "Port for HTTP proxy server")
 		httpsPort  = flag.String("https-port", "11443", "Port for HTTPS proxy server")
 		noRedirect = flag.Bool("no-redirect", false, "Skip iptables port redirection setup")
-
-		// Certificate configuration
-		certPath    = flag.String("cert-path", "", "Path to combined certificate files")
-		nginxConfig = flag.String("nginx-config", "", "Path to the Nginx configuration file")
-		testCerts   = flag.Bool("test-certs", false, "Test loading all certificates and exit")
 
 		// Behavior configuration
 		verbose    = flag.Bool("verbose", false, "Enable more verbose output")
@@ -112,51 +43,56 @@ func main() {
 	)
 	flag.Parse()
 
-	// Load config file first to get defaults
-	cfg, err := loadConfigDefaults(*configFile)
-	if err != nil {
-		log.Printf("Failed to load configuration from %s: %v", *configFile, err)
-	}
+	// flowguard setup <host-key>
+	if len(os.Args) >= 2 && os.Args[1] == "setup" {
+		if len(os.Args) < 3 {
+			log.Fatal("Usage: flowguard setup <host-key>")
+		}
 
-	// Override config with CLI flags if provided
-	if *cacheDir != "/var/cache/flowguard" {
-		cfg.CacheDir = *cacheDir
-	} else if cfg.CacheDir == "" {
-		cfg.CacheDir = *cacheDir
-	}
+		if err := setupHost(os.Args[2], *configFile); err != nil {
+			log.Printf("[ERROR] Failed to setup host: %v", err)
+			os.Exit(1)
+		}
 
-	// Apply CLI certificate paths if provided (needed for --test-certs)
-	if *certPath != "" {
-		cfg.CertPath = *certPath
-	}
-	if *nginxConfig != "" {
-		cfg.NginxConfigPath = *nginxConfig
-	}
-
-	// Certificate test mode
-	if *testCerts {
-		cm := certmanager.New(certmanager.Config{
-			Verbose:         cfg.Verbose,
-			CertPath:        cfg.CertPath,
-			NginxConfigPath: cfg.NginxConfigPath,
-		})
-		cm.TestCertificates()
+		log.Printf("[SUCCESS] Host configured successfully. Configuration saved to %s", *configFile)
 		os.Exit(0)
 	}
 
-	// Apply remaining CLI flags
-	cfg.Verbose = *verbose
-	cfg.Version = Version
-	cfg.CertPath = *certPath
-	cfg.HTTPPort = *httpPort
-	cfg.HTTPSPort = *httpsPort
-	cfg.BindAddrs = parseBindAddrsList(*bindAddrs)
-	cfg.UserAgent = fmt.Sprintf("FlowGuard/%s", Version)
-	cfg.NoRedirect = *noRedirect
-	cfg.ConfigFile = *configFile
-	cfg.NginxConfigPath = *nginxConfig
+	// At this point we expect to be able to load the config file
+	configMgr, err := config.NewManager(*configFile, fmt.Sprintf("FlowGuard/%s", Version), Version, *cacheDir, *verbose)
+	if err != nil {
+		log.Printf("Failed to load configuration from %s: %v", *configFile, err)
+		os.Exit(1)
+	}
 
-	proxyManager := proxy.NewManager(cfg)
+	// flowguard iplist [<name> [contains <ip>]]
+	if len(os.Args) >= 2 && os.Args[1] == "iplist" {
+		if err := handleIPListCommand(os.Args[2:], configMgr, *verbose); err != nil {
+			log.Printf("[ERROR] %v", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	// flowguard certificates [<hostname>]
+	if len(os.Args) >= 2 && os.Args[1] == "certificates" {
+		if err := handleCertificatesCommand(os.Args[2:], configMgr, *verbose); err != nil {
+			log.Printf("[ERROR] %v", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	// Create and start proxy manager
+	proxyManager := proxy.NewManager(configMgr, &proxy.Config{
+		Verbose:    *verbose,
+		Version:    Version,
+		HTTPPort:   *httpPort,
+		HTTPSPort:  *httpsPort,
+		BindAddrs:  parseBindAddrsList(*bindAddrs),
+		UserAgent:  fmt.Sprintf("FlowGuard/%s", Version),
+		NoRedirect: *noRedirect,
+	})
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -189,31 +125,6 @@ func parseBindAddrsList(list string) []string {
 	}
 
 	return addrs
-}
-
-// loadConfigDefaults loads configuration defaults from config file
-func loadConfigDefaults(configFile string) (*proxy.Config, error) {
-	type ConfigDefaults struct {
-		CacheDir        string `json:"cache_dir,omitempty"`
-		CertPath        string `json:"cert_path,omitempty"`
-		NginxConfigPath string `json:"nginx_config_path,omitempty"`
-	}
-
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		return &proxy.Config{}, err
-	}
-
-	var defaults ConfigDefaults
-	if err := json.Unmarshal(data, &defaults); err != nil {
-		return &proxy.Config{}, err
-	}
-
-	return &proxy.Config{
-		CacheDir:        defaults.CacheDir,
-		CertPath:        defaults.CertPath,
-		NginxConfigPath: defaults.NginxConfigPath,
-	}, nil
 }
 
 // setupHost downloads the host configuration from the FlowGuard API and saves it to disk
@@ -253,26 +164,17 @@ func setupHost(hostKey, configFile string) error {
 }
 
 // handleIPListCommand handles the iplist subcommand
-func handleIPListCommand(args []string, configFile, cacheDir string, verbose bool) error {
-	// Load configuration to get IP lists
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		return fmt.Errorf("failed to read config file: %w", err)
-	}
-
-	var cfg config.Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("failed to parse config: %w", err)
-	}
+func handleIPListCommand(args []string, configMgr *config.Manager, verbose bool) error {
+	cfg := configMgr.GetConfig()
 
 	// Case 1: No args - list all configured IP lists
 	if len(args) == 0 {
 		if cfg.IPLists == nil || len(*cfg.IPLists) == 0 {
-			fmt.Println("No IP lists configured in", configFile)
+			fmt.Println("No IP lists configured")
 			return nil
 		}
 
-		fmt.Printf("Configured IP lists in %s:\n\n", configFile)
+		fmt.Printf("Configured IP lists:\n\n")
 		for name, listCfg := range *cfg.IPLists {
 			fmt.Printf("  %s:\n", name)
 			if listCfg.URL != "" {
@@ -298,21 +200,15 @@ func handleIPListCommand(args []string, configFile, cacheDir string, verbose boo
 
 	listCfg := (*cfg.IPLists)[listName]
 
-	// Create cache instance
-	cacheInstance, err := cache.NewCache(cacheDir, fmt.Sprintf("FlowGuard/%s", Version), verbose)
-	if err != nil {
-		return fmt.Errorf("failed to create cache: %w", err)
-	}
-
 	// Case 2: Load list and show stats (no contains command)
 	if len(args) == 1 {
-		return loadAndShowStats(listName, listCfg, cacheInstance)
+		return loadAndShowStats(listName, listCfg, configMgr.GetCache())
 	}
 
 	// Case 3: Check if IP is in list
 	if len(args) == 3 && args[1] == "contains" {
 		ipAddr := args[2]
-		return checkIPInList(listName, listCfg, ipAddr, cacheInstance)
+		return checkIPInList(listName, listCfg, ipAddr, configMgr.GetCache())
 	}
 
 	return fmt.Errorf("invalid arguments. Usage:\n  flowguard iplist\n  flowguard iplist <name>\n  flowguard iplist <name> contains <ip>")
@@ -434,6 +330,36 @@ func checkIPInList(listName string, listCfg *config.IPListConfig, ipAddr string,
 		os.Exit(1)
 	}
 
+	return nil
+}
+
+// handleCertificatesCommand handles the certificates subcommand
+func handleCertificatesCommand(args []string, configMgr *config.Manager, verbose bool) error {
+	cfg := configMgr.GetConfig()
+
+	// Check if we have any certificate sources configured
+	if cfg.Host.CertPath == "" && cfg.Host.NginxConfigPath == "" {
+		return fmt.Errorf("no certificate sources configured. Set host.cert_path or host.nginx_config_path the the configuration file")
+	}
+
+	// Create certificate manager
+	cm := certmanager.New(certmanager.Config{
+		Verbose:         verbose,
+		CertPath:        cfg.Host.CertPath,
+		NginxConfigPath: cfg.Host.NginxConfigPath,
+		DefaultHostname: cfg.Host.DefaultHostname,
+	})
+	defer cm.Stop()
+
+	// Case 1: No args - test all certificates
+	if len(args) == 0 {
+		cm.TestCertificates()
+		return nil
+	}
+
+	// Case 2: Show certificates for specific hostname
+	hostname := args[0]
+	cm.ShowCertificatesForHostname(hostname)
 	return nil
 }
 

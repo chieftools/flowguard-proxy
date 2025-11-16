@@ -40,9 +40,9 @@ type HostConfig struct {
 	Key             string `json:"key,omitempty"`
 	Name            string `json:"name"`
 	Team            string `json:"team,omitempty"`
-	DefaultHostname string `json:"default_hostname,omitempty"`
 	CertPath        string `json:"cert_path,omitempty"`
 	NginxConfigPath string `json:"nginx_config_path,omitempty"`
+	DefaultHostname string `json:"default_hostname,omitempty"`
 }
 
 type LoggingConfig struct {
@@ -275,6 +275,7 @@ func (m *Manager) Load() error {
 	return nil
 }
 
+// GetConfig returns a copy of the current configuration
 // GetConfig returns a copy of the current configuration
 func (m *Manager) GetConfig() *Config {
 	m.mu.RLock()

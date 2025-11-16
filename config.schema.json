@@ -51,10 +51,6 @@
         },
         "realtime": {
             "$ref": "#/definitions/realtime"
-        },
-        "cache_dir": {
-            "type": "string",
-            "description": "Directory for caching external data (IP databases, etc.)"
         }
     },
     "additionalProperties": false,

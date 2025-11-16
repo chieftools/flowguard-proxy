@@ -14,17 +14,13 @@ import (
 )
 
 type Config struct {
-	Verbose         bool
-	Version         string
-	CertPath        string
-	NginxConfigPath string
-	CacheDir        string
-	HTTPPort        string
-	HTTPSPort       string
-	BindAddrs       []string
-	UserAgent       string
-	NoRedirect      bool
-	ConfigFile      string
+	Verbose    bool
+	Version    string
+	HTTPPort   string
+	HTTPSPort  string
+	BindAddrs  []string
+	UserAgent  string
+	NoRedirect bool
 }
 
 type Manager struct {
@@ -37,14 +33,7 @@ type Manager struct {
 	mu              sync.RWMutex
 }
 
-func NewManager(cfg *Config) *Manager {
-	// Create configuration manager
-	configMgr, err := config.NewManager(cfg.ConfigFile, cfg.UserAgent, cfg.Version, cfg.CacheDir, cfg.Verbose)
-	if err != nil {
-		log.Printf("Failed to load configuration from %s: %v", cfg.ConfigFile, err)
-		os.Exit(1)
-	}
-
+func NewManager(configMgr *config.Manager, cfg *Config) *Manager {
 	// Start config file watcher for hot-reload
 	configMgr.StartWatcher()
 
@@ -78,8 +67,8 @@ func NewManager(cfg *Config) *Manager {
 	}
 
 	// Get certificate paths from both CLI config and JSON config
-	certPath := cfg.CertPath
-	nginxConfigPath := cfg.NginxConfigPath
+	certPath := ""
+	nginxConfigPath := ""
 
 	// Also check JSON config for cert/nginx paths (JSON config can override CLI)
 	if jsonCfg := configMgr.GetConfig(); jsonCfg != nil && jsonCfg.Host != nil {
