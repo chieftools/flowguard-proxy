@@ -276,7 +276,6 @@ func (m *Manager) Load() error {
 }
 
 // GetConfig returns a copy of the current configuration
-// GetConfig returns a copy of the current configuration
 func (m *Manager) GetConfig() *Config {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
