@@ -46,10 +46,8 @@ type HostConfig struct {
 }
 
 type LoggingConfig struct {
-	FilePath        string   `json:"file_path,omitempty"`
-	AxiomToken      string   `json:"axiom_token,omitempty"`
-	AxiomDataset    string   `json:"axiom_dataset,omitempty"`
-	HeaderWhitelist []string `json:"header_whitelist,omitempty"`
+	Sinks           map[string]map[string]interface{} `json:"sinks,omitempty"`
+	HeaderWhitelist []string                          `json:"header_whitelist,omitempty"`
 }
 
 type IPDatabaseConfig struct {

@@ -408,17 +408,15 @@
             "type": "object",
             "description": "Request logging configuration",
             "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to log file, leave empty to disable file logging"
-                },
-                "axiom_token": {
-                    "type": "string",
-                    "description": "The Axiom API token to send logs to, leave empty to disable Axiom logging"
-                },
-                "axiom_dataset": {
-                    "type": "string",
-                    "description": "The Axiom dataset to send logs to, leave empty to disable Axiom logging"
+                "sinks": {
+                    "type": "object",
+                    "description": "Named logging sinks (destinations). Multiple sinks of the same type can be configured.",
+                    "patternProperties": {
+                        "^[a-zA-Z0-9_-]+$": {
+                            "$ref": "#/definitions/logSink"
+                        }
+                    },
+                    "additionalProperties": false
                 },
                 "header_whitelist": {
                     "type": "array",
@@ -429,6 +427,57 @@
                     }
                 }
             },
+            "additionalProperties": false
+        },
+        "logSink": {
+            "type": "object",
+            "description": "A logging sink configuration",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": ["file", "axiom"],
+                    "description": "The type of logging sink"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "For file sink: path to the log file"
+                },
+                "token": {
+                    "type": "string",
+                    "description": "For axiom sink: Axiom API token"
+                },
+                "dataset": {
+                    "type": "string",
+                    "description": "For axiom sink: Axiom dataset name"
+                }
+            },
+            "required": ["type"],
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {
+                            "type": {
+                                "const": "file"
+                            }
+                        }
+                    },
+                    "then": {
+                        "required": ["path"]
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "type": {
+                                "const": "axiom"
+                            }
+                        }
+                    },
+                    "then": {
+                        "required": ["token", "dataset"]
+                    }
+                }
+            ],
             "additionalProperties": false
         },
         "realtime": {

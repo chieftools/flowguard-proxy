@@ -5,23 +5,17 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"flowguard/config"
+	"flowguard/logger"
 	"flowguard/normalization"
-
-	"github.com/axiomhq/axiom-go/axiom"
-	"github.com/axiomhq/axiom-go/axiom/ingest"
 )
 
 const (
@@ -31,19 +25,6 @@ const (
 	ContextKeyStartTime  contextKey = "start_time"
 	ContextKeyRuleResult contextKey = "rule_result"
 )
-
-type RequestLogEntry struct {
-	StreamID  string `json:"stream_id"`
-	Timestamp string `json:"timestamp"`
-
-	Host       RequestLogEntryHostInfo        `json:"host"`
-	Rule       RequestLogEntryRuleInfo        `json:"rule"`
-	Proxy      *RequestLogEntryIPInfo         `json:"proxy,omitempty"`
-	Client     RequestLogEntryIPInfo          `json:"client"`
-	Request    RequestLogEntryRequestInfo     `json:"request"`
-	Response   RequestLogEntryResponseInfo    `json:"response"`
-	Cloudflare *RequestLogEntryCloudflareInfo `json:"cloudflare,omitempty"`
-}
 
 type RequestLogEntryIPInfo struct {
 	IP      string `json:"ip"`
@@ -121,25 +102,20 @@ type RequestLogEntryCloudflareInfo struct {
 }
 
 type LoggingMiddleware struct {
-	configMgr          *config.Manager
-	logFile            *os.File
-	enabled            bool
-	version            string
-	config             *config.LoggingConfig
-	hostInfo           *RequestLogEntryHostInfo
-	headerWhitelist    []string
-	axiomClient        *axiom.Client
-	axiomChannel       chan axiom.Event
-	axiomCancelFunc    context.CancelFunc
-	axiomChannelDrops  uint64
-	axiomChannelResets uint64
-	mu                 sync.RWMutex
+	configMgr       *config.Manager
+	loggerManager   *logger.Manager
+	enabled         bool
+	version         string
+	hostInfo        *RequestLogEntryHostInfo
+	headerWhitelist []string
+	mu              sync.RWMutex
 }
 
 func NewLoggingMiddleware(configMgr *config.Manager) *LoggingMiddleware {
 	m := &LoggingMiddleware{
-		configMgr: configMgr,
-		version:   configMgr.GetVersion(), // Store version once at creation
+		configMgr:     configMgr,
+		loggerManager: logger.NewManager(),
+		version:       configMgr.GetVersion(), // Store version once at creation
 	}
 
 	m.onConfigChange(configMgr.GetConfig())
@@ -148,309 +124,6 @@ func NewLoggingMiddleware(configMgr *config.Manager) *LoggingMiddleware {
 	configMgr.OnChange(m.onConfigChange)
 
 	return m
-}
-
-func (lm *LoggingMiddleware) logRequest(r *http.Request, wrapper *ResponseWriterWrapper) {
-	lm.mu.RLock()
-	defer lm.mu.RUnlock()
-
-	if !lm.enabled {
-		return
-	}
-
-	entry := &RequestLogEntry{
-		StreamID:  GetStreamID(r),
-		Timestamp: time.Now().Format(time.RFC3339),
-
-		Host:       *lm.hostInfo,
-		Rule:       getRuleInfo(r),
-		Proxy:      getProxyInfo(r),
-		Client:     getClientInfo(r),
-		Request:    getRequestInfo(r, lm.headerWhitelist),
-		Response:   getResponseInfo(r, wrapper, lm.headerWhitelist),
-		Cloudflare: getCloudflareInfo(r),
-	}
-
-	jsonBytes, err := json.Marshal(entry)
-	if err != nil {
-		log.Printf("[middleware:logging] Failed to marshal log entry: %v", err)
-		return
-	}
-
-	if lm.logFile != nil {
-		if _, err := lm.logFile.WriteString(string(jsonBytes) + "\n"); err != nil {
-			log.Printf("[middleware:logging] Failed to write to log file: %v", err)
-		}
-	}
-
-	if lm.axiomChannel != nil {
-		var event axiom.Event
-		if err := json.Unmarshal(jsonBytes, &event); err != nil {
-			log.Printf("[middleware:logging] Failed to unmarshal log entry for Axiom: %v", err)
-			return
-		}
-
-		select {
-		case lm.axiomChannel <- event:
-		default:
-			atomic.AddUint64(&lm.axiomChannelDrops, 1)
-			drops := atomic.LoadUint64(&lm.axiomChannelDrops)
-			if drops%100 == 1 {
-				log.Printf("[middleware:logging] Axiom channel is full, total drops: %d", drops)
-			}
-		}
-	}
-}
-
-func (lm *LoggingMiddleware) onConfigChange(cfg *config.Config) {
-	if err := lm.updateLogOutput(cfg); err != nil {
-		log.Printf("[middleware:logging] Failed to update log output on config change: %v", err)
-	}
-}
-
-func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
-	lm.mu.Lock()
-	defer lm.mu.Unlock()
-
-	if cfg == nil || cfg.Logging == nil {
-		lm.config = nil
-		lm.enabled = false
-		lm.hostInfo = nil
-
-		return nil
-	}
-
-	loggingCfg := cfg.Logging
-
-	lm.enabled = loggingCfg.FilePath != "" || (loggingCfg.AxiomDataset != "" && loggingCfg.AxiomToken != "")
-	lm.hostInfo = &RequestLogEntryHostInfo{
-		ID:      cfg.Host.ID,
-		Name:    cfg.Host.Name,
-		Team:    cfg.Host.Team,
-		Version: lm.version,
-	}
-	lm.headerWhitelist = loggingCfg.HeaderWhitelist
-
-	err := lm.updateFileOutput(loggingCfg)
-	if err != nil {
-		return err
-	}
-
-	err = lm.updateAxiomOutput(loggingCfg)
-	if err != nil {
-		return err
-	}
-
-	lm.config = loggingCfg
-
-	return nil
-}
-
-func (lm *LoggingMiddleware) updateFileOutput(loggingCfg *config.LoggingConfig) error {
-	if lm.config != nil && lm.config.FilePath == loggingCfg.FilePath {
-		return nil
-	}
-
-	if lm.logFile != nil {
-		err := lm.logFile.Close()
-		if err != nil {
-			return err
-		}
-		lm.logFile = nil
-	}
-
-	if loggingCfg.FilePath == "" {
-		return nil
-	}
-
-	file, err := os.OpenFile(loggingCfg.FilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to open log file %s: %w", loggingCfg.FilePath, err)
-	}
-	lm.logFile = file
-
-	log.Printf("[middleware:logging] File logging enabled to %s", loggingCfg.FilePath)
-
-	return nil
-}
-
-func (lm *LoggingMiddleware) updateAxiomOutput(loggingCfg *config.LoggingConfig) error {
-	if lm.config != nil && lm.config.AxiomDataset == loggingCfg.AxiomDataset && lm.config.AxiomToken == loggingCfg.AxiomToken {
-		return nil
-	}
-
-	if lm.axiomCancelFunc != nil {
-		lm.axiomCancelFunc()
-		lm.axiomCancelFunc = nil
-	}
-
-	if lm.axiomChannel != nil {
-		close(lm.axiomChannel)
-		lm.axiomChannel = nil
-		lm.axiomClient = nil
-	}
-
-	if loggingCfg.AxiomDataset == "" || loggingCfg.AxiomToken == "" {
-		return nil
-	}
-
-	client, err := axiom.NewClient(
-		axiom.SetToken(loggingCfg.AxiomToken),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create Axiom client: %w", err)
-	}
-
-	lm.axiomClient = client
-	lm.axiomChannel = make(chan axiom.Event, 10000)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	lm.axiomCancelFunc = cancel
-
-	go lm.runAxiomIngestion(ctx, loggingCfg.AxiomDataset)
-
-	log.Printf("[middleware:logging] Axiom logging enabled to dataset %s", loggingCfg.AxiomDataset)
-
-	return nil
-}
-
-func (lm *LoggingMiddleware) runAxiomIngestion(ctx context.Context, dataset string) {
-	const (
-		initialRetryDelay   = 1 * time.Second
-		maxRetryDelay       = 5 * time.Minute
-		retryMultiplier     = 2.0
-		channelCheckPeriod  = 30 * time.Second
-		maxDropsBeforeReset = 1000
-	)
-
-	retryDelay := initialRetryDelay
-	consecutiveFailures := 0
-	lastChannelCheck := time.Now()
-	lastDropCount := uint64(0)
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Printf("[middleware:logging] Axiom ingestion stopped (context cancelled)")
-			return
-		default:
-		}
-
-		lm.mu.RLock()
-		client := lm.axiomClient
-		channel := lm.axiomChannel
-		lm.mu.RUnlock()
-
-		if client == nil || channel == nil {
-			log.Printf("[middleware:logging] Axiom client or channel is nil, stopping ingestion")
-			return
-		}
-
-		if time.Since(lastChannelCheck) > channelCheckPeriod {
-			currentDrops := atomic.LoadUint64(&lm.axiomChannelDrops)
-			dropsInPeriod := currentDrops - lastDropCount
-
-			if dropsInPeriod > maxDropsBeforeReset {
-				log.Printf("[middleware:logging] Excessive drops detected (%d in last %v), recreating channel",
-					dropsInPeriod, channelCheckPeriod)
-
-				lm.recreateAxiomChannel()
-				atomic.AddUint64(&lm.axiomChannelResets, 1)
-
-				lm.mu.RLock()
-				channel = lm.axiomChannel
-				lm.mu.RUnlock()
-			}
-
-			lastDropCount = currentDrops
-			lastChannelCheck = time.Now()
-		}
-
-		log.Printf("[middleware:logging] Starting Axiom ingestion to dataset %s", dataset)
-
-		ingestionStarted := time.Now()
-
-		// This blocks until context is cancelled or error occurs
-		_, err := client.IngestChannel(ctx, dataset, channel, ingest.SetTimestampField("timestamp"))
-
-		ingestionDuration := time.Since(ingestionStarted)
-
-		if ctx.Err() != nil {
-			log.Printf("[middleware:logging] Axiom ingestion stopped (main context cancelled)")
-			return
-		}
-
-		if err != nil {
-			// Check if this is just a context cancellation from unknown source
-			if errors.Is(err, context.Canceled) {
-				log.Printf("[middleware:logging] Axiom ingestion cancelled after %v, reconnecting immediately", ingestionDuration)
-				// Don't treat context cancellation as failure - immediately retry
-				continue
-			}
-
-			// This is a real error
-			consecutiveFailures++
-			log.Printf("[middleware:logging] Axiom ingestion error (failure #%d) after %v: %v. Retrying in %v", consecutiveFailures, ingestionDuration, err, retryDelay)
-
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(retryDelay):
-				retryDelay = time.Duration(float64(retryDelay) * retryMultiplier)
-				if retryDelay > maxRetryDelay {
-					retryDelay = maxRetryDelay
-				}
-			}
-		} else {
-			// IngestChannel returned without error (shouldn't normally happen)
-			if consecutiveFailures > 0 {
-				log.Printf("[middleware:logging] Axiom ingestion recovered after %d failures", consecutiveFailures)
-			}
-
-			log.Printf("[middleware:logging] Axiom ingestion completed normally after %v, reconnecting", ingestionDuration)
-			consecutiveFailures = 0
-			retryDelay = initialRetryDelay
-		}
-	}
-}
-
-func (lm *LoggingMiddleware) recreateAxiomChannel() {
-	lm.mu.Lock()
-	defer lm.mu.Unlock()
-
-	if lm.axiomChannel != nil {
-		oldChannel := lm.axiomChannel
-		lm.axiomChannel = make(chan axiom.Event, 10000)
-
-		go func() {
-			timeout := time.After(5 * time.Second)
-			drained := 0
-			for {
-				select {
-				case event, ok := <-oldChannel:
-					if !ok {
-						return
-					}
-					select {
-					case lm.axiomChannel <- event:
-						drained++
-					case <-timeout:
-						log.Printf("[middleware:logging] Timeout draining old channel, saved %d events", drained)
-						close(oldChannel)
-						return
-					}
-				case <-timeout:
-					log.Printf("[middleware:logging] Timeout draining old channel, saved %d events", drained)
-					close(oldChannel)
-					return
-				default:
-					log.Printf("[middleware:logging] Old channel drained, saved %d events", drained)
-					close(oldChannel)
-					return
-				}
-			}
-		}()
-	}
 }
 
 func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next http.Handler) {
@@ -481,26 +154,91 @@ func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 }
 
 func (lm *LoggingMiddleware) Stop() {
+	if err := lm.loggerManager.Close(); err != nil {
+		log.Printf("[middleware:logging] Failed to close logger manager: %v", err)
+	}
+}
+
+func (lm *LoggingMiddleware) logRequest(r *http.Request, wrapper *ResponseWriterWrapper) {
+	lm.mu.RLock()
+	defer lm.mu.RUnlock()
+
+	if !lm.enabled {
+		return
+	}
+
+	entry := &logger.LogEntry{
+		Data: map[string]interface{}{
+			"stream_id": GetStreamID(r),
+			"timestamp": time.Now().Format(time.RFC3339),
+			"host":      lm.hostInfo,
+			"rule":      getRuleInfo(r),
+			"client":    getClientInfo(r),
+			"request":   getRequestInfo(r, lm.headerWhitelist),
+			"response":  getResponseInfo(r, wrapper, lm.headerWhitelist),
+		},
+	}
+
+	if proxy := getProxyInfo(r); proxy != nil {
+		entry.Data["proxy"] = proxy
+	}
+
+	if cloudflare := getCloudflareInfo(r); cloudflare != nil {
+		entry.Data["cloudflare"] = cloudflare
+	}
+
+	lm.loggerManager.Write(entry)
+}
+
+func (lm *LoggingMiddleware) onConfigChange(cfg *config.Config) {
+	if err := lm.updateLogOutput(cfg); err != nil {
+		log.Printf("[middleware:logging] Failed to update log output on config change: %v", err)
+	}
+}
+
+func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 
-	if lm.axiomCancelFunc != nil {
-		lm.axiomCancelFunc()
-		lm.axiomCancelFunc = nil
-	}
-
-	if lm.axiomChannel != nil {
-		close(lm.axiomChannel)
-		lm.axiomChannel = nil
-		lm.axiomClient = nil
-	}
-
-	if lm.logFile != nil {
-		if err := lm.logFile.Close(); err != nil {
-			log.Printf("[middleware:logging] Failed to close log file: %v", err)
+	if cfg == nil || cfg.Logging == nil {
+		lm.enabled = false
+		lm.hostInfo = nil
+		// Close all sinks
+		if err := lm.loggerManager.Close(); err != nil {
+			log.Printf("[middleware:logging] Error closing sinks: %v", err)
 		}
-		lm.logFile = nil
+		return nil
 	}
+
+	loggingCfg := cfg.Logging
+
+	// Update sinks in the logger manager
+	// The manager will intelligently detect which sinks have actually changed
+	if err := lm.loggerManager.UpdateSinks(loggingCfg.Sinks); err != nil {
+		return err
+	}
+
+	// Update enabled status
+	lm.enabled = lm.loggerManager.HasSinks()
+
+	// Update host info
+	lm.hostInfo = &RequestLogEntryHostInfo{
+		ID:      cfg.Host.ID,
+		Name:    cfg.Host.Name,
+		Team:    cfg.Host.Team,
+		Version: lm.version,
+	}
+
+	// Update header whitelist
+	lm.headerWhitelist = loggingCfg.HeaderWhitelist
+
+	if lm.enabled {
+		log.Printf("[middleware:logging] Logging enabled with %d sink(s)", lm.loggerManager.SinkCount())
+	} else {
+		log.Printf("[middleware:logging] Logging disabled (no sinks configured)")
+	}
+
+	return nil
 }
 
 func GetStreamID(r *http.Request) string {
