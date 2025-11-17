@@ -103,7 +103,7 @@ func (c *Client) Connect() error {
 	c.conn = conn
 	c.isConnecting = false
 
-	log.Printf("[realtime] Connected to %s", wsURL)
+	log.Printf("[realtime] Connected to %s", c.config.Host)
 
 	// Start message handling
 	go c.handleMessages()
