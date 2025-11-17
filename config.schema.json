@@ -435,7 +435,7 @@
             "properties": {
                 "type": {
                     "type": "string",
-                    "enum": ["file", "axiom"],
+                    "enum": ["file", "axiom", "loki"],
                     "description": "The type of logging sink"
                 },
                 "path": {
@@ -449,6 +449,30 @@
                 "dataset": {
                     "type": "string",
                     "description": "For axiom sink: Axiom dataset name"
+                },
+                "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "For loki sink: Loki push API URL (e.g., http://loki:3100/loki/api/v1/push)"
+                },
+                "labels": {
+                    "type": "object",
+                    "description": "For loki sink: Static labels to attach to all log entries",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "tenant_id": {
+                    "type": "string",
+                    "description": "For loki sink: Optional X-Scope-OrgID header for multi-tenancy"
+                },
+                "username": {
+                    "type": "string",
+                    "description": "For loki sink: Optional basic auth username"
+                },
+                "password": {
+                    "type": "string",
+                    "description": "For loki sink: Optional basic auth password"
                 }
             },
             "required": ["type"],
@@ -475,6 +499,18 @@
                     },
                     "then": {
                         "required": ["token", "dataset"]
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "type": {
+                                "const": "loki"
+                            }
+                        }
+                    },
+                    "then": {
+                        "required": ["url"]
                     }
                 }
             ],
