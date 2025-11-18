@@ -168,7 +168,7 @@ func (s *Server) CleanupPortRedirect() {
 			removed++
 			totalRemoved++
 		}
-		if removed > 0 {
+		if s.config.verbose && removed > 0 {
 			log.Printf("[%s] removed %d instance(s) of rule: %v", iptablesCmd, removed, cmd[1:])
 		}
 	}
