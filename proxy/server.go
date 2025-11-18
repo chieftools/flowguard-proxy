@@ -84,6 +84,9 @@ func (s *Server) SetupPortRedirect() error {
 		return nil
 	}
 
+	// Clean up any existing rules first (in case of previous crash)
+	s.CleanupPortRedirect()
+
 	// Detect the interface for this IP
 	iface, err := getInterfaceForIP(s.config.bindAddr)
 	if err != nil {
@@ -151,16 +154,28 @@ func (s *Server) CleanupPortRedirect() {
 		{iptablesCmd, "-D", "INPUT", "-d", s.config.bindAddr, "-p", "tcp", "--dport", s.config.bindPort, "-j", "ACCEPT", "-m", "comment", "--comment", "FlowGuard"},
 	}
 
-	// Execute all commands
+	// Remove all instances of each rule (loop until deletion fails)
+	totalRemoved := 0
 	for _, cmd := range commands {
-		err = exec.Command(cmd[0], cmd[1:]...).Run()
-		if err != nil {
-			// We can ignore errors here as the rule might not exist
-			return
+		removed := 0
+		// Keep removing until we get an error (rule doesn't exist)
+		for {
+			err = exec.Command(cmd[0], cmd[1:]...).Run()
+			if err != nil {
+				// Rule doesn't exist anymore, move to next rule
+				break
+			}
+			removed++
+			totalRemoved++
+		}
+		if removed > 0 {
+			log.Printf("[%s] removed %d instance(s) of rule: %v", iptablesCmd, removed, cmd[1:])
 		}
 	}
 
-	log.Printf("[%s] redirection cleanup complete for %s:%s", iptablesCmd, s.config.bindAddr, s.config.bindPort)
+	if totalRemoved > 0 {
+		log.Printf("[%s] redirection cleanup complete for %s:%s (%d rules removed)", iptablesCmd, s.config.bindAddr, s.config.bindPort, totalRemoved)
+	}
 }
 
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
