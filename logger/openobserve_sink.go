@@ -27,7 +27,6 @@ type OpenObserveSink struct {
 	channelDrops  uint64
 	channelResets uint64
 	wg            sync.WaitGroup
-	debugOnce     sync.Once
 }
 
 // OpenObserveSinkConfig represents the configuration for an OpenObserve sink
@@ -302,15 +301,6 @@ func (s *OpenObserveSink) sendBatch(ctx context.Context, entries []*LogEntry) er
 
 		flattenedEntries = append(flattenedEntries, flattened)
 	}
-
-	// Debug: Log first entry to verify flattening (only once)
-	s.debugOnce.Do(func() {
-		if len(flattenedEntries) > 0 {
-			if debugJSON, err := json.MarshalIndent(flattenedEntries[0], "", "  "); err == nil {
-				log.Printf("[logger:openobserve] Sink %s flattened entry sample:\n%s", s.name, string(debugJSON))
-			}
-		}
-	})
 
 	// Marshal request (OpenObserve expects an array of JSON objects)
 	requestBody, err := json.Marshal(flattenedEntries)
