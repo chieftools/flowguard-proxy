@@ -435,7 +435,7 @@
             "properties": {
                 "type": {
                     "type": "string",
-                    "enum": ["file", "axiom", "loki"],
+                    "enum": ["file", "axiom", "loki", "openobserve"],
                     "description": "The type of logging sink"
                 },
                 "path": {
@@ -453,7 +453,15 @@
                 "url": {
                     "type": "string",
                     "format": "uri",
-                    "description": "For loki sink: Loki push API URL (e.g., http://loki:3100/loki/api/v1/push)"
+                    "description": "For loki sink: Loki push API URL (e.g., http://loki:3100/loki/api/v1/push). For openobserve sink: OpenObserve base URL (e.g., https://observe.example.com)"
+                },
+                "organization": {
+                    "type": "string",
+                    "description": "For openobserve sink: Organization name in OpenObserve"
+                },
+                "stream": {
+                    "type": "string",
+                    "description": "For openobserve sink: Stream name (default: flowguard)"
                 },
                 "labels": {
                     "type": "object",
@@ -468,11 +476,11 @@
                 },
                 "username": {
                     "type": "string",
-                    "description": "For loki sink: Optional basic auth username"
+                    "description": "For loki sink: Optional basic auth username. For openobserve sink: Basic auth username (typically email)"
                 },
                 "password": {
                     "type": "string",
-                    "description": "For loki sink: Optional basic auth password"
+                    "description": "For loki sink: Optional basic auth password. For openobserve sink: Basic auth password (API token)"
                 }
             },
             "required": ["type"],
@@ -511,6 +519,18 @@
                     },
                     "then": {
                         "required": ["url"]
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "type": {
+                                "const": "openobserve"
+                            }
+                        }
+                    },
+                    "then": {
+                        "required": ["url", "organization"]
                     }
                 }
             ],
