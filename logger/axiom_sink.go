@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -23,6 +24,7 @@ type AxiomSink struct {
 	configHash    string
 	channelDrops  uint64
 	channelResets uint64
+	wg            sync.WaitGroup
 }
 
 // AxiomSinkConfig represents the configuration for an Axiom sink
@@ -80,6 +82,7 @@ func NewAxiomSink(name string, config map[string]interface{}) (Sink, error) {
 	}
 
 	// Start ingestion goroutine
+	sink.wg.Add(1)
 	go sink.runIngestion(ctx)
 
 	log.Printf("[logger:axiom] Axiom sink %s initialized: dataset=%s", name, sinkConfig.Dataset)
@@ -122,17 +125,22 @@ func (s *AxiomSink) Write(entry *LogEntry) error {
 func (s *AxiomSink) Close() error {
 	log.Printf("[logger:axiom] Closing Axiom sink %s", s.name)
 
+	// Cancel context to signal shutdown
 	if s.cancelFunc != nil {
 		s.cancelFunc()
-		s.cancelFunc = nil
 	}
 
+	// Wait for ingestion goroutine to finish
+	s.wg.Wait()
+
+	// Now it's safe to clean up resources
 	if s.channel != nil {
 		close(s.channel)
 		s.channel = nil
 	}
 
 	s.client = nil
+	s.cancelFunc = nil
 
 	return nil
 }
@@ -149,6 +157,8 @@ func (s *AxiomSink) ConfigHash() string {
 
 // runIngestion runs the Axiom ingestion loop
 func (s *AxiomSink) runIngestion(ctx context.Context) {
+	defer s.wg.Done()
+
 	const (
 		initialRetryDelay   = 1 * time.Second
 		maxRetryDelay       = 5 * time.Minute

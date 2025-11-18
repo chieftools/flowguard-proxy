@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -25,6 +26,7 @@ type LokiSink struct {
 	configHash    string
 	channelDrops  uint64
 	channelResets uint64
+	wg            sync.WaitGroup
 }
 
 // LokiSinkConfig represents the configuration for a Loki sink
@@ -103,6 +105,7 @@ func NewLokiSink(name string, config map[string]interface{}) (Sink, error) {
 	}
 
 	// Start ingestion goroutine
+	sink.wg.Add(1)
 	go sink.runIngestion(ctx)
 
 	log.Printf("[logger:loki] Loki sink %s initialized: url=%s, labels=%v", name, sinkConfig.URL, sinkConfig.Labels)
@@ -134,17 +137,22 @@ func (s *LokiSink) Write(entry *LogEntry) error {
 func (s *LokiSink) Close() error {
 	log.Printf("[logger:loki] Closing Loki sink %s", s.name)
 
+	// Cancel context to signal shutdown
 	if s.cancelFunc != nil {
 		s.cancelFunc()
-		s.cancelFunc = nil
 	}
 
+	// Wait for ingestion goroutine to finish (it will flush remaining logs)
+	s.wg.Wait()
+
+	// Now it's safe to clean up resources
 	if s.channel != nil {
 		close(s.channel)
 		s.channel = nil
 	}
 
 	s.client = nil
+	s.cancelFunc = nil
 
 	return nil
 }
@@ -161,6 +169,8 @@ func (s *LokiSink) ConfigHash() string {
 
 // runIngestion runs the Loki ingestion loop
 func (s *LokiSink) runIngestion(ctx context.Context) {
+	defer s.wg.Done()
+
 	const (
 		batchSize           = 100
 		batchTimeout        = 1 * time.Second
@@ -224,13 +234,27 @@ func (s *LokiSink) runIngestion(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			log.Printf("[logger:loki] Sink %s ingestion stopped (context cancelled)", s.name)
-			flushBatch() // Flush remaining logs
+			// Use background context for final flush since our context is cancelled
+			if len(batch) > 0 {
+				flushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				if err := s.sendBatch(flushCtx, batch); err != nil {
+					log.Printf("[logger:loki] Sink %s failed to flush final batch on shutdown: %v", s.name, err)
+				}
+				cancel()
+			}
 			return
 
 		case entry, ok := <-s.channel:
 			if !ok {
 				log.Printf("[logger:loki] Sink %s channel closed", s.name)
-				flushBatch() // Flush remaining logs
+				// Use background context for final flush
+				if len(batch) > 0 {
+					flushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					if err := s.sendBatch(flushCtx, batch); err != nil {
+						log.Printf("[logger:loki] Sink %s failed to flush final batch on channel close: %v", s.name, err)
+					}
+					cancel()
+				}
 				return
 			}
 
