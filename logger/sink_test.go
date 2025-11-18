@@ -94,15 +94,15 @@ func TestLogEntry_Flatten(t *testing.T) {
 				},
 			},
 			expected: map[string]interface{}{
-				"stream_id":           "abc123",
-				"host.name":           "server.example.com",
-				"host.team":           "prod",
-				"client.ip":           "203.0.113.42",
-				"client.as.num":       float64(15169), // JSON unmarshal converts to float64
-				"client.as.name":      "Google LLC",
-				"request.method":      "GET",
-				"request.url.path":    "/api/users",
-				"request.url.domain":  "example.com",
+				"stream_id":          "abc123",
+				"host.name":          "server.example.com",
+				"host.team":          "prod",
+				"client.ip":          "203.0.113.42",
+				"client.as.num":      float64(15169), // JSON unmarshal converts to float64
+				"client.as.name":     "Google LLC",
+				"request.method":     "GET",
+				"request.url.path":   "/api/users",
+				"request.url.domain": "example.com",
 			},
 		},
 	}
