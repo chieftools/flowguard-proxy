@@ -16,6 +16,8 @@ import (
 	"flowguard/config"
 	"flowguard/logger"
 	"flowguard/normalization"
+
+	"github.com/oklog/ulid/v2"
 )
 
 const (
@@ -167,10 +169,12 @@ func (lm *LoggingMiddleware) logRequest(r *http.Request, wrapper *ResponseWriter
 		return
 	}
 
+	timestamp := time.Now()
+
 	entry := &logger.LogEntry{
 		Data: map[string]interface{}{
 			"stream_id": GetStreamID(r),
-			"timestamp": time.Now().Format(time.RFC3339),
+			"timestamp": timestamp.Format(time.RFC3339),
 			"host":      lm.hostInfo,
 			"rule":      getRuleInfo(r),
 			"client":    getClientInfo(r),
@@ -186,6 +190,9 @@ func (lm *LoggingMiddleware) logRequest(r *http.Request, wrapper *ResponseWriter
 	if cloudflare := getCloudflareInfo(r); cloudflare != nil {
 		entry.Data["cloudflare"] = cloudflare
 	}
+
+	entry.Data["_timestamp"] = timestamp.UnixMicro()
+	entry.Data["_id"] = strings.ToLower(ulid.MustNewDefault(timestamp).String())
 
 	lm.loggerManager.Write(entry)
 }

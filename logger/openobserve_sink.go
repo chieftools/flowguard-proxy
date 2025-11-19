@@ -297,12 +297,6 @@ func (s *OpenObserveSink) sendBatch(ctx context.Context, entries []*LogEntry) er
 			continue
 		}
 
-		// OpenObserve expects timestamp in _timestamp field
-		if timestamp, ok := flattened["timestamp"]; ok {
-			flattened["_timestamp"] = timestamp
-			delete(flattened, "timestamp")
-		}
-
 		flattenedEntries = append(flattenedEntries, flattened)
 	}
 
