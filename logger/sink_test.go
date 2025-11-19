@@ -110,7 +110,7 @@ func TestLogEntry_Flatten(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			entry := &LogEntry{Data: tt.input}
-			result, err := entry.Flatten()
+			result, err := entry.Flatten(".")
 			if err != nil {
 				t.Fatalf("Flatten() error: %v", err)
 			}

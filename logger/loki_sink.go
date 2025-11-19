@@ -305,7 +305,7 @@ func (s *LokiSink) sendBatch(ctx context.Context, entries []*LogEntry) error {
 		}
 
 		// Flatten and convert log entry to JSON string for the log line
-		flattened, err := entry.Flatten()
+		flattened, err := entry.Flatten(".")
 		if err != nil {
 			log.Printf("[logger:loki] Sink %s failed to flatten entry: %v", s.name, err)
 			continue

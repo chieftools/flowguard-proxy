@@ -15,7 +15,7 @@ func TestOpenObserve_TimestampMapping(t *testing.T) {
 	}
 
 	entry := &LogEntry{Data: input}
-	flattened, err := entry.Flatten()
+	flattened, err := entry.Flatten("__")
 	if err != nil {
 		t.Fatalf("Flatten() error: %v", err)
 	}
@@ -38,8 +38,8 @@ func TestOpenObserve_TimestampMapping(t *testing.T) {
 	}
 
 	// Verify other fields are still flattened correctly
-	if flattened["client.ip"] != "203.0.113.42" {
-		t.Errorf("client.ip incorrect: got %v", flattened["client.ip"])
+	if flattened["client__ip"] != "203.0.113.42" {
+		t.Errorf("client.ip incorrect: got %v", flattened["client__ip"])
 	}
 	if flattened["status"] != float64(200) { // JSON unmarshal converts numbers to float64
 		t.Errorf("status incorrect: got %v (%T)", flattened["status"], flattened["status"])

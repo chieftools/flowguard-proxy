@@ -287,7 +287,7 @@ func (s *OpenObserveSink) sendBatch(ctx context.Context, entries []*LogEntry) er
 	flattenedEntries := make([]map[string]interface{}, 0, len(entries))
 	for _, entry := range entries {
 		// Flatten the entry using the LogEntry.Flatten() method
-		flattened, err := entry.Flatten()
+		flattened, err := entry.Flatten("__")
 		if err != nil {
 			log.Printf("[logger:openobserve] Sink %s failed to flatten entry: %v", s.name, err)
 			continue
