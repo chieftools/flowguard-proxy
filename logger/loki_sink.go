@@ -194,6 +194,8 @@ func (s *LokiSink) runIngestion(ctx context.Context) {
 
 	flushBatch := func() {
 		if len(batch) == 0 {
+			// Always reset timer even for empty batches to ensure periodic flushing continues
+			batchTimer.Reset(batchTimeout)
 			return
 		}
 
