@@ -12,14 +12,16 @@ import (
 type Manager struct {
 	sinks       map[string]Sink
 	sinkConfigs map[string]string // name -> config hash
+	userAgent   string
 	mu          sync.RWMutex
 }
 
 // NewManager creates a new logger manager
-func NewManager() *Manager {
+func NewManager(userAgent string) *Manager {
 	return &Manager{
 		sinks:       make(map[string]Sink),
 		sinkConfigs: make(map[string]string),
+		userAgent:   userAgent,
 	}
 }
 
@@ -81,7 +83,7 @@ func (m *Manager) UpdateSinks(sinksConfig map[string]map[string]interface{}) err
 		}
 
 		// Create new sink
-		sink, err := CreateSink(name, config)
+		sink, err := CreateSink(name, config, m.userAgent)
 		if err != nil {
 			log.Printf("[logger] Failed to create sink %s: %v", name, err)
 			// Don't fail completely, just skip this sink

@@ -51,7 +51,7 @@ func TestNewLokiSink(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sink, err := NewLokiSink("test_sink", tt.config)
+			sink, err := NewLokiSink("test_sink", tt.config, "FlowGuard/test")
 
 			if tt.expectError {
 				if err == nil {
@@ -103,7 +103,7 @@ func TestLokiSinkWrite(t *testing.T) {
 		"url":  "http://localhost:3100/loki/api/v1/push",
 	}
 
-	sink, err := NewLokiSink("test_sink", config)
+	sink, err := NewLokiSink("test_sink", config, "FlowGuard/test")
 	if err != nil {
 		t.Fatalf("failed to create sink: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestLokiSinkClose(t *testing.T) {
 		"url":  "http://localhost:3100/loki/api/v1/push",
 	}
 
-	sink, err := NewLokiSink("test_sink", config)
+	sink, err := NewLokiSink("test_sink", config, "FlowGuard/test")
 	if err != nil {
 		t.Fatalf("failed to create sink: %v", err)
 	}

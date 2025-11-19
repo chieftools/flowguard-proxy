@@ -27,7 +27,8 @@ func init() {
 }
 
 // NewFileSink creates a new file sink
-func NewFileSink(name string, config map[string]interface{}) (Sink, error) {
+func NewFileSink(name string, config map[string]interface{}, userAgent string) (Sink, error) {
+	// userAgent is not used by file sink since it doesn't make HTTP requests
 	// Parse config
 	configJSON, err := json.Marshal(config)
 	if err != nil {

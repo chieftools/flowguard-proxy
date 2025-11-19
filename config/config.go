@@ -358,6 +358,13 @@ func (m *Manager) GetVersion() string {
 	return m.version
 }
 
+// GetUserAgent returns the full User-Agent string with version
+func (m *Manager) GetUserAgent() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.userAgent
+}
+
 // IsTrustedProxy checks if an IP is from a trusted proxy
 func (m *Manager) IsTrustedProxy(ip string) bool {
 	parsedIP := net.ParseIP(ip)

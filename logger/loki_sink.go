@@ -20,6 +20,7 @@ type LokiSink struct {
 	tenantID      string
 	username      string
 	password      string
+	userAgent     string
 	client        *http.Client
 	channel       chan *LogEntry
 	cancelFunc    context.CancelFunc
@@ -54,7 +55,7 @@ func init() {
 }
 
 // NewLokiSink creates a new Loki sink
-func NewLokiSink(name string, config map[string]interface{}) (Sink, error) {
+func NewLokiSink(name string, config map[string]interface{}, userAgent string) (Sink, error) {
 	// Parse config
 	configJSON, err := json.Marshal(config)
 	if err != nil {
@@ -98,6 +99,7 @@ func NewLokiSink(name string, config map[string]interface{}) (Sink, error) {
 		tenantID:   sinkConfig.TenantID,
 		username:   sinkConfig.Username,
 		password:   sinkConfig.Password,
+		userAgent:  userAgent,
 		client:     httpClient,
 		channel:    channel,
 		cancelFunc: cancel,
@@ -349,6 +351,9 @@ func (s *LokiSink) sendBatch(ctx context.Context, entries []*LogEntry) error {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if s.userAgent != "" {
+		req.Header.Set("User-Agent", s.userAgent)
+	}
 
 	// Add tenant ID header if configured
 	if s.tenantID != "" {

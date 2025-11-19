@@ -114,7 +114,7 @@ type LoggingMiddleware struct {
 func NewLoggingMiddleware(configMgr *config.Manager) *LoggingMiddleware {
 	m := &LoggingMiddleware{
 		configMgr:     configMgr,
-		loggerManager: logger.NewManager(),
+		loggerManager: logger.NewManager(configMgr.GetUserAgent()),
 		version:       configMgr.GetVersion(), // Store version once at creation
 	}
 

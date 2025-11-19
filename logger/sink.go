@@ -83,7 +83,7 @@ type SinkConfig struct {
 }
 
 // SinkFactory creates a sink from a configuration
-type SinkFactory func(name string, config map[string]interface{}) (Sink, error)
+type SinkFactory func(name string, config map[string]interface{}, userAgent string) (Sink, error)
 
 var sinkFactories = make(map[string]SinkFactory)
 
@@ -93,7 +93,7 @@ func RegisterSinkFactory(sinkType string, factory SinkFactory) {
 }
 
 // CreateSink creates a sink from configuration
-func CreateSink(name string, config map[string]interface{}) (Sink, error) {
+func CreateSink(name string, config map[string]interface{}, userAgent string) (Sink, error) {
 	sinkType, ok := config["type"].(string)
 	if !ok {
 		return nil, fmt.Errorf("sink %s: missing or invalid 'type' field", name)
@@ -104,5 +104,5 @@ func CreateSink(name string, config map[string]interface{}) (Sink, error) {
 		return nil, fmt.Errorf("sink %s: unknown sink type '%s'", name, sinkType)
 	}
 
-	return factory(name, config)
+	return factory(name, config, userAgent)
 }

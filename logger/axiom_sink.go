@@ -38,7 +38,8 @@ func init() {
 }
 
 // NewAxiomSink creates a new Axiom sink
-func NewAxiomSink(name string, config map[string]interface{}) (Sink, error) {
+func NewAxiomSink(name string, config map[string]interface{}, userAgent string) (Sink, error) {
+	// userAgent could be passed to Axiom client but the SDK doesn't expose this option currently
 	// Parse config
 	configJSON, err := json.Marshal(config)
 	if err != nil {

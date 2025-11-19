@@ -20,6 +20,7 @@ type OpenObserveSink struct {
 	stream        string
 	username      string
 	password      string
+	userAgent     string
 	client        *http.Client
 	channel       chan *LogEntry
 	cancelFunc    context.CancelFunc
@@ -43,7 +44,7 @@ func init() {
 }
 
 // NewOpenObserveSink creates a new OpenObserve sink
-func NewOpenObserveSink(name string, config map[string]interface{}) (Sink, error) {
+func NewOpenObserveSink(name string, config map[string]interface{}, userAgent string) (Sink, error) {
 	// Parse config
 	configJSON, err := json.Marshal(config)
 	if err != nil {
@@ -86,6 +87,7 @@ func NewOpenObserveSink(name string, config map[string]interface{}) (Sink, error
 		stream:       sinkConfig.Stream,
 		username:     sinkConfig.Username,
 		password:     sinkConfig.Password,
+		userAgent:    userAgent,
 		client:       httpClient,
 		channel:      channel,
 		cancelFunc:   cancel,
@@ -319,6 +321,9 @@ func (s *OpenObserveSink) sendBatch(ctx context.Context, entries []*LogEntry) er
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if s.userAgent != "" {
+		req.Header.Set("User-Agent", s.userAgent)
+	}
 
 	// Add basic auth if configured
 	if s.username != "" && s.password != "" {

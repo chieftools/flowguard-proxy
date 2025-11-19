@@ -8,7 +8,7 @@ import (
 )
 
 func TestManagerBasicUsage(t *testing.T) {
-	manager := NewManager()
+	manager := NewManager("FlowGuard/test")
 	defer manager.Close()
 
 	// Create temporary directory for log files
@@ -71,7 +71,7 @@ func TestManagerBasicUsage(t *testing.T) {
 }
 
 func TestManagerMultipleSinks(t *testing.T) {
-	manager := NewManager()
+	manager := NewManager("FlowGuard/test")
 	defer manager.Close()
 
 	// Create temporary directory for log files
@@ -132,7 +132,7 @@ func TestManagerMultipleSinks(t *testing.T) {
 }
 
 func TestManagerConfigChangeDetection(t *testing.T) {
-	manager := NewManager()
+	manager := NewManager("FlowGuard/test")
 	defer manager.Close()
 
 	// Create temporary directory for log files
@@ -181,7 +181,7 @@ func TestManagerConfigChangeDetection(t *testing.T) {
 }
 
 func TestManagerConfigChange(t *testing.T) {
-	manager := NewManager()
+	manager := NewManager("FlowGuard/test")
 	defer manager.Close()
 
 	// Create temporary directory for log files
@@ -232,7 +232,7 @@ func TestManagerConfigChange(t *testing.T) {
 }
 
 func TestManagerSinkRemoval(t *testing.T) {
-	manager := NewManager()
+	manager := NewManager("FlowGuard/test")
 	defer manager.Close()
 
 	// Create temporary directory for log files
