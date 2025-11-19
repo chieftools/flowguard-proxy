@@ -175,7 +175,7 @@ func (s *LokiSink) runIngestion(ctx context.Context) {
 
 	const (
 		batchSize           = 100
-		batchTimeout        = 1 * time.Second
+		batchTimeout        = 5 * time.Second
 		initialRetryDelay   = 1 * time.Second
 		maxRetryDelay       = 5 * time.Minute
 		retryMultiplier     = 2.0
