@@ -2,6 +2,14 @@
 
 A high-performance Go-based reverse proxy with advanced security features, designed to transparently intercept and filter HTTP/HTTPS traffic with dynamic rule-based filtering and minimal disruption.
 
+It features an (optional) [control panel](https://flowguard.network/) for easy management, configuration, and monitoring. The control panel will allow for realtime and centralized management of multiple FlowGuard instances in addition to providing access to GeoIP databases and AbuseIPDB IP lists.
+
+> [!IMPORTANT]  
+> FlowGuard is intended for use by experienced system administrators and security professionals. Improper configuration may lead to service disruption. Always test configurations in a safe environment before deploying to production.
+
+> [!CAUTION]
+> FlowGuard is a new project in acive development and may have undiscovered bugs or security vulnerabilities. Use at your own risk and always keep software up to date.
+
 ## Features
 
 ### Core Functionality
@@ -11,20 +19,21 @@ A high-performance Go-based reverse proxy with advanced security features, desig
 - **Graceful Shutdown**: Automatically removes iptables rules on shutdown to restore original traffic flow
 
 ### Security Middleware
-- **Dynamic Rule-Based Filtering**: Flexible rule engine with conditions for path, domain, IP, ASN, user-agent, headers, and ipset matching
-- **IP Database Integration**: ASN and geolocation lookups using configurable IP databases (IPInfo format)
-- **IPSet Integration**: Direct integration with Linux ipset for high-performance IP blocking
+- **Dynamic Rule-Based Filtering**: Flexible rule engine with conditions for path, domain, IP, ASN, user-agent, headers, ipset, and iplist matching
+- **IP Database Integration**: ASN and geolocation lookups using configurable IP databases (MaxMind format)
+- **IP List System**: Built-in high-performance in-memory IP lists with automatic URL refresh (10M+ lookups/sec)
+- **IPSet Integration**: Direct integration with Linux ipset for kernel-level IP blocking
 - **Trusted Proxy Support**: Properly handles X-Forwarded-For headers from configurable trusted proxies
 - **Real Client IP Detection**: Extracts actual client IPs through proxy chains for accurate filtering
 - **Hot Configuration Reload**: Automatic configuration file monitoring and reloading without restart
 
-### Performance Optimizations
-- Efficient connection handling with minimal overhead
-- Certificate caching with automatic refresh
-- Optimized middleware chain processing
-- Support for binding to specific network interfaces
-- Response caching for external data fetches
-- Compiled regex pattern caching for rule matching
+### Advanced Features
+- **Structured Logging**: Sink-based logging to files, Axiom, Loki, or OpenObserve with hot-reload support
+- **Efficient connection handling**: Minimal overhead with optimized middleware chain
+- **Certificate caching**: Automatic refresh for seamless rotation
+- **Network interface binding**: Support for multi-homed systems
+- **Smart caching**: ETag-aware HTTP caching for external resources with stale-while-revalidate
+- **Regex optimization**: Compiled pattern caching for rule matching
 
 ## Installation
 
@@ -43,62 +52,65 @@ cd flowguard
 
 # Build for current platform
 go build -o flowguard .
-
-# Build for Linux AMD64 (production)
-./build.sh
-# or manually:
-GOOS=linux GOARCH=amd64 go build -o flowguard-linux-amd64 .
 ```
 
-## Usage
+### Install on debian/Ubuntu
 
-### Basic Usage
+Add the new server in the [FlowGuard control panel](https://flowguard.network/) and obtain the setup command. You can also create a `config.json` manually, the control panel is a optional convenience.
 
 ```bash
-# Start with default settings
-sudo ./flowguard
+# Add FlowGuard APT repository
+curl -sS https://apt.flowguard.network/keys/51B467ED1A007E3532FA99C0B589D885675B25E5.asc | gpg --dearmor --yes -o /etc/apt/trusted.gpg.d/apt.flowguard.network.gpg
+echo "deb https://apt.flowguard.network stable main" | tee /etc/apt/sources.list.d/flowguard.network.list
 
-# Start without iptables redirection (for testing)
-./flowguard --no-redirect
+# Update package list and install
+apt update
+apt install flowguard
+
+# Setup initial configuration
+flowguard setup fgsvr_...
+
+# Alternatively create the /etc/flowguard/config.json manually
+
+# Ensure certificates are properly detected
+flowguard certificates
+
+# Start the FlowGuard service
+systemctl start flowguard
+
+# Enable FlowGuard to start on boot
+systemctl enable flowguard
 ```
 
-### Command Line Options
+### Configure your server
 
-```
---bind                 Comma-separated list of IP addresses to bind to (default: auto-detect public IPs)
---http-port            Port for HTTP proxy server (default: "11080")
---https-port           Port for HTTPS proxy server (default: "11443")
---no-redirect          Skip iptables port redirection setup
---config               Path to the configuration file (default: "config.json")
---default-hostname     The default hostname to use when a certificate is not found
+Since FlowGuard operates as a reverse proxy, backend servers must be configured correctly to see the original client IPs. This typically involves setting up the backend to trust the proxy and extract the real client IP from headers like `X-Forwarded-For`.
 
-Certificate Options:
---cert-path            Path to combined certificate files (default: "/opt/psa/var/certificates")
---test-certs           Test loading all certificates and exit
+This is an example of how this can be done in NGINX, replacing `<public v4 address>` and `<public v6 address>` with the actual public IP addresses of your server:
 
-Behavior Options:
---verbose              Enable more verbose output
---cache-dir            Directory for caching external data (default: "/var/cache/flowguard")
---user-agent           User-Agent header value for outgoing requests (default: "FlowGuard/1.0")
+Remember to add _all_ public IPs assigned to your server if you are using FlowGuard in it's default configuration where it will intercept traffic on all public IPs assigned to the server.
+
+```nginx
+real_ip_header X-Forwarded-For;
+real_ip_recursive on;
+set_real_ip_from <public v4 address>;
+set_real_ip_from <public v6 address>;
 ```
 
-### Examples
+A script that can generate this for you:
 
 ```bash
-# Test certificate loading
-./flowguard --test-certs --cert-path /path/to/certs
+NGINX_CONF=/etc/nginx/conf.d/flowguard.conf
 
-# Run with custom configuration
-sudo ./flowguard --config /etc/flowguard/config.json
+echo "real_ip_header X-Forwarded-For;" > $NGINX_CONF
+echo "real_ip_recursive on;" >> $NGINX_CONF
+echo "set_real_ip_from "`curl -sS ipv4.chief.tools`";" >> $NGINX_CONF
+echo "set_real_ip_from "`curl -sS ipv6.chief.tools`";" >> $NGINX_CONF
 
-# Bind to specific IPs only
-sudo ./flowguard --bind "192.168.1.100,10.0.0.50"
+cat $NGINX_CONF
 
-# Enable verbose logging with custom cache directory
-sudo ./flowguard --verbose --cache-dir /tmp/flowguard-cache
-
-# Use a default hostname for missing certificates
-sudo ./flowguard --default-hostname example.com
+service nginx configtest
+# service nginx reload
 ```
 
 ## Certificate Management
@@ -111,6 +123,89 @@ Certificate files are:
 - Automatically refreshed periodically to support rotation
 - Validated on load to ensure proper format
 
+### Configuration
+
+```json
+{
+  "proxy": {
+    "transparent_mode": true,
+    "tproxy_mark": 1,
+    "tproxy_routing_table": 100
+  }
+}
+```
+
+### Requirements
+
+- Linux kernel 2.6.28+ with TPROXY support
+- CAP_NET_ADMIN capability (already required for iptables)
+- Modern iptables with TPROXY target
+
+### Important Limitation
+
+TPROXY only works when the proxy and backend are on **different machines**. For same-machine deployments, use standard mode (simpler, same result).
+
+## Logging
+
+FlowGuard provides structured logging with multiple simultaneous destinations (sinks). Each sink can be independently configured and supports hot-reload.
+
+### Supported Sinks
+
+- **File**: Local file logging
+- **Axiom**: Axiom analytics platform
+- **Loki**: Grafana Loki with JSON flattening
+- **OpenObserve**: OpenObserve with automatic field flattening
+
+### Configuration
+
+```json
+{
+  "logging": {
+    "sinks": {
+      "local_log": {
+        "type": "file",
+        "path": "/var/log/flowguard/main.log"
+      },
+      "axiom": {
+        "type": "axiom",
+        "token": "xaat-your-token",
+        "dataset": "flowguard-production"
+      },
+      "loki": {
+        "type": "loki",
+        "url": "http://loki:3100/loki/api/v1/push",
+        "labels": {
+          "job": "flowguard",
+          "environment": "production"
+        }
+      },
+      "openobserve": {
+        "type": "openobserve",
+        "url": "https://observe.example.com",
+        "organization": "my-org",
+        "stream": "flowguard",
+        "username": "admin@example.com",
+        "password": "api-token"
+      }
+    },
+    "header_whitelist": ["cf-", "sec-ch-", "user-agent"]
+  }
+}
+```
+
+### Log Entry Format
+
+Each log entry includes:
+- Request details (method, URL, headers, TLS info)
+- Client information (IP, country, ASN)
+- Rule matching results (which rule matched, action taken)
+- Response details (status, timing, headers)
+- Host metadata (server ID, hostname, version)
+
+### Smart Config Updates
+
+Sinks are only restarted when their specific configuration changes. Adding, removing, or modifying one sink doesn't affect others.
+
 ## Configuration
 
 ### Configuration File
@@ -118,9 +213,15 @@ Certificate files are:
 FlowGuard uses a JSON configuration file for advanced filtering rules. The configuration supports:
 
 - **Rules**: Define matching conditions and associated actions
-- **Actions**: Specify what to do when rules match (block with custom status/message)
+- **Actions**: Specify what to do when rules match:
+  - `log`: Log request and continue processing (can be overridden by later rules)
+  - `allow`: Allow request and stop rule processing
+  - `block`: Block request with custom status/message
+  - `rate_limit`: Rate limit requests based on defined thresholds
 - **IP Database**: Configure IP geolocation database source and refresh interval
 - **Trusted Proxies**: Configure trusted proxy networks for proper client IP detection
+- **IP Lists**: Configure in-memory IP lists for high-performance matching
+- **Logging**: Configure structured logging sinks (file, Axiom, Loki, OpenObserve)
 
 #### JSON Schema Support
 
@@ -132,8 +233,7 @@ The repository includes a `config.schema.json` file that provides:
 To use the schema, add this line to your config.json:
 ```json
 {
-  "$schema": "./config.schema.json",
-  ...
+  "$schema": "./config.schema.json"
 }
 ```
 
@@ -144,6 +244,18 @@ Example configuration structure:
 ```json
 {
   "rules": {
+    "log-suspicious-agents": {
+      "action": "log-action",
+      "conditions": {
+        "matches": [
+          {
+            "type": "agent",
+            "match": "contains",
+            "value": "bot"
+          }
+        ]
+      }
+    },
     "block-malicious-agents": {
       "action": "block-403",
       "conditions": {
@@ -159,6 +271,9 @@ Example configuration structure:
     }
   },
   "actions": {
+    "log-action": {
+      "action": "log"
+    },
     "block-403": {
       "action": "block",
       "status": 403,
@@ -187,31 +302,78 @@ Rules support complex conditions with logical operators:
 - **Operators**: `AND`, `OR`, `NOT`
 - **Match Types**:
   - `path`: URL path matching
-  - `domain`/`host`: Host header matching
-  - `agent`/`user-agent`: User-Agent header matching
+  - `domain`: Host header matching
+  - `user-agent`: User-Agent header matching
   - `header`: Arbitrary header matching
   - `ip`: Client IP matching
   - `asn`: Autonomous System Number matching
-  - `ipset`: Linux ipset membership checking
+  - `ipset`: Linux ipset membership checking (external tool required)
+  - `iplist`: In-memory IP list matching (built-in, no dependencies)
 - **Match Operations**: `equals`, `contains`, `starts-with`, `ends-with`, `regex`, `in`, `not-in`, `exists`, `missing`
 
 ## Security Configuration
 
-### IPSet Integration
+### IP List System (Recommended)
 
-Create and populate ipset lists before starting the proxy:
+FlowGuard includes a built-in high-performance IP list system using radix trees for 10M+ lookups/second. Lists are loaded from URLs or files and automatically refreshed.
+
+**Configuration:**
+```json
+{
+  "ip_lists": {
+    "blocklist": {
+      "url": "https://example.com/blocklist.txt",
+      "refresh_interval_seconds": 3600
+    },
+    "local_allowlist": {
+      "path": "/etc/flowguard/allowlist.txt"
+    }
+  }
+}
+```
+
+**List Format:** One IP or CIDR per line (supports both IPv4 and IPv6):
+```
+192.168.1.1
+10.0.0.0/24
+2001:db8::/32
+```
+
+**Rule Usage:**
+```json
+{
+  "type": "iplist",
+  "match": "in",
+  "value": "blocklist"
+}
+```
+
+**Testing:**
+```bash
+# Show list stats (load time, memory usage, entry count)
+flowguard iplist blocklist
+
+# Check if IP is in list
+flowguard iplist blocklist contains 192.168.1.1
+```
+
+### IPSet Integration (Legacy)
+
+For existing IPSet infrastructure, create and populate lists before starting:
 
 ```bash
 # Create IPv4 blocklist
 sudo ipset create abuseipdb_v4 hash:net
 
-# Create IPv6 blocklist  
+# Create IPv6 blocklist
 sudo ipset create abuseipdb_v6 hash:net family inet6
 
 # Add IPs to blocklist
 sudo ipset add abuseipdb_v4 192.168.1.100
 sudo ipset add abuseipdb_v6 2001:db8::1
 ```
+
+**Note:** IP Lists (`iplist` type) are recommended for new deployments due to easier management, automatic updates, and unified IPv4/IPv6 support. Use IPSet (`ipset` type) only if you have existing IPSet infrastructure.
 
 ### Dynamic Security Rules
 
@@ -222,11 +384,13 @@ The proxy uses a flexible rule engine defined in the configuration file. Rules c
 ### Components
 
 - **Main**: Entry point, command-line parsing, signal handling
-- **Proxy Manager**: Coordinates proxy servers and iptables rules
+- **Proxy Manager**: Coordinates proxy servers, iptables/TPROXY rules, and graceful shutdown
 - **HTTP/HTTPS Servers**: Handle incoming requests and forward to backends
 - **Certificate Manager**: Dynamic SSL certificate loading and management
 - **Configuration Manager**: Hot-reload configuration with rule management
-- **Cache System**: Caching layer for external data fetches
+- **Cache System**: Caching layer for external data fetches with ETag support
+- **IP List Manager**: High-performance radix tree-based IP list matching
+- **Logger Manager**: Sink-based structured logging with hot-reload
 - **Middleware Chain**:
   - Rules Engine: Dynamic rule-based filtering with complex conditions
   - IP Lookup: ASN and geolocation database integration
@@ -238,7 +402,7 @@ The proxy uses a flexible rule engine defined in the configuration file. Rules c
 2. Proxy receives connection and extracts real client IP through trusted proxy chains
 3. For HTTPS, appropriate certificate is loaded/retrieved from cache
 4. Rules engine evaluates all configured rules against the request
-5. Security checks are performed based on rule conditions
+5. Request is either logged, blocked, or allowed based on rule evaluation
 6. Valid requests are forwarded to original destination
 7. Response is returned to client through proxy with appropriate headers
 
@@ -250,36 +414,10 @@ The proxy uses a flexible rule engine defined in the configuration file. Rules c
 go test ./...
 ```
 
-### Project Structure
+## Security Vulnerabilities
 
-```
-flowguard/
-├── main.go                 # Entry point and CLI
-├── build.sh               # Build script for Linux AMD64
-├── config.json            # Configuration file (rules, actions, etc.)
-├── go.mod                 # Go module definition
-├── cache/
-│   ├── cache.go           # Caching system for external data
-│   └── cache_test.go      # Cache tests
-├── certmanager/
-│   └── certmanager.go     # SSL certificate management
-├── config/
-│   └── config.go          # Configuration management with hot-reload
-├── proxy/
-│   ├── manager.go         # Proxy orchestration and iptables
-│   ├── server.go          # HTTP/HTTPS server implementation
-│   └── utils.go           # Utility functions
-└── middleware/
-    ├── middleware.go      # Middleware interface and chain
-    ├── rules.go           # Dynamic rule engine
-    ├── rules_test.go      # Rule engine tests
-    └── iplookup.go        # IP database and ASN lookup
-```
+If you discover a security vulnerability within this package, please send an e-mail to Alex Bouma at `alex+security@chief.app`. All security vulnerabilities will be swiftly addressed.
 
 ## License
 
-[License information to be added]
-
-## Contributing
-
-[Contributing guidelines to be added]
+[license to be determined]
