@@ -73,11 +73,17 @@ ruleLoop:
 			}
 
 			switch action.Action {
+			case "log":
+				// Mark the rule as matched and continue processing
+				// This allows subsequent rules to override the log action
+				SetRuleMatch(r, rule, action, "log")
+				continue
+
 			case "allow":
 				// Mark the rule as matched and allow the request
 				SetRuleMatch(r, rule, action, "proxy")
-
 				break ruleLoop
+
 			case "block":
 				blockRequest(w, r, action, rule)
 				return
@@ -106,7 +112,6 @@ ruleLoop:
 
 				// We allow the request, but we mark it as matched but without an action taken
 				SetRuleMatch(r, rule, nil, "proxy")
-
 				continue
 
 			default:

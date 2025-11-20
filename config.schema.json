@@ -260,11 +260,12 @@
                 "action": {
                     "type": "string",
                     "enum": [
+                        "log",
                         "allow",
                         "block",
                         "rate_limit"
                     ],
-                    "description": "The type of action to take"
+                    "description": "The type of action to take."
                 },
                 "status": {
                     "type": "integer",
