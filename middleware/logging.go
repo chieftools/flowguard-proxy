@@ -21,11 +21,12 @@ import (
 )
 
 const (
-	ContextKeyRule       contextKey = "matched_rule"
-	ContextKeyAction     contextKey = "matched_action"
-	ContextKeyStreamID   contextKey = "stream_id"
-	ContextKeyStartTime  contextKey = "start_time"
-	ContextKeyRuleResult contextKey = "rule_result"
+	ContextKeyRule              contextKey = "matched_rule"
+	ContextKeyAction            contextKey = "matched_action"
+	ContextKeyStreamID          contextKey = "stream_id"
+	ContextKeyStartTime         contextKey = "start_time"
+	ContextKeyRuleResult        contextKey = "rule_result"
+	ContextKeyMiddlewareEndTime contextKey = "middleware_end_time"
 )
 
 type RequestLogEntryIPInfo struct {
@@ -51,6 +52,7 @@ type RequestLogEntryRuleInfo struct {
 	ID     string `json:"id,omitempty"`
 	Name   string `json:"name,omitempty"`
 	Result string `json:"result"`
+	TookUS *int64 `json:"took_us,omitempty"`
 
 	Action *RequestLogEntryRuleActionInfo `json:"action,omitempty"`
 }
@@ -325,6 +327,16 @@ func getRuleInfo(r *http.Request) RequestLogEntryRuleInfo {
 		info.Action = &RequestLogEntryRuleActionInfo{
 			ID:   action.ID,
 			Name: action.Name,
+		}
+	}
+
+	// Calculate middleware latency (time from start to when proxy handler begins)
+	startTime := GetStartTime(r)
+	if middlewareEndTime, ok := r.Context().Value(ContextKeyMiddlewareEndTime).(time.Time); ok && !startTime.IsZero() {
+		latency := middlewareEndTime.Sub(startTime)
+		if latency > 0 {
+			latencyUS := latency.Microseconds()
+			info.TookUS = &latencyUS
 		}
 	}
 
