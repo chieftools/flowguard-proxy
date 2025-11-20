@@ -135,11 +135,6 @@ func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 	enabled := lm.enabled
 	lm.mu.RUnlock()
 
-	// Set start time and stream ID in context
-	ctx := context.WithValue(r.Context(), ContextKeyStartTime, time.Now())
-	ctx = context.WithValue(ctx, ContextKeyStreamID, generateStreamID())
-	r = r.WithContext(ctx)
-
 	if !enabled {
 		next.ServeHTTP(w, r)
 		return

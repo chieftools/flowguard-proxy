@@ -181,10 +181,6 @@ func (s *Server) CleanupPortRedirect() {
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// Create the proxy handler that will be called after middleware processing
 	proxyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Capture the time when middleware processing ends and proxy begins
-		ctx := context.WithValue(r.Context(), middleware.ContextKeyMiddlewareEndTime, time.Now())
-		r = r.WithContext(ctx)
-
 		// Create target URL that points to the actual backend server
 		proxyTarget := &url.URL{
 			Scheme: s.config.scheme,

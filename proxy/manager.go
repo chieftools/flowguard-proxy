@@ -46,8 +46,9 @@ func NewManager(configMgr *config.Manager, cfg *Config) *Manager {
 	middlewareChain := middleware.NewChain()
 
 	// Add middleware in the order they should execute
-	// IP lookup MUST be before other middleware so they can see the enriched context
-	middlewareChain.Add(middleware.NewIPLookupMiddleware(configMgr)) // Enriches request with IP/ASN data (must be first!)
+	// Timing middleware MUST be first to capture the full middleware stack timing
+	middlewareChain.Add(middleware.NewTimingMiddleware())            // Captures precise timing for all middleware (must be first!)
+	middlewareChain.Add(middleware.NewIPLookupMiddleware(configMgr)) // Enriches request with IP/ASN data
 	middlewareChain.Add(middleware.NewLoggingMiddleware(configMgr))  // Logs request and response with enriched data
 	rulesMiddleware := middleware.NewRulesMiddleware(configMgr)      // Evaluates user defined rules
 	middlewareChain.Add(rulesMiddleware)
