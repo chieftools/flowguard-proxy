@@ -56,7 +56,7 @@ echo -e "${YELLOW}Creating default configuration...${NC}"
 mkdir -p "${RPMBUILD_DIR}/SOURCES"
 cat > "${RPMBUILD_DIR}/SOURCES/config.json" << 'EOF'
 {
-  "$schema": "https://raw.githubusercontent.com/chieftools/flowguard-proxy/main/config.schema.json",
+  "$schema": "https://pkg.flowguard.network/config.schema.json",
   "rules": {},
   "actions": {},
   "ip_database": {

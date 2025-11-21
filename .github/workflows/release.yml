@@ -204,6 +204,9 @@ jobs:
           # Export GPG public key
           gpg --armor --export "FlowGuard Team <hello@flowguard.network>" > repo-sync/gpg.key
 
+          # Copy config schema to root
+          cp config.schema.json repo-sync/config.schema.json
+
       - name: Upload to server
         run: |
           # Sync everything to the server

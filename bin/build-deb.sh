@@ -43,7 +43,7 @@ strip "${DEB_DIR}/usr/bin/flowguard" 2>/dev/null || true
 echo -e "${YELLOW}Creating default configuration...${NC}"
 cat > "${DEB_DIR}/etc/flowguard/config.json" << 'EOF'
 {
-  "$schema": "https://raw.githubusercontent.com/chieftools/flowguard-proxy/main/config.schema.json",
+  "$schema": "https://pkg.flowguard.network/config.schema.json",
   "rules": {},
   "actions": {},
   "ip_database": {
