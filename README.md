@@ -37,7 +37,8 @@ It features an (optional) [control panel](https://flowguard.network/) for easy m
 
 ## Installation
 
-### Prerequisites
+### Prerequisites (for building from source)
+
 - Go 1.21 or later
 - Linux system with iptables support
 - Root/sudo access for port redirection
@@ -54,20 +55,24 @@ cd flowguard
 go build -o flowguard .
 ```
 
-### Install on debian/Ubuntu
-
-Add the new server in the [FlowGuard control panel](https://flowguard.network/) and obtain the setup command. You can also create a `config.json` manually, the control panel is a optional convenience.
+### Quick Install
 
 ```bash
-# Add FlowGuard APT repository
-curl -sS https://apt.flowguard.network/keys/51B467ED1A007E3532FA99C0B589D885675B25E5.asc | gpg --dearmor --yes -o /etc/apt/trusted.gpg.d/apt.flowguard.network.gpg
-echo "deb https://apt.flowguard.network stable main" | tee /etc/apt/sources.list.d/flowguard.network.list
+curl -sS https://pkg.flowguard.network/install.sh | sudo bash
+```
+
+### Install on Debian/Ubuntu
+
+```bash
+# Add FlowGuard repository
+curl -sS https://pkg.flowguard.network/gpg.key | gpg --dearmor --yes -o /etc/apt/trusted.gpg.d/flowguard.gpg
+echo "deb https://pkg.flowguard.network/deb stable main" | sudo tee /etc/apt/sources.list.d/flowguard.list
 
 # Update package list and install
-apt update
-apt install flowguard
+sudo apt update
+sudo apt install flowguard
 
-# Setup initial configuration
+# Setup initial configuration (optional - use FlowGuard control panel or create manually)
 flowguard setup fgsvr_...
 
 # Alternatively create the /etc/flowguard/config.json manually
@@ -76,10 +81,47 @@ flowguard setup fgsvr_...
 flowguard certificates
 
 # Start the FlowGuard service
-systemctl start flowguard
+sudo systemctl start flowguard
 
 # Enable FlowGuard to start on boot
-systemctl enable flowguard
+sudo systemctl enable flowguard
+```
+
+### Install on RHEL/CentOS/Rocky/Alma
+
+```bash
+# Add FlowGuard repository
+sudo tee /etc/yum.repos.d/flowguard.repo << 'EOF'
+[flowguard]
+name=FlowGuard Repository
+baseurl=https://pkg.flowguard.network/rpm/stable/x86_64
+enabled=1
+gpgcheck=1
+gpgkey=https://pkg.flowguard.network/gpg.key
+EOF
+
+# Install FlowGuard
+sudo yum install flowguard
+
+# Setup initial configuration (optional - use FlowGuard control panel or create manually)
+flowguard setup fgsvr_...
+
+# Start the FlowGuard service
+sudo systemctl start flowguard
+
+# Enable FlowGuard to start on boot
+sudo systemctl enable flowguard
+```
+
+### Upgrading
+
+```bash
+# Debian/Ubuntu
+sudo apt update
+sudo apt install --only-upgrade flowguard
+
+# RHEL/CentOS/Rocky/Alma
+sudo yum update flowguard
 ```
 
 ### Configure your server

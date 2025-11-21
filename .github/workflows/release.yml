@@ -1,0 +1,269 @@
+name: Build and Publish Packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., 1.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building version: ${VERSION}"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aptly createrepo-c rpm gpg rsync
+
+      - name: Import GPG key
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+          echo "${{ secrets.GPG_PASSPHRASE }}" > /tmp/gpg-passphrase
+
+      - name: Build DEB package
+        run: |
+          chmod +x ./bin/build-deb.sh
+          ./bin/build-deb.sh ${{ steps.version.outputs.VERSION }}
+
+      - name: Build RPM package
+        run: |
+          chmod +x ./bin/build-rpm.sh
+          ./bin/build-rpm.sh ${{ steps.version.outputs.VERSION }} 1
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H $(echo "${{ secrets.SSH_HOST }}" | cut -d@ -f2) >> ~/.ssh/known_hosts
+
+      - name: Download existing repository
+        run: |
+          mkdir -p repo-sync
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/ repo-sync/ || true
+
+      - name: Setup aptly repository
+        run: |
+          # Create aptly config
+          mkdir -p ~/.aptly
+          cat > ~/.aptly/aptly.conf << 'EOF'
+          {
+            "rootDir": "$HOME/.aptly",
+            "downloadConcurrency": 4,
+            "downloadSpeedLimit": 0,
+            "architectures": ["amd64"],
+            "dependencyFollowSuggests": false,
+            "dependencyFollowRecommends": false,
+            "dependencyFollowAllVariants": false,
+            "dependencyFollowSource": false,
+            "dependencyVerboseResolve": false,
+            "gpgDisableSign": false,
+            "gpgDisableVerify": false,
+            "gpgProvider": "gpg",
+            "downloadSourcePackages": false,
+            "skipLegacyPool": true,
+            "ppaDistributorID": "ubuntu",
+            "ppaCodename": "",
+            "skipContentsPublishing": false,
+            "FileSystemPublishEndpoints": {
+              "local": {
+                "rootDir": "$PWD/repo-sync/deb",
+                "linkMethod": "copy"
+              }
+            },
+            "S3PublishEndpoints": {},
+            "SwiftPublishEndpoints": {}
+          }
+          EOF
+
+          # Replace $HOME and $PWD in config
+          sed -i "s|\$HOME|$HOME|g" ~/.aptly/aptly.conf
+          sed -i "s|\$PWD|$PWD|g" ~/.aptly/aptly.conf
+
+          # Import existing repo if it exists
+          if [ -d "repo-sync/deb/pool" ]; then
+            echo "Importing existing repository..."
+            aptly repo create -distribution=stable -component=main flowguard || true
+            aptly repo import flowguard repo-sync/deb/pool/ || true
+          else
+            echo "Creating new repository..."
+            aptly repo create -distribution=stable -component=main flowguard
+          fi
+
+      - name: Add DEB package to repository
+        run: |
+          DEB_FILE="flowguard_${{ steps.version.outputs.VERSION }}_amd64.deb"
+
+          # Add package to repo
+          aptly repo add flowguard "${DEB_FILE}"
+
+          # Drop existing published repo if exists
+          aptly publish drop stable filesystem:local: || true
+
+          # Publish the repository
+          aptly publish repo \
+            -distribution=stable \
+            -component=main \
+            -batch \
+            -passphrase-file=/tmp/gpg-passphrase \
+            flowguard filesystem:local:
+
+      - name: Setup RPM repository
+        run: |
+          RPM_FILE="flowguard-${{ steps.version.outputs.VERSION }}-1.x86_64.rpm"
+
+          # Create RPM repository structure
+          mkdir -p repo-sync/rpm/stable/x86_64
+
+          # Copy new package
+          cp "${RPM_FILE}" repo-sync/rpm/stable/x86_64/
+
+          # Sign the RPM
+          echo "%_gpg_name FlowGuard Team <hello@flowguard.network>" > ~/.rpmmacros
+          echo "%_signature gpg" >> ~/.rpmmacros
+          echo "%_gpg_path $HOME/.gnupg" >> ~/.rpmmacros
+
+          rpm --addsign --define "_gpg_name FlowGuard Team <hello@flowguard.network>" \
+            repo-sync/rpm/stable/x86_64/"${RPM_FILE}" || echo "RPM signing failed, continuing..."
+
+          # Create repository metadata
+          createrepo_c repo-sync/rpm/stable/x86_64/
+
+          # Sign the repository metadata
+          gpg --batch --yes --detach-sign --armor \
+            --passphrase-file=/tmp/gpg-passphrase \
+            repo-sync/rpm/stable/x86_64/repodata/repomd.xml
+
+      - name: Create repository configuration files
+        run: |
+          # Create install script for users in root
+          cat > repo-sync/install.sh << 'INSTALL_EOF'
+          #!/bin/bash
+          set -e
+
+          # Detect OS
+          if [ -f /etc/os-release ]; then
+              . /etc/os-release
+              OS=$ID
+          else
+              echo "Cannot detect OS"
+              exit 1
+          fi
+
+          case $OS in
+              ubuntu|debian)
+                  echo "Setting up FlowGuard repository for Debian/Ubuntu..."
+
+                  # Add GPG key
+                  curl -sS https://pkg.flowguard.network/gpg.key | gpg --dearmor --yes -o /etc/apt/trusted.gpg.d/flowguard.gpg
+
+                  # Add repository
+                  echo "deb https://pkg.flowguard.network/deb stable main" | tee /etc/apt/sources.list.d/flowguard.list
+
+                  # Update and install
+                  apt-get update
+                  apt-get install -y flowguard
+                  ;;
+
+              centos|rhel|rocky|almalinux|fedora)
+                  echo "Setting up FlowGuard repository for RHEL/CentOS/Rocky/Alma/Fedora..."
+
+                  # Add repository
+                  cat > /etc/yum.repos.d/flowguard.repo << 'EOF'
+          [flowguard]
+          name=FlowGuard Repository
+          baseurl=https://pkg.flowguard.network/rpm/stable/x86_64
+          enabled=1
+          gpgcheck=1
+          gpgkey=https://pkg.flowguard.network/gpg.key
+          EOF
+
+                  # Install
+                  yum install -y flowguard || dnf install -y flowguard
+                  ;;
+
+              *)
+                  echo "Unsupported OS: $OS"
+                  echo "Please install manually from https://github.com/chieftools/flowguard-proxy/releases"
+                  exit 1
+                  ;;
+          esac
+
+          echo ""
+          echo "FlowGuard installed successfully!"
+          echo "Configure it at: /etc/flowguard/config.json or use setup instructions from https://flowguard.network"
+          echo "Start the service: systemctl start flowguard"
+          echo "Start the service on boot: systemctl enable flowguard"
+          INSTALL_EOF
+
+          chmod +x repo-sync/install.sh
+
+          # Export GPG public key
+          gpg --armor --export "FlowGuard Team <hello@flowguard.network>" > repo-sync/gpg.key
+
+      - name: Upload to server
+        run: |
+          # Sync everything to the server
+          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            repo-sync/ ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/
+
+      - name: Clean up
+        if: always()
+        run: |
+          rm -f /tmp/gpg-passphrase
+          rm -f ~/.ssh/deploy_key
+          rm -rf ~/.gnupg/private-keys-v1.d/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: |
+            flowguard_*.deb
+            flowguard-*.rpm
+          retention-days: 30
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            flowguard_${{ steps.version.outputs.VERSION }}_amd64.deb
+            flowguard-${{ steps.version.outputs.VERSION }}-1.x86_64.rpm
+          body: |
+            - Installation instructions: https://github.com/chieftools/flowguard-proxy#quick-install
+            - Upgrade instructions: https://github.com/chieftools/flowguard-proxy#upgrading
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
