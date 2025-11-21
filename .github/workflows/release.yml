@@ -94,24 +94,17 @@ jobs:
           # Add package to repo
           aptly repo add flowguard "${DEB_FILE}"
 
-          # Check if already published, update if yes, publish if no
-          if [ -d "repo-sync/deb/dists" ]; then
-            echo "Updating existing publication..."
-            aptly publish update \
-              -batch \
-              -passphrase-file=/tmp/gpg-passphrase \
-              stable
-          else
-            echo "Creating new publication..."
-            mkdir -p repo-sync/deb
-            aptly publish repo \
-              -distribution=stable \
-              -component=main \
-              -architectures=amd64 \
-              -batch \
-              -passphrase-file=/tmp/gpg-passphrase \
-              flowguard
-          fi
+          # Always publish (aptly will handle updates internally via the pool)
+          echo "Publishing repository..."
+          mkdir -p repo-sync/deb
+          aptly publish repo \
+            -distribution=stable \
+            -component=main \
+            -architectures=amd64 \
+            -batch \
+            -force-overwrite \
+            -passphrase-file=/tmp/gpg-passphrase \
+            flowguard
 
           # Move published files to our sync directory
           if [ -d "$HOME/.aptly/public" ]; then
