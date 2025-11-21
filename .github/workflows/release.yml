@@ -127,16 +127,22 @@ jobs:
           # Add package to repo
           aptly repo add flowguard "${DEB_FILE}"
 
-          # Drop existing published repo if exists
-          aptly publish drop stable filesystem:local: || true
-
-          # Publish the repository
-          aptly publish repo \
-            -distribution=stable \
-            -component=main \
-            -batch \
-            -passphrase-file=/tmp/gpg-passphrase \
-            flowguard filesystem:local:
+          # Check if already published, update if yes, publish if no
+          if aptly publish list | grep -q "stable.*filesystem:local"; then
+            echo "Updating existing publication..."
+            aptly publish update \
+              -batch \
+              -passphrase-file=/tmp/gpg-passphrase \
+              stable filesystem:local:
+          else
+            echo "Creating new publication..."
+            aptly publish repo \
+              -distribution=stable \
+              -component=main \
+              -batch \
+              -passphrase-file=/tmp/gpg-passphrase \
+              flowguard filesystem:local:
+          fi
 
       - name: Setup RPM repository
         run: |
