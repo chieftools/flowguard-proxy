@@ -80,11 +80,11 @@ jobs:
           # Import existing repo if it exists
           if [ -d "repo-sync/deb/pool" ]; then
             echo "Importing existing repository..."
-            aptly repo create -distribution=stable -component=main flowguard || true
+            aptly repo create -distribution=stable -component=main -architectures=amd64 flowguard || true
             aptly repo import flowguard repo-sync/deb/pool/ || true
           else
             echo "Creating new repository..."
-            aptly repo create -distribution=stable -component=main flowguard
+            aptly repo create -distribution=stable -component=main -architectures=amd64 flowguard
           fi
 
       - name: Add DEB package to repository
@@ -107,6 +107,7 @@ jobs:
             aptly publish repo \
               -distribution=stable \
               -component=main \
+              -architectures=amd64 \
               -batch \
               -passphrase-file=/tmp/gpg-passphrase \
               flowguard
