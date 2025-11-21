@@ -1,4 +1,4 @@
-# FlowGuard
+# FlowGuard Proxy
 
 A high-performance Go-based reverse proxy with advanced security features, designed to transparently intercept and filter HTTP/HTTPS traffic with dynamic rule-based filtering and minimal disruption.
 
@@ -416,8 +416,9 @@ go test ./...
 
 ## Security Vulnerabilities
 
-If you discover a security vulnerability within this package, please send an e-mail to Alex Bouma at `alex+security@chief.app`. All security vulnerabilities will be swiftly addressed.
+If you discover a security vulnerability within this project, please report it privately via GitHub: https://github.com/chieftools/flowguard-proxy/security/advisories/new.
+All security vulnerabilities will be swiftly addressed. There is no bug bounty program at this time.
 
 ## License
 
-[license to be determined]
+FlowGuard Proxy is open-source software licensed under the Apache License 2.0. This means you are free to use, modify, and distribute the software for both commercial and non-commercial purposes. See the [LICENSE](LICENSE) file for details.
