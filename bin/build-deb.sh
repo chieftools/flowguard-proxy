@@ -27,7 +27,6 @@ echo -e "${YELLOW}Creating package structure...${NC}"
 mkdir -p "${DEB_DIR}/DEBIAN"
 mkdir -p "${DEB_DIR}/usr/bin"
 mkdir -p "${DEB_DIR}/etc/flowguard"
-mkdir -p "${DEB_DIR}/etc/flowguard/certs"
 mkdir -p "${DEB_DIR}/etc/systemd/system"
 mkdir -p "${DEB_DIR}/var/log/flowguard"
 mkdir -p "${DEB_DIR}/var/cache/flowguard"
@@ -44,7 +43,7 @@ strip "${DEB_DIR}/usr/bin/flowguard" 2>/dev/null || true
 echo -e "${YELLOW}Creating default configuration...${NC}"
 cat > "${DEB_DIR}/etc/flowguard/config.json" << 'EOF'
 {
-  "$schema": "https://raw.githubusercontent.com/flowguard/flowguard/main/config.schema.json",
+  "$schema": "https://raw.githubusercontent.com/chieftools/flowguard-proxy/main/config.schema.json",
   "rules": {},
   "actions": {},
   "ip_database": {
@@ -53,10 +52,7 @@ cat > "${DEB_DIR}/etc/flowguard/config.json" << 'EOF'
   },
   "trusted_proxies": {
     "ipnets": []
-  },
-  "cache_dir": "/var/cache/flowguard",
-  "cert_path": "/etc/flowguard/certs",
-  "default_hostname": ""
+  }
 }
 EOF
 
@@ -73,7 +69,7 @@ Wants=network-online.target
 Type=simple
 User=root
 Group=root
-ExecStart=/usr/bin/flowguard --config /etc/flowguard/config.json
+ExecStart=/usr/bin/flowguard run --config /etc/flowguard/config.json
 ExecReload=/bin/kill -HUP $MAINPID
 KillMode=mixed
 KillSignal=SIGTERM
@@ -112,16 +108,15 @@ cat > "${DEB_DIR}/DEBIAN/postinst" << 'EOF'
 set -e
 
 # Create runtime directories if they don't exist
+mkdir -p /etc/flowguard
 mkdir -p /var/log/flowguard
 mkdir -p /var/cache/flowguard
-mkdir -p /etc/flowguard/certs
 
 # Set proper ownership and permissions
+chown -R root:root /etc/flowguard
 chown -R root:root /var/log/flowguard
 chown -R root:root /var/cache/flowguard
-chown -R root:root /etc/flowguard
 chmod 755 /etc/flowguard
-chmod 755 /etc/flowguard/certs
 chmod 644 /etc/flowguard/config.json
 chmod 755 /usr/bin/flowguard
 
@@ -141,7 +136,7 @@ else
     echo "FlowGuard has been installed successfully!"
     echo ""
     echo "To configure FlowGuard:"
-    echo "  1. Edit the configuration file: /etc/flowguard/config.json"
+    echo "  1. Edit the configuration file: /etc/flowguard/config.json or follow instructions from https://flowguard.network"
     echo "  2. Start the service: systemctl start flowguard"
     echo "  3. Start the service on boot: systemctl enable flowguard"
     echo ""

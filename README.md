@@ -275,11 +275,9 @@ The repository includes a `config.schema.json` file that provides:
 To use the schema, add this line to your config.json:
 ```json
 {
-  "$schema": "./config.schema.json"
+  "$schema": "https://raw.githubusercontent.com/chieftools/flowguard-proxy/main/config.schema.json"
 }
 ```
-
-See `config.example.json` for a complete example with various rule patterns.
 
 Example configuration structure:
 

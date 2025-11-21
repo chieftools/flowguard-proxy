@@ -27,8 +27,37 @@ func main() {
 		Version = "dev"
 	}
 
-	log.Printf("FlowGuard version %s", Version)
+	// If no subcommand provided, show usage
+	if len(os.Args) < 2 {
+		showUsage()
+		os.Exit(0)
+	}
 
+	subcommand := os.Args[1]
+
+	// Handle version command
+	if subcommand == "version" {
+		fmt.Printf("FlowGuard version %s\n", Version)
+		os.Exit(0)
+	}
+
+	// Handle setup command (doesn't need flags, uses default config path)
+	if subcommand == "setup" {
+		if len(os.Args) < 3 {
+			log.Fatal("Usage: flowguard setup <host-key>")
+		}
+
+		configFile := "/etc/flowguard/config.json"
+		if err := setupHost(os.Args[2], configFile); err != nil {
+			log.Printf("[ERROR] Failed to setup host: %v", err)
+			os.Exit(1)
+		}
+
+		log.Printf("[SUCCESS] Host configured successfully. Configuration saved to %s", configFile)
+		os.Exit(0)
+	}
+
+	// For remaining commands, parse flags from args after the subcommand
 	var (
 		// Proxy configuration
 		bindAddrs  = flag.String("bind", "", "Comma-separated list of IP addresses to bind to (default: auto-detect public IPs)")
@@ -41,77 +70,91 @@ func main() {
 		cacheDir   = flag.String("cache-dir", "/var/cache/flowguard", "Directory for caching external data")
 		configFile = flag.String("config", "/etc/flowguard/config.json", "Path to the configuration file")
 	)
-	flag.Parse()
 
-	// flowguard setup <host-key>
-	if len(os.Args) >= 2 && os.Args[1] == "setup" {
-		if len(os.Args) < 3 {
-			log.Fatal("Usage: flowguard setup <host-key>")
-		}
+	// Parse flags after the subcommand
+	flag.CommandLine.Parse(os.Args[2:])
 
-		if err := setupHost(os.Args[2], *configFile); err != nil {
-			log.Printf("[ERROR] Failed to setup host: %v", err)
+	// Commands that need config
+	if subcommand == "iplist" || subcommand == "certificates" || subcommand == "run" {
+		configMgr, err := config.NewManager(*configFile, fmt.Sprintf("FlowGuard/%s", Version), Version, *cacheDir, *verbose)
+		if err != nil {
+			log.Printf("Failed to load configuration from %s: %v", *configFile, err)
 			os.Exit(1)
 		}
 
-		log.Printf("[SUCCESS] Host configured successfully. Configuration saved to %s", *configFile)
-		os.Exit(0)
-	}
-
-	// At this point we expect to be able to load the config file
-	configMgr, err := config.NewManager(*configFile, fmt.Sprintf("FlowGuard/%s", Version), Version, *cacheDir, *verbose)
-	if err != nil {
-		log.Printf("Failed to load configuration from %s: %v", *configFile, err)
-		os.Exit(1)
-	}
-
-	// flowguard iplist [<name> [contains <ip>]]
-	if len(os.Args) >= 2 && os.Args[1] == "iplist" {
-		if err := handleIPListCommand(os.Args[2:], configMgr, *verbose); err != nil {
-			log.Printf("[ERROR] %v", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-
-	// flowguard certificates [<hostname>]
-	if len(os.Args) >= 2 && os.Args[1] == "certificates" {
-		if err := handleCertificatesCommand(os.Args[2:], configMgr, *verbose); err != nil {
-			log.Printf("[ERROR] %v", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-
-	// Create and start proxy manager
-	proxyManager := proxy.NewManager(configMgr, &proxy.Config{
-		Verbose:    *verbose,
-		Version:    Version,
-		HTTPPort:   *httpPort,
-		HTTPSPort:  *httpsPort,
-		BindAddrs:  parseBindAddrsList(*bindAddrs),
-		UserAgent:  fmt.Sprintf("FlowGuard/%s", Version),
-		NoRedirect: *noRedirect,
-	})
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	if err := proxyManager.Start(); err != nil {
-		// If we fail to start, attempt to shut down any started servers
-		if shutdownErr := proxyManager.Shutdown(); shutdownErr != nil {
-			log.Printf("Shutdown error: %v", shutdownErr)
+		// Handle iplist command
+		if subcommand == "iplist" {
+			if err := handleIPListCommand(flag.Args(), configMgr, *verbose); err != nil {
+				log.Printf("[ERROR] %v", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
 		}
 
-		log.Fatalf("[FATAL] Failed to start proxy: %v", err)
+		// Handle certificates command
+		if subcommand == "certificates" {
+			if err := handleCertificatesCommand(flag.Args(), configMgr, *verbose); err != nil {
+				log.Printf("[ERROR] %v", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
+
+		// Handle run command
+		if subcommand == "run" {
+			log.Printf("FlowGuard version %s", Version)
+
+			// Create and start proxy manager
+			proxyManager := proxy.NewManager(configMgr, &proxy.Config{
+				Verbose:    *verbose,
+				Version:    Version,
+				HTTPPort:   *httpPort,
+				HTTPSPort:  *httpsPort,
+				BindAddrs:  parseBindAddrsList(*bindAddrs),
+				UserAgent:  fmt.Sprintf("FlowGuard/%s", Version),
+				NoRedirect: *noRedirect,
+			})
+
+			sigChan := make(chan os.Signal, 1)
+			signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+			if err := proxyManager.Start(); err != nil {
+				// If we fail to start, attempt to shut down any started servers
+				if shutdownErr := proxyManager.Shutdown(); shutdownErr != nil {
+					log.Printf("Shutdown error: %v", shutdownErr)
+				}
+
+				log.Fatalf("[FATAL] Failed to start proxy: %v", err)
+			}
+
+			log.Println("FlowGuard is running and ready for requests...")
+			<-sigChan
+
+			if err := proxyManager.Shutdown(); err != nil {
+				log.Printf("Shutdown error: %v", err)
+			}
+			return
+		}
 	}
 
-	log.Println("FlowGuard is running and ready for requests...")
-	<-sigChan
+	// Unknown subcommand
+	fmt.Printf("Unknown command: %s\n\n", subcommand)
+	showUsage()
+	os.Exit(1)
+}
 
-	if err := proxyManager.Shutdown(); err != nil {
-		log.Printf("Shutdown error: %v", err)
-	}
+func showUsage() {
+	fmt.Printf("FlowGuard version %s\n\n", Version)
+	fmt.Println("Usage: flowguard <command> [options]")
+	fmt.Println()
+	fmt.Println("Commands:")
+	fmt.Println("  run           Start the proxy server")
+	fmt.Println("  version       Show version information")
+	fmt.Println("  setup         Configure FlowGuard with a host key")
+	fmt.Println("  iplist        Manage and query IP lists")
+	fmt.Println("  certificates  Test and view SSL certificates")
+	fmt.Println()
+	fmt.Println("Run 'flowguard <command> -h' for more information on a command.")
 }
 
 func parseBindAddrsList(list string) []string {
