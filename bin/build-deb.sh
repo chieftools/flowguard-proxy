@@ -215,7 +215,7 @@ gzip -9 "${DEB_DIR}/usr/share/doc/flowguard/changelog"
 
 # Build the package
 echo -e "${YELLOW}Building Debian package...${NC}"
-dpkg-deb --build --root-owner-group "${DEB_DIR}"
+dpkg-deb --build --root-owner-group -Zgzip "${DEB_DIR}"
 
 # Move package to current directory
 PACKAGE_FILE="${PACKAGE_NAME}_${VERSION}_${ARCH}.deb"
