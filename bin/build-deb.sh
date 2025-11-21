@@ -44,15 +44,14 @@ echo -e "${YELLOW}Creating default configuration...${NC}"
 cat > "${DEB_DIR}/etc/flowguard/config.json" << 'EOF'
 {
   "$schema": "https://pkg.flowguard.network/config.schema.json",
+  "host": {
+    "cache_dir": "/var/cache/flowguard",
+  },
   "rules": {},
   "actions": {},
-  "ip_database": {
-    "url": "",
-    "refresh_interval_seconds": 86400
-  },
-  "trusted_proxies": {
-    "ipnets": []
-  }
+  "logging": null,
+  "ip_database": null,
+  "trusted_proxies": null
 }
 EOF
 

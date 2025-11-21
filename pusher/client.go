@@ -59,7 +59,7 @@ type Client struct {
 
 // NewClient creates a new Realtime client
 func NewClient(cfg *Config, userAgent, hostKey string, verbose bool) *Client {
-	if cfg == nil {
+	if cfg == nil || hostKey == "" {
 		return nil
 	}
 

@@ -43,9 +43,9 @@ type RequestLogEntryTLSInfo struct {
 
 type RequestLogEntryHostInfo struct {
 	ID      string `json:"id,omitempty"`
-	Name    string `json:"name"`
+	Name    string `json:"name,omitempty"`
 	Team    string `json:"team,omitempty"`
-	Version string `json:"version,omitempty"`
+	Version string `json:"version"`
 }
 
 type RequestLogEntryRuleInfo struct {
@@ -226,11 +226,17 @@ func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
 	lm.enabled = lm.loggerManager.HasSinks()
 
 	// Update host info
-	lm.hostInfo = &RequestLogEntryHostInfo{
-		ID:      cfg.Host.ID,
-		Name:    cfg.Host.Name,
-		Team:    cfg.Host.Team,
-		Version: lm.version,
+	if cfg.Host != nil {
+		lm.hostInfo = &RequestLogEntryHostInfo{
+			ID:      cfg.Host.ID,
+			Name:    cfg.Host.Name,
+			Team:    cfg.Host.Team,
+			Version: lm.version,
+		}
+	} else {
+		lm.hostInfo = &RequestLogEntryHostInfo{
+			Version: lm.version,
+		}
 	}
 
 	// Update header whitelist

@@ -24,22 +24,22 @@ import (
 // Config represents the complete application configuration
 type Config struct {
 	ID             string                 `json:"id,omitempty"`
-	Host           *HostConfig            `json:"host"`
+	Host           *HostConfig            `json:"host,omitempty"`
 	Rules          map[string]*Rule       `json:"rules"`
 	Actions        map[string]*RuleAction `json:"actions"`
-	Logging        *LoggingConfig         `json:"logging"`
-	IPDatabase     *IPDatabaseConfig      `json:"ip_database"`
-	TrustedProxies *TrustedProxiesConfig  `json:"trusted_proxies"`
+	Logging        *LoggingConfig         `json:"logging,omitempty"`
 	IPLists        *IPListsConfig         `json:"ip_lists,omitempty"`
 	Realtime       *pusher.Config         `json:"realtime,omitempty"`
-	CacheDir       string                 `json:"cache_dir,omitempty"`
+	IPDatabase     *IPDatabaseConfig      `json:"ip_database,omitempty"`
+	TrustedProxies *TrustedProxiesConfig  `json:"trusted_proxies,omitempty"`
 }
 
 type HostConfig struct {
 	ID              string `json:"id,omitempty"`
 	Key             string `json:"key,omitempty"`
-	Name            string `json:"name"`
+	Name            string `json:"name,omitempty"`
 	Team            string `json:"team,omitempty"`
+	CacheDir        string `json:"cache_dir,omitempty"`
 	CertPath        string `json:"cert_path,omitempty"`
 	NginxConfigPath string `json:"nginx_config_path,omitempty"`
 	DefaultHostname string `json:"default_hostname,omitempty"`
@@ -879,12 +879,16 @@ func (m *Manager) parseIPRanges(data []byte, source string) ([]net.IPNet, error)
 
 // updatePusherClient updates or creates the Realtime client based on configuration
 func (m *Manager) updatePusherClient(config *Config) {
-	// If no pusher config, disconnect any existing client
-	if config.Realtime == nil {
+	// If no pusher config or no host key, disconnect any existing client
+	if config.Realtime == nil || config.Host == nil || config.Host.Key == "" {
 		if m.realtimeClient != nil {
 			m.realtimeClient.Disconnect()
 			m.realtimeClient = nil
-			log.Printf("[config] Realtime client disconnected (no configuration)")
+			if config.Realtime == nil {
+				log.Printf("[config] Realtime client disconnected (no configuration)")
+			} else {
+				log.Printf("[config] Realtime client disconnected (no host key)")
+			}
 		}
 		return
 	}
