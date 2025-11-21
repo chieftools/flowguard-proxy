@@ -76,39 +76,6 @@ jobs:
         run: |
           # Create aptly config
           mkdir -p ~/.aptly
-          cat > ~/.aptly/aptly.conf << 'EOF'
-          {
-            "rootDir": "$HOME/.aptly",
-            "downloadConcurrency": 4,
-            "downloadSpeedLimit": 0,
-            "architectures": ["amd64"],
-            "dependencyFollowSuggests": false,
-            "dependencyFollowRecommends": false,
-            "dependencyFollowAllVariants": false,
-            "dependencyFollowSource": false,
-            "dependencyVerboseResolve": false,
-            "gpgDisableSign": false,
-            "gpgDisableVerify": false,
-            "gpgProvider": "gpg",
-            "downloadSourcePackages": false,
-            "skipLegacyPool": true,
-            "ppaDistributorID": "ubuntu",
-            "ppaCodename": "",
-            "skipContentsPublishing": false,
-            "FileSystemPublishEndpoints": {
-              "local": {
-                "rootDir": "$PWD/repo-sync/deb",
-                "linkMethod": "copy"
-              }
-            },
-            "S3PublishEndpoints": {},
-            "SwiftPublishEndpoints": {}
-          }
-          EOF
-
-          # Replace $HOME and $PWD in config
-          sed -i "s|\$HOME|$HOME|g" ~/.aptly/aptly.conf
-          sed -i "s|\$PWD|$PWD|g" ~/.aptly/aptly.conf
 
           # Import existing repo if it exists
           if [ -d "repo-sync/deb/pool" ]; then
@@ -128,20 +95,26 @@ jobs:
           aptly repo add flowguard "${DEB_FILE}"
 
           # Check if already published, update if yes, publish if no
-          if aptly publish list | grep -q "stable.*filesystem:local"; then
+          if [ -d "repo-sync/deb/dists" ]; then
             echo "Updating existing publication..."
             aptly publish update \
               -batch \
               -passphrase-file=/tmp/gpg-passphrase \
-              stable filesystem:local:
+              stable
           else
             echo "Creating new publication..."
+            mkdir -p repo-sync/deb
             aptly publish repo \
               -distribution=stable \
               -component=main \
               -batch \
               -passphrase-file=/tmp/gpg-passphrase \
-              flowguard filesystem:local:
+              flowguard
+          fi
+
+          # Move published files to our sync directory
+          if [ -d "$HOME/.aptly/public" ]; then
+            rsync -av $HOME/.aptly/public/ repo-sync/deb/
           fi
 
       - name: Setup RPM repository
