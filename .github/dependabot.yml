@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      time: "10:00"
+      interval: monthly
+      timezone: Europe/Amsterdam
+    labels:
+      - ":link: dependencies"
+  - package-ecosystem: github-actions
+    directory: "/.github/workflows"
+    schedule:
+      time: "10:00"
+      interval: monthly
+      timezone: Europe/Amsterdam
+    labels:
+      - ":link: dependencies"
