@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -584,7 +585,8 @@ func (m *Manager) Stop() {
 }
 
 // RefreshFromAPI fetches the latest configuration from the API and updates the config file
-func (m *Manager) RefreshFromAPI() error {
+// If force is true, bypasses ETag check and always downloads a fresh copy
+func (m *Manager) RefreshFromAPI(force bool) error {
 	m.mu.RLock()
 	hasHostKey := m.config != nil && m.config.Host != nil && m.config.Host.Key != ""
 	currentConfigID := m.currentConfigID
@@ -595,9 +597,22 @@ func (m *Manager) RefreshFromAPI() error {
 		return nil
 	}
 
-	// Fetch configuration from API using the client
-	body, err := m.apiClient.GetConfig()
+	// Determine ETag to use: empty string if force, otherwise current config ID
+	etag := currentConfigID
+	if force {
+		etag = ""
+	}
+
+	// Fetch configuration from API using the client, passing ETag if not forced
+	body, err := m.apiClient.GetConfig(etag)
 	if err != nil {
+		// Handle 304 Not Modified - configuration hasn't changed
+		if errors.Is(err, api.ErrNotModified) {
+			if m.verbose {
+				log.Printf("[config] API configuration not modified (version: %s)", currentConfigID)
+			}
+			return nil
+		}
 		return fmt.Errorf("failed to fetch configuration from API: %w", err)
 	}
 
@@ -610,6 +625,7 @@ func (m *Manager) RefreshFromAPI() error {
 	}
 
 	// If we have an ID in the new config, check if it's different from current
+	// This is a fallback check in case the server doesn't support ETag properly
 	if newConfig.ID != "" && newConfig.ID == currentConfigID {
 		if m.verbose {
 			log.Printf("[config] API configuration ID (%s) matches current, skipping update", newConfig.ID)
@@ -645,7 +661,7 @@ func (m *Manager) StartAPIRefresh(interval time.Duration) {
 
 	go func() {
 		// Initial refresh on startup
-		if err := m.RefreshFromAPI(); err != nil {
+		if err := m.RefreshFromAPI(false); err != nil {
 			log.Printf("[config] Initial API refresh failed: %v", err)
 		}
 
@@ -655,7 +671,7 @@ func (m *Manager) StartAPIRefresh(interval time.Duration) {
 		for {
 			select {
 			case <-ticker.C:
-				if err := m.RefreshFromAPI(); err != nil {
+				if err := m.RefreshFromAPI(false); err != nil {
 					log.Printf("[config] API refresh failed: %v", err)
 				}
 			case <-m.stopAPIRefresh:
@@ -901,7 +917,7 @@ func (m *Manager) updatePusherClient(config *Config) {
 			m.realtimeClient.OnEvent("config.updated", func(message pusher.Message) {
 				log.Printf("[config] Received config update event from realtime event")
 
-				if err := m.RefreshFromAPI(); err != nil {
+				if err := m.RefreshFromAPI(false); err != nil {
 					log.Printf("[config] Failed to refresh config from API after realtime event: %v", err)
 				}
 			})

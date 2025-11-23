@@ -44,8 +44,13 @@ func (c *Client) buildURL(path string) string {
 	return fmt.Sprintf("%s/api/v1/%s", c.baseURL, strings.TrimPrefix(path, "/"))
 }
 
+// ErrNotModified is returned when the API returns 304 Not Modified
+var ErrNotModified = fmt.Errorf("configuration not modified")
+
 // GetConfig fetches the configuration from the API
-func (c *Client) GetConfig() ([]byte, error) {
+// If etag is provided, it will be sent in the If-None-Match header
+// Returns ErrNotModified if the server returns 304 Not Modified
+func (c *Client) GetConfig(etag string) ([]byte, error) {
 	if c.hostKey == "" {
 		return nil, fmt.Errorf("host key is required")
 	}
@@ -58,11 +63,21 @@ func (c *Client) GetConfig() ([]byte, error) {
 	req.Header.Set("Authorization", "Bearer "+c.hostKey)
 	req.Header.Set("User-Agent", c.userAgent)
 
+	// Add If-None-Match header if etag is provided
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch configuration: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// Handle 304 Not Modified
+	if resp.StatusCode == http.StatusNotModified {
+		return nil, ErrNotModified
+	}
 
 	if strings.SplitAfter(resp.Header.Get("Content-Type"), ";")[0] != "application/json" {
 		return nil, fmt.Errorf("unexpected content type: %s", resp.Header.Get("Content-Type"))

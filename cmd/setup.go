@@ -51,8 +51,8 @@ func setupHost(hostKey string) error {
 		log.Printf("Connecting to API: %s", client.GetBaseURL())
 	}
 
-	// Fetch configuration from API
-	body, err := client.GetConfig()
+	// Fetch configuration from API (no ETag for initial setup)
+	body, err := client.GetConfig("")
 	if err != nil {
 		return err
 	}
