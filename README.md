@@ -39,7 +39,7 @@ It features an (optional) [control panel](https://flowguard.network/) for easy m
 
 ### Prerequisites (for building from source)
 
-- Go 1.21 or later
+- Go 1.25 or later
 - Linux system with iptables support
 - Root/sudo access for port redirection
 - ipset installed for IP filtering (optional)

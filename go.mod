@@ -2,6 +2,8 @@ module flowguard
 
 go 1.25.0
 
+toolchain go1.25.4
+
 require (
 	github.com/axiomhq/axiom-go v0.26.2
 	github.com/fsnotify/fsnotify v1.9.0
