@@ -66,12 +66,16 @@ func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...
 	// Try to load from cache first
 	entry, err := c.loadCacheEntry(cacheFile)
 	if err == nil && time.Since(entry.Timestamp) < maxAge {
-		log.Printf("[cache] Using cached data for %s (age: %v)", url, time.Since(entry.Timestamp))
+		if c.verbose {
+			log.Printf("[cache] Using cached data for %s (age: %v)", url, time.Since(entry.Timestamp))
+		}
 		return entry.Data, false, nil
 	}
 
-	// Fetch fresh data
-	log.Printf("[cache] Fetching fresh data from %s", url)
+	if c.verbose {
+		log.Printf("[cache] Fetching fresh data from %s", url)
+	}
+
 	var existingETag string
 	if entry != nil {
 		existingETag = entry.ETag
@@ -98,7 +102,11 @@ func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...
 		if err := c.saveCacheEntry(cacheFile, entry); err != nil {
 			log.Printf("[cache] Failed to update cache timestamp for %s: %v", url, err)
 		}
-		log.Printf("[cache] Not modified (304) for %s - using existing data", url)
+
+		if c.verbose {
+			log.Printf("[cache] Not modified (304) for %s - using existing data", url)
+		}
+
 		return entry.Data, false, nil
 	}
 
@@ -111,8 +119,9 @@ func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...
 	if err := c.saveCacheEntry(cacheFile, newEntry); err != nil {
 		log.Printf("[cache] Failed to save to cache for %s: %v", url, err)
 	}
-
-	log.Printf("[cache] Successfully fetched fresh data for %s", url)
+	if c.verbose {
+		log.Printf("[cache] Successfully fetched fresh data for %s", url)
+	}
 	return data, true, nil
 }
 

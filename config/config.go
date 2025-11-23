@@ -134,8 +134,7 @@ func NewManager(configPath string, userAgent string, version string, cacheDir st
 		var err error
 		c, err = cache.NewCache(cacheDir, userAgent, verbose)
 		if err != nil {
-			log.Printf("[config] Failed to create cache: %v", err)
-			os.Exit(1)
+			return nil, fmt.Errorf("failed to create cache: %w", err)
 		}
 	}
 
