@@ -41,22 +41,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Handle setup command (doesn't need flags, uses default config path)
-	if subcommand == "setup" {
-		if len(os.Args) < 3 {
-			log.Fatal("Usage: flowguard setup <host-key>")
-		}
-
-		configFile := "/etc/flowguard/config.json"
-		if err := setupHost(os.Args[2], configFile); err != nil {
-			log.Printf("[ERROR] Failed to setup host: %v", err)
-			os.Exit(1)
-		}
-
-		log.Printf("[SUCCESS] Host configured successfully. Configuration saved to %s", configFile)
-		os.Exit(0)
-	}
-
 	// For remaining commands, parse flags from args after the subcommand
 	var (
 		// Proxy configuration
@@ -70,6 +54,24 @@ func main() {
 		cacheDir   = flag.String("cache-dir", "/var/cache/flowguard", "Directory for caching external data")
 		configFile = flag.String("config", "/etc/flowguard/config.json", "Path to the configuration file")
 	)
+
+	// Handle setup command
+	if subcommand == "setup" {
+		// Parse flags after the subcommand
+		flag.CommandLine.Parse(os.Args[3:])
+
+		if len(os.Args) < 3 {
+			log.Fatal("Usage: flowguard setup <host-key>")
+		}
+
+		if err := setupHost(os.Args[2], *configFile, *verbose); err != nil {
+			log.Printf("[ERROR] Failed to setup host: %v", err)
+			os.Exit(1)
+		}
+
+		log.Printf("[SUCCESS] Host configured successfully. Configuration saved to %s", *configFile)
+		os.Exit(0)
+	}
 
 	// Parse flags after the subcommand
 	flag.CommandLine.Parse(os.Args[2:])
@@ -171,12 +173,13 @@ func parseBindAddrsList(list string) []string {
 }
 
 // setupHost downloads the host configuration from the FlowGuard API and saves it to disk
-func setupHost(hostKey, configFile string) error {
+func setupHost(hostKey, configFile string, verbose bool) error {
 	// Create API client
 	client := api.NewClient(hostKey, fmt.Sprintf("FlowGuard/%s", Version))
 
-	// Show which API endpoint we're using (helpful for debugging)
-	log.Printf("Using API base: %s", client.GetBaseURL())
+	if verbose {
+		log.Printf("Connecting to API: %s", client.GetBaseURL())
+	}
 
 	// Fetch configuration from API
 	body, err := client.GetConfig()
