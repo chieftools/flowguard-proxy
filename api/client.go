@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -63,14 +64,24 @@ func (c *Client) GetConfig() ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	if strings.SplitAfter(resp.Header.Get("Content-Type"), ";")[0] != "application/json" {
+		return nil, fmt.Errorf("unexpected content type: %s", resp.Header.Get("Content-Type"))
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResponse struct {
+			Message string `json:"message,omitempty"`
+		}
+		if err := json.Unmarshal(body, &errorResponse); err != nil {
+			return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+		}
+
+		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, errorResponse.Message)
 	}
 
 	return body, nil
