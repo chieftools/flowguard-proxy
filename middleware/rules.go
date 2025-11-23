@@ -527,8 +527,7 @@ func blockRequest(w http.ResponseWriter, r *http.Request, action *config.RuleAct
 		h.Set("X-Content-Type-Options", "nosniff")
 
 		w.WriteHeader(status)
-
-		fmt.Fprintln(w, html)
+		w.Write(html)
 
 		return
 	}
