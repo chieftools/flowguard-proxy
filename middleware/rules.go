@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"bytes"
 	"crypto/sha256"
+	_ "embed"
 	"fmt"
 	"log"
 	"net"
@@ -15,6 +17,9 @@ import (
 	"flowguard/config"
 	"flowguard/normalization"
 )
+
+//go:embed static/blocked.html
+var blockedHTML []byte
 
 // ConfigProvider interface for accessing configuration
 type ConfigProvider interface {
@@ -459,14 +464,26 @@ func (rm *RulesMiddleware) Stop() {
 	}
 }
 
+// acceptsHTML checks if the request accepts HTML responses
+func acceptsHTML(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	if accept == "" {
+		return false
+	}
+	// Check if Accept header contains text/html
+	return strings.Contains(accept, "text/html") || strings.Contains(accept, "*/*")
+}
+
 // blockRequest sends a block response based on the action configuration
 func blockRequest(w http.ResponseWriter, r *http.Request, action *config.RuleAction, rule *config.Rule) {
 	// Set rule match information in context for logging
 	SetRuleMatch(r, rule, action, action.Action)
 
+	streamID := GetStreamID(r)
+
 	// Add Via header to blocked responses to match proxied responses and our stream ID
 	w.Header().Add("Via", fmt.Sprintf("%d.%d flowguard", r.ProtoMajor, r.ProtoMinor))
-	w.Header().Add("FG-Stream", GetStreamID(r))
+	w.Header().Add("FG-Stream", streamID)
 
 	// Use configured status and message, or defaults
 	message := action.Message
@@ -489,6 +506,34 @@ func blockRequest(w http.ResponseWriter, r *http.Request, action *config.RuleAct
 		}
 	}
 
+	if acceptsHTML(r) {
+		// Replace placeholders in the HTML template
+		html := bytes.ReplaceAll(blockedHTML, []byte("%%STREAM_ID%%"), []byte(streamID))
+		html = bytes.ReplaceAll(html, []byte("%%MESSAGE%%"), []byte(message))
+
+		h := w.Header()
+
+		// Delete the Content-Length header, which might be for some other content.
+		// Assuming the error string fits in the writer's buffer, we'll figure
+		// out the correct Content-Length for it later.
+		//
+		// We don't delete Content-Encoding, because some middleware sets
+		// Content-Encoding: gzip and wraps the ResponseWriter to compress on-the-fly.
+		// See https://go.dev/issue/66343.
+		h.Del("Content-Length")
+
+		// There might be content type already set, but we reset it to text/html for the error page.
+		h.Set("Content-Type", "text/html; charset=utf-8")
+		h.Set("X-Content-Type-Options", "nosniff")
+
+		w.WriteHeader(status)
+
+		fmt.Fprintln(w, html)
+
+		return
+	}
+
+	// Fall back to plain text response
 	http.Error(w, message, status)
 }
 
