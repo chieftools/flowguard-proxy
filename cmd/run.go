@@ -54,6 +54,11 @@ func runProxy() {
 		os.Exit(1)
 	}
 
+	err = configMgr.RefreshFromAPI(false)
+	if err != nil {
+		log.Printf("Warning: Failed to refresh configuration from API: %v", err)
+	}
+
 	// Create and start proxy manager
 	proxyManager := proxy.NewManager(configMgr, &proxy.Config{
 		Verbose:    verbose,
