@@ -222,6 +222,8 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 		// Ensure URL points to the actual backend
 		req.URL.Host = target.Host
 		req.URL.Scheme = target.Scheme
+
+		req.Header.Set("FG-Stream", middleware.GetStreamID(req))
 	}
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
