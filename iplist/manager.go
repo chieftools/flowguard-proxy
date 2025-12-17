@@ -18,7 +18,9 @@ import (
 // ListConfig represents configuration for a single IP list
 type ListConfig struct {
 	URL                    string `json:"url,omitempty"`                      // URL to fetch IPs from
+	Name                   string `json:"name,omitempty"`                     // Human-readable name for the IP list
 	Path                   string `json:"path,omitempty"`                     // Local file path
+	Confidence             int    `json:"confidence,omitempty"`               // Minimum confidence level (0-100) for entries in this list
 	RefreshIntervalSeconds int    `json:"refresh_interval_seconds,omitempty"` // Refresh interval in seconds
 }
 
@@ -225,6 +227,14 @@ func (m *Manager) Contains(listName string, ip string) bool {
 	}
 
 	return list.trie.Contains(addr)
+}
+
+// HasList checks if a named list exists
+func (m *Manager) HasList(listName string) bool {
+	m.mu.RLock()
+	_, exists := m.lists[listName]
+	m.mu.RUnlock()
+	return exists
 }
 
 // refreshLoop periodically refreshes a list from its URL

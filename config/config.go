@@ -65,7 +65,9 @@ type IPListsConfig map[string]*IPListConfig
 
 type IPListConfig struct {
 	URL                    string `json:"url,omitempty"`
+	Name                   string `json:"name,omitempty"`
 	Path                   string `json:"path,omitempty"`
+	Confidence             int    `json:"confidence,omitempty"`
 	RefreshIntervalSeconds int    `json:"refresh_interval_seconds,omitempty"`
 }
 
@@ -101,8 +103,9 @@ type MatchCondition struct {
 	Value           string   `json:"value,omitempty"`
 	Values          []string `json:"values,omitempty"`
 	CaseInsensitive bool     `json:"case_insensitive,omitempty"`
-	Family          uint     `json:"family,omitempty"`    // For ipset matches (4 or 6)
-	RawMatch        bool     `json:"raw_match,omitempty"` // Skip normalization for path matching
+	Confidence      int      `json:"confidence,omitempty"` // Minimum confidence level (0-100) for IP list matches
+	Family          uint     `json:"family,omitempty"`     // For ipset matches (4 or 6)
+	RawMatch        bool     `json:"raw_match,omitempty"`  // Skip normalization for path matching
 	compiledRegex   *regexp.Regexp
 }
 

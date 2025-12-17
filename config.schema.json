@@ -219,6 +219,12 @@
                     "type": "boolean",
                     "description": "Skip URL normalization for path matching to detect malformed URLs (default: false). Only applies to 'path' type matches."
                 },
+                "confidence": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": "Minimum confidence level (0-100) required for a match to be considered valid (only applies to IP list matches)"
+                },
                 "family": {
                     "type": "integer",
                     "enum": [
@@ -484,9 +490,19 @@
                     "format": "uri",
                     "description": "URL to fetch IP list from (one IP or CIDR per line)"
                 },
+                "name": {
+                    "type": "string",
+                    "description": "Human-readable name for the IP list"
+                },
                 "path": {
                     "type": "string",
                     "description": "Local file path to load IP list from (one IP or CIDR per line)"
+                },
+                "confidence": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": "Minimum confidence level (0-100) for IP list entries contained in this list"
                 },
                 "refresh_interval_seconds": {
                     "type": "integer",

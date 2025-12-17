@@ -31,6 +31,7 @@ type ConfigProvider interface {
 // IPListManager interface for IP list lookups
 type IPListManager interface {
 	Contains(listName string, ip string) bool
+	HasList(listName string) bool
 }
 
 // RulesMiddleware implements dynamic rule-based filtering
@@ -447,8 +448,18 @@ func (rm *RulesMiddleware) matchesIPList(r *http.Request, match *config.MatchCon
 		return false
 	}
 
+	// Determine the list name to use
+	// If confidence is set, try "<value>@<confidence>" first, fall back to "<value>"
+	listName := match.Value
+	if match.Confidence > 0 {
+		confidenceListName := fmt.Sprintf("%s@%d", match.Value, match.Confidence)
+		if rm.ipListManager.HasList(confidenceListName) {
+			listName = confidenceListName
+		}
+	}
+
 	// Check if IP is in the named list
-	contains := rm.ipListManager.Contains(match.Value, host)
+	contains := rm.ipListManager.Contains(listName, host)
 
 	// Handle "in" vs "not-in"
 	if match.Match == "not-in" {
