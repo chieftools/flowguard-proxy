@@ -16,6 +16,7 @@ func TestParseIPsToTrie(t *testing.T) {
 		data        string
 		expectCount int
 		expectError bool
+		expectNil   bool            // expect nil trie (for empty lists)
 		testIPs     map[string]bool // IP -> should be in trie
 	}{
 		{
@@ -114,13 +115,15 @@ invalid-ip
 			name:        "Empty data",
 			data:        "",
 			expectCount: 0,
-			expectError: true,
+			expectError: false,
+			expectNil:   true, // Empty lists return nil trie
 		},
 		{
 			name:        "Only comments",
 			data:        "# Comment 1\n# Comment 2\n",
 			expectCount: 0,
-			expectError: true,
+			expectError: false,
+			expectNil:   true, // Empty lists return nil trie
 		},
 	}
 
@@ -141,6 +144,13 @@ invalid-ip
 
 			if count != tt.expectCount {
 				t.Errorf("Expected count %d but got %d", tt.expectCount, count)
+			}
+
+			if tt.expectNil {
+				if trie != nil {
+					t.Error("Expected nil trie for empty list")
+				}
+				return
 			}
 
 			// Test IP containment
@@ -454,5 +464,51 @@ func TestRefreshListsByBaseID(t *testing.T) {
 	err = manager.RefreshListsByBaseID("nonexistent")
 	if err != nil {
 		t.Errorf("RefreshListsByBaseID with non-existent ID should not error: %v", err)
+	}
+}
+
+func TestEmptyIPList(t *testing.T) {
+	// Create temporary file with no valid IPs (only comments)
+	tmpFile, err := os.CreateTemp("", "iplist-empty-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	// Write only comments (no valid IPs)
+	tmpFile.Write([]byte("# This is an empty list\n# No IPs here\n"))
+	tmpFile.Close()
+
+	// Create a cache instance
+	cacheInstance, err := cache.NewCache("/tmp/flowguard-test-cache", "test-agent", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create manager with empty list
+	listsConfig := map[string]ListConfig{
+		"empty_list": {Path: tmpFile.Name()},
+	}
+
+	manager, err := New(listsConfig, cacheInstance, false)
+	if err != nil {
+		t.Fatalf("Failed to create manager with empty list: %v", err)
+	}
+	defer manager.Stop()
+
+	// Verify list exists
+	if !manager.HasList("empty_list") {
+		t.Error("Expected empty_list to exist")
+	}
+
+	// Verify Contains returns false for any IP (fast path)
+	if manager.Contains("empty_list", "192.168.1.1") {
+		t.Error("Empty list should not contain any IP")
+	}
+	if manager.Contains("empty_list", "10.0.0.1") {
+		t.Error("Empty list should not contain any IP")
+	}
+	if manager.Contains("empty_list", "2001:db8::1") {
+		t.Error("Empty list should not contain any IPv6")
 	}
 }

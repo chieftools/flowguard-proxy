@@ -30,6 +30,7 @@ type IPList struct {
 	config ListConfig
 	trie   *iptrie.Trie
 	loaded bool // tracks if list has been loaded at least once
+	empty  bool // true if list has 0 entries (optimization to skip lookups)
 	mu     sync.RWMutex
 }
 
@@ -151,16 +152,17 @@ func (l *IPList) loadInternal(cacheInstance *cache.Cache, verbose bool, forceRef
 		return nil
 	}
 
-	// Parse IPs and build new trie
+	// Parse IPs and build new trie (returns nil trie for empty lists)
 	newTrie, count, err := parseIPsToTrie(data, source)
 	if err != nil {
 		return fmt.Errorf("failed to parse IPs: %w", err)
 	}
 
-	// Atomically swap the trie
+	// Atomically swap the trie and update flags
 	l.mu.Lock()
 	l.trie = newTrie
 	l.loaded = true
+	l.empty = (count == 0)
 	l.mu.Unlock()
 
 	log.Printf("[ip_list] Loaded list '%s' from %s: %d entries", l.name, source, count)
@@ -214,8 +216,9 @@ func parseIPsToTrie(data []byte, source string) (*iptrie.Trie, int, error) {
 		return nil, 0, fmt.Errorf("scanner error: %w", err)
 	}
 
+	// Return nil trie for empty lists (optimization: no trie allocation needed)
 	if count == 0 {
-		return nil, 0, fmt.Errorf("no valid IPs found in %s", source)
+		return nil, 0, nil
 	}
 
 	return newTrie, count, nil
@@ -231,21 +234,26 @@ func (m *Manager) Contains(listName string, ip string) bool {
 		return false
 	}
 
+	// Fast path: empty lists never contain any IP
+	list.mu.RLock()
+	if list.empty {
+		list.mu.RUnlock()
+		return false
+	}
+	trie := list.trie
+	list.mu.RUnlock()
+
+	if trie == nil {
+		return false
+	}
+
 	// Parse the IP address
 	addr, err := netip.ParseAddr(ip)
 	if err != nil {
 		return false
 	}
 
-	// Check containment in the trie
-	list.mu.RLock()
-	defer list.mu.RUnlock()
-
-	if list.trie == nil {
-		return false
-	}
-
-	return list.trie.Contains(addr)
+	return trie.Contains(addr)
 }
 
 // HasList checks if a named list exists
