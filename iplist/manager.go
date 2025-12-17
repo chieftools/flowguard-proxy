@@ -37,16 +37,18 @@ type IPList struct {
 type Manager struct {
 	lists    map[string]*IPList
 	cache    *cache.Cache
+	verbose  bool
 	mu       sync.RWMutex
 	stopChan chan struct{}
 	wg       sync.WaitGroup
 }
 
 // New creates a new IP list manager
-func New(listsConfig map[string]ListConfig, cacheInstance *cache.Cache) (*Manager, error) {
+func New(listsConfig map[string]ListConfig, cacheInstance *cache.Cache, verbose bool) (*Manager, error) {
 	m := &Manager{
 		lists:    make(map[string]*IPList),
 		cache:    cacheInstance,
+		verbose:  verbose,
 		stopChan: make(chan struct{}),
 	}
 
@@ -77,7 +79,7 @@ func (m *Manager) addList(name string, config ListConfig) error {
 	}
 
 	// Load initial data
-	if err := list.load(m.cache); err != nil {
+	if err := list.load(m.cache, m.verbose); err != nil {
 		return fmt.Errorf("failed to load initial data: %w", err)
 	}
 
@@ -89,7 +91,7 @@ func (m *Manager) addList(name string, config ListConfig) error {
 }
 
 // load loads IP data into the list's trie
-func (l *IPList) load(cacheInstance *cache.Cache) error {
+func (l *IPList) load(cacheInstance *cache.Cache, verbose bool) error {
 	var data []byte
 	var err error
 	var source string
@@ -128,7 +130,9 @@ func (l *IPList) load(cacheInstance *cache.Cache) error {
 
 	// Skip rebuilding if data hasn't changed AND list is already loaded
 	if !wasUpdated && l.loaded {
-		log.Printf("[ip_list] List '%s' not modified, skipping rebuild", l.name)
+		if verbose {
+			log.Printf("[ip_list] List '%s' not modified, skipping rebuild", l.name)
+		}
 		return nil
 	}
 
@@ -248,7 +252,7 @@ func (m *Manager) refreshLoop(name string, list *IPList) {
 	for {
 		select {
 		case <-ticker.C:
-			if err := list.load(m.cache); err != nil {
+			if err := list.load(m.cache, m.verbose); err != nil {
 				log.Printf("[ip_list] Failed to refresh list %s: %v", name, err)
 			}
 		case <-m.stopChan:

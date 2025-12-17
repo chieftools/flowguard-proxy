@@ -128,7 +128,7 @@ func (p *Manager) initializeIPListManager(cfg *config.Config, rulesMiddleware *m
 	}
 
 	// Create the IP list manager with the cache instance
-	ipListMgr, err := iplist.New(listsConfig, p.configManager.GetCache())
+	ipListMgr, err := iplist.New(listsConfig, p.configManager.GetCache(), p.config.Verbose)
 	if err != nil {
 		log.Printf("[ip_list] Failed to initialize IP list manager: %v", err)
 		return

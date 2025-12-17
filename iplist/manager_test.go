@@ -184,7 +184,7 @@ func TestIPListLoad(t *testing.T) {
 		},
 	}
 
-	err = list.load(cacheInstance)
+	err = list.load(cacheInstance, false)
 	if err != nil {
 		t.Fatalf("Failed to load list: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestManagerContains(t *testing.T) {
 		},
 	}
 
-	manager, err := New(listsConfig, cacheInstance)
+	manager, err := New(listsConfig, cacheInstance, false)
 	if err != nil {
 		t.Fatalf("Failed to create manager: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestManagerMultipleLists(t *testing.T) {
 		"list2": {Path: tmpFile2.Name()},
 	}
 
-	manager, err := New(listsConfig, cacheInstance)
+	manager, err := New(listsConfig, cacheInstance, false)
 	if err != nil {
 		t.Fatalf("Failed to create manager: %v", err)
 	}

@@ -111,7 +111,7 @@ func loadAndShowStats(listName string, listCfg *config.IPListConfig, cacheInstan
 		listName: iplistCfg,
 	}
 
-	manager, err := iplist.New(listsConfig, cacheInstance)
+	manager, err := iplist.New(listsConfig, cacheInstance, false)
 	if err != nil {
 		return fmt.Errorf("failed to load list: %w", err)
 	}
@@ -165,7 +165,7 @@ func checkIPInList(listName string, listCfg *config.IPListConfig, ipAddr string,
 		listName: iplistCfg,
 	}
 
-	manager, err := iplist.New(listsConfig, cacheInstance)
+	manager, err := iplist.New(listsConfig, cacheInstance, false)
 	if err != nil {
 		return fmt.Errorf("failed to load list: %w", err)
 	}
