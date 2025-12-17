@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"sort"
 	"testing"
 	"time"
 
@@ -21,8 +22,6 @@ func (m *MockConfigProvider) GetRules() map[string]*config.Rule {
 }
 
 func (m *MockConfigProvider) GetSortedRules() []*config.Rule {
-	// For tests, we can use the config manager's sorting logic
-	// or return a simple sorted slice
 	if m.rules == nil || len(m.rules) == 0 {
 		return nil
 	}
@@ -31,6 +30,17 @@ func (m *MockConfigProvider) GetSortedRules() []*config.Rule {
 	for _, rule := range m.rules {
 		ruleList = append(ruleList, rule)
 	}
+
+	// Sort by sort_order (primary), then by ID (secondary) - matching real implementation
+	sort.Slice(ruleList, func(i, j int) bool {
+		if ruleList[i].SortOrder != 0 || ruleList[j].SortOrder != 0 {
+			if ruleList[i].SortOrder != ruleList[j].SortOrder {
+				return ruleList[i].SortOrder < ruleList[j].SortOrder
+			}
+		}
+		return ruleList[i].ID < ruleList[j].ID
+	})
+
 	return ruleList
 }
 
