@@ -339,3 +339,120 @@ func containsIP(trie *iptrie.Trie, ip string) bool {
 	}
 	return trie.Contains(addr)
 }
+
+func TestMatchesBaseID(t *testing.T) {
+	tests := []struct {
+		name     string
+		listName string
+		baseID   string
+		expected bool
+	}{
+		{"exact match", "blocklist", "blocklist", true},
+		{"with confidence level", "blocklist@80", "blocklist", true},
+		{"with high confidence", "blocklist@95", "blocklist", true},
+		{"different list", "allowlist", "blocklist", false},
+		{"partial match no at", "blocklist2", "blocklist", false},
+		{"base ID with @ in name", "block@list@80", "block@list", true},
+		{"empty base ID", "blocklist", "", false},
+		{"empty list name", "", "blocklist", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := matchesBaseID(tt.listName, tt.baseID)
+			if result != tt.expected {
+				t.Errorf("matchesBaseID(%q, %q) = %v; want %v", tt.listName, tt.baseID, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestRefreshListsByBaseID(t *testing.T) {
+	// Create temporary files for test lists
+	tmpFile1, err := os.CreateTemp("", "iplist-base-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile1.Name())
+
+	tmpFile2, err := os.CreateTemp("", "iplist-conf80-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile2.Name())
+
+	tmpFile3, err := os.CreateTemp("", "iplist-other-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile3.Name())
+
+	// Write test IPs
+	tmpFile1.Write([]byte("192.168.1.1"))
+	tmpFile1.Close()
+
+	tmpFile2.Write([]byte("192.168.2.1"))
+	tmpFile2.Close()
+
+	tmpFile3.Write([]byte("192.168.3.1"))
+	tmpFile3.Close()
+
+	// Create a cache instance
+	cacheInstance, err := cache.NewCache("/tmp/flowguard-test-cache", "test-agent", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create manager with lists simulating confidence levels
+	listsConfig := map[string]ListConfig{
+		"blocklist":    {Path: tmpFile1.Name()},
+		"blocklist@80": {Path: tmpFile2.Name()},
+		"allowlist":    {Path: tmpFile3.Name()},
+	}
+
+	manager, err := New(listsConfig, cacheInstance, false)
+	if err != nil {
+		t.Fatalf("Failed to create manager: %v", err)
+	}
+	defer manager.Stop()
+
+	// Verify initial state
+	if !manager.Contains("blocklist", "192.168.1.1") {
+		t.Error("Expected 192.168.1.1 in blocklist")
+	}
+	if !manager.Contains("blocklist@80", "192.168.2.1") {
+		t.Error("Expected 192.168.2.1 in blocklist@80")
+	}
+
+	// Now update the files
+	os.WriteFile(tmpFile1.Name(), []byte("10.0.0.1"), 0644)
+	os.WriteFile(tmpFile2.Name(), []byte("10.0.0.2"), 0644)
+
+	// Refresh only lists matching "blocklist" base ID
+	err = manager.RefreshListsByBaseID("blocklist")
+	if err != nil {
+		t.Fatalf("RefreshListsByBaseID failed: %v", err)
+	}
+
+	// Verify that blocklist and blocklist@80 were refreshed
+	if !manager.Contains("blocklist", "10.0.0.1") {
+		t.Error("Expected 10.0.0.1 in blocklist after refresh")
+	}
+	if manager.Contains("blocklist", "192.168.1.1") {
+		t.Error("Did not expect 192.168.1.1 in blocklist after refresh")
+	}
+	if !manager.Contains("blocklist@80", "10.0.0.2") {
+		t.Error("Expected 10.0.0.2 in blocklist@80 after refresh")
+	}
+
+	// Verify that allowlist was not refreshed (still has original content)
+	if !manager.Contains("allowlist", "192.168.3.1") {
+		t.Error("Expected allowlist to remain unchanged")
+	}
+
+	// Test refresh with non-existent base ID (should not error)
+	err = manager.RefreshListsByBaseID("nonexistent")
+	if err != nil {
+		t.Errorf("RefreshListsByBaseID with non-existent ID should not error: %v", err)
+	}
+}

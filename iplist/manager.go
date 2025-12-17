@@ -92,6 +92,16 @@ func (m *Manager) addList(name string, config ListConfig) error {
 
 // load loads IP data into the list's trie
 func (l *IPList) load(cacheInstance *cache.Cache, verbose bool) error {
+	return l.loadInternal(cacheInstance, verbose, false)
+}
+
+// forceLoad loads IP data into the list's trie, bypassing cache TTL but respecting etag
+func (l *IPList) forceLoad(cacheInstance *cache.Cache, verbose bool) error {
+	return l.loadInternal(cacheInstance, verbose, true)
+}
+
+// loadInternal handles the common loading logic for both regular and forced loads
+func (l *IPList) loadInternal(cacheInstance *cache.Cache, verbose bool, forceRefresh bool) error {
 	var data []byte
 	var err error
 	var source string
@@ -100,11 +110,16 @@ func (l *IPList) load(cacheInstance *cache.Cache, verbose bool) error {
 	// Fetch data from URL or file
 	if l.config.URL != "" {
 		source = l.config.URL
-		cacheTTL := 24 * time.Hour
-		if l.config.RefreshIntervalSeconds > 0 {
-			cacheTTL = time.Duration(l.config.RefreshIntervalSeconds) * time.Second
+		if forceRefresh {
+			// Bypass TTL but respect etag
+			data, wasUpdated, err = cacheInstance.FetchWithCacheForced(l.config.URL)
+		} else {
+			cacheTTL := 24 * time.Hour
+			if l.config.RefreshIntervalSeconds > 0 {
+				cacheTTL = time.Duration(l.config.RefreshIntervalSeconds) * time.Second
+			}
+			data, wasUpdated, err = cacheInstance.FetchWithCache(l.config.URL, cacheTTL)
 		}
-		data, wasUpdated, err = cacheInstance.FetchWithCache(l.config.URL, cacheTTL)
 		if err != nil {
 			// Try local path as fallback
 			if l.config.Path != "" {
@@ -277,4 +292,49 @@ func (m *Manager) GetListNames() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// RefreshListsByBaseID refreshes all lists that match a base ID
+// A base ID matches list names that either equal the base ID exactly
+// or have the format "<baseID>@<confidence>"
+// This bypasses the normal cache TTL but respects etag for conditional requests
+func (m *Manager) RefreshListsByBaseID(baseID string) error {
+	m.mu.RLock()
+	var listsToRefresh []*IPList
+	for name, list := range m.lists {
+		if matchesBaseID(name, baseID) {
+			listsToRefresh = append(listsToRefresh, list)
+		}
+	}
+	m.mu.RUnlock()
+
+	if len(listsToRefresh) == 0 {
+		log.Printf("[ip_list] No lists found matching base ID: %s", baseID)
+		return nil
+	}
+
+	log.Printf("[ip_list] Refreshing %d list(s) matching base ID: %s", len(listsToRefresh), baseID)
+
+	var lastErr error
+	for _, list := range listsToRefresh {
+		if err := list.forceLoad(m.cache, m.verbose); err != nil {
+			log.Printf("[ip_list] Failed to refresh list %s: %v", list.name, err)
+			lastErr = err
+		}
+	}
+
+	return lastErr
+}
+
+// matchesBaseID checks if a list name matches a base ID
+// Returns true if name equals baseID or has format "<baseID>@<confidence>"
+func matchesBaseID(name, baseID string) bool {
+	if name == baseID {
+		return true
+	}
+	// Check if name starts with baseID followed by @
+	if strings.HasPrefix(name, baseID+"@") {
+		return true
+	}
+	return false
 }

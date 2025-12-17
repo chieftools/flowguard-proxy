@@ -107,6 +107,11 @@ func NewManager(configMgr *config.Manager, cfg *Config) *Manager {
 		pm.handleIPListConfigChange(newConfig, rulesMiddleware)
 	})
 
+	// Register callback to handle IP list update events from WebSocket
+	configMgr.OnIPListUpdate(func(listIDs []string) {
+		pm.handleIPListUpdateEvent(listIDs)
+	})
+
 	return pm
 }
 
@@ -189,6 +194,26 @@ func (p *Manager) handleIPListConfigChange(newConfig *config.Config, rulesMiddle
 	}
 
 	// Case 4: No IP lists before or after - nothing to do
+}
+
+// handleIPListUpdateEvent handles IP list updates triggered by WebSocket events
+func (p *Manager) handleIPListUpdateEvent(listIDs []string) {
+	p.mu.RLock()
+	ipListMgr := p.ipListManager
+	p.mu.RUnlock()
+
+	if ipListMgr == nil {
+		log.Printf("[ip_list] No IP list manager initialized, ignoring update event for lists: %v", listIDs)
+		return
+	}
+
+	log.Printf("[ip_list] Processing update event for %d list(s): %v", len(listIDs), listIDs)
+
+	for _, listID := range listIDs {
+		if err := ipListMgr.RefreshListsByBaseID(listID); err != nil {
+			log.Printf("[ip_list] Failed to refresh list %s: %v", listID, err)
+		}
+	}
 }
 
 func (p *Manager) Start() error {

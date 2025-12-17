@@ -128,6 +128,12 @@ type Manager struct {
 	stopWatcher     chan struct{}
 	stopAPIRefresh  chan struct{}
 	mu              sync.RWMutex
+
+	// IP list update callback support with debouncing
+	ipListUpdateCallbacks []func(listIDs []string)
+	ipListDebounceTimer   *time.Timer
+	ipListPendingUpdates  map[string]struct{} // Set of pending list IDs to refresh
+	ipListMu              sync.Mutex          // Separate mutex for IP list update handling
 }
 
 // NewManager creates a new configuration manager
@@ -149,16 +155,17 @@ func NewManager(configPath string, userAgent string, version string, cacheDir st
 	}
 
 	m := &Manager{
-		cache:          c,
-		version:        version,
-		verbose:        verbose,
-		watcher:        watcher,
-		userAgent:      userAgent,
-		configPath:     configPath,
-		stopWatcher:    make(chan struct{}),
-		stopAPIRefresh: make(chan struct{}),
-		apiClient:      api.NewClient("", userAgent),
-		callbacks:      make([]func(*Config), 0),
+		cache:                c,
+		version:              version,
+		verbose:              verbose,
+		watcher:              watcher,
+		userAgent:            userAgent,
+		configPath:           configPath,
+		stopWatcher:          make(chan struct{}),
+		stopAPIRefresh:       make(chan struct{}),
+		apiClient:            api.NewClient("", userAgent),
+		callbacks:            make([]func(*Config), 0),
+		ipListPendingUpdates: make(map[string]struct{}),
 	}
 
 	// Load initial configuration
@@ -408,6 +415,67 @@ func (m *Manager) RemoveOnChange(callback func(*Config)) {
 			m.callbacks = m.callbacks[:len(m.callbacks)-1]
 			break
 		}
+	}
+}
+
+// OnIPListUpdate adds a callback to be called when IP list updates are received
+// The callback receives a slice of list base IDs that need to be refreshed
+func (m *Manager) OnIPListUpdate(callback func(listIDs []string)) {
+	m.ipListMu.Lock()
+	defer m.ipListMu.Unlock()
+	m.ipListUpdateCallbacks = append(m.ipListUpdateCallbacks, callback)
+}
+
+// handleIPListUpdateEvent handles the iplist.updated WebSocket event with debouncing
+// Events are debounced for up to 5 seconds to batch rapid consecutive updates
+func (m *Manager) handleIPListUpdateEvent(listID string) {
+	m.ipListMu.Lock()
+	defer m.ipListMu.Unlock()
+
+	// Add list ID to pending updates
+	m.ipListPendingUpdates[listID] = struct{}{}
+
+	// If timer is already running, it will fire with accumulated updates
+	// Otherwise, start a new 5-second debounce timer
+	if m.ipListDebounceTimer == nil {
+		m.ipListDebounceTimer = time.AfterFunc(5*time.Second, m.flushIPListUpdates)
+		if m.verbose {
+			log.Printf("[config] Started IP list update debounce timer for list: %s", listID)
+		}
+	} else if m.verbose {
+		log.Printf("[config] Added list %s to pending IP list updates (debouncing)", listID)
+	}
+}
+
+// flushIPListUpdates processes all pending IP list updates after debounce period
+func (m *Manager) flushIPListUpdates() {
+	m.ipListMu.Lock()
+
+	// Collect all pending list IDs
+	listIDs := make([]string, 0, len(m.ipListPendingUpdates))
+	for listID := range m.ipListPendingUpdates {
+		listIDs = append(listIDs, listID)
+	}
+
+	// Clear pending updates and timer
+	m.ipListPendingUpdates = make(map[string]struct{})
+	m.ipListDebounceTimer = nil
+
+	// Copy callbacks to avoid holding lock during callback execution
+	callbacks := make([]func([]string), len(m.ipListUpdateCallbacks))
+	copy(callbacks, m.ipListUpdateCallbacks)
+
+	m.ipListMu.Unlock()
+
+	if len(listIDs) == 0 {
+		return
+	}
+
+	log.Printf("[config] Flushing IP list updates for %d list(s): %v", len(listIDs), listIDs)
+
+	// Notify all registered callbacks
+	for _, callback := range callbacks {
+		callback(listIDs)
 	}
 }
 
@@ -923,6 +991,27 @@ func (m *Manager) updatePusherClient(config *Config) {
 				if err := m.RefreshFromAPI(false); err != nil {
 					log.Printf("[config] Failed to refresh config from API after realtime event: %v", err)
 				}
+			})
+
+			// Set up event handler for IP list updates
+			m.realtimeClient.OnEvent("iplist.updated", func(message pusher.Message) {
+				// Parse the list ID from the message data
+				// Expected format: {"id": "listname"}
+				var eventData struct {
+					ID string `json:"id"`
+				}
+				if err := json.Unmarshal(message.Data, &eventData); err != nil {
+					log.Printf("[config] Failed to parse iplist.updated event data: %v", err)
+					return
+				}
+
+				if eventData.ID == "" {
+					log.Printf("[config] Received iplist.updated event with empty ID")
+					return
+				}
+
+				log.Printf("[config] Received iplist.updated event for list: %s", eventData.ID)
+				m.handleIPListUpdateEvent(eventData.ID)
 			})
 
 			// Start connection in background

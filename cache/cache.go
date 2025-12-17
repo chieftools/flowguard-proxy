@@ -71,8 +71,8 @@ func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...
 	}
 
 	// Try to load from cache first
-	entry, err := c.loadCacheEntry(cacheFile)
-	if err == nil && time.Since(entry.Timestamp) < effectiveMaxAge {
+	entry, _ := c.loadCacheEntry(cacheFile)
+	if entry != nil && time.Since(entry.Timestamp) < effectiveMaxAge {
 		if c.verbose {
 			log.Printf("[cache] Using cached data for %s (age: %v)", url, time.Since(entry.Timestamp))
 		}
@@ -83,16 +83,47 @@ func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...
 		log.Printf("[cache] Fetching fresh data from %s", url)
 	}
 
+	return c.fetchAndUpdate(url, cacheFile, entry, c.resolveToken(url, bearerToken...))
+}
+
+// FetchWithCacheForced fetches data from a URL, bypassing TTL but respecting etag
+// Returns (data, wasUpdated, error) where wasUpdated indicates if data changed
+// This is useful for forced refreshes triggered by external events
+func (c *Cache) FetchWithCacheForced(url string, bearerToken ...string) ([]byte, bool, error) {
+	if c == nil {
+		return nil, false, fmt.Errorf("cache not initialized")
+	}
+	cacheFile := c.getCacheFilePath(url)
+
+	// Load existing cache entry to get etag (if any)
+	entry, _ := c.loadCacheEntry(cacheFile)
+
+	if c.verbose {
+		log.Printf("[cache] Force fetching data from %s (bypassing TTL)", url)
+	}
+
+	return c.fetchAndUpdate(url, cacheFile, entry, c.resolveToken(url, bearerToken...))
+}
+
+// resolveToken determines the bearer token to use for a request
+func (c *Cache) resolveToken(url string, bearerToken ...string) string {
+	if len(bearerToken) > 0 {
+		return bearerToken[0]
+	}
+	if c.shouldUseAPIKey(url) {
+		return c.apiKey
+	}
+	return ""
+}
+
+// fetchAndUpdate performs the actual HTTP fetch and updates the cache
+// This is the shared implementation used by both FetchWithCache and FetchWithCacheForced
+func (c *Cache) fetchAndUpdate(url string, cacheFile string, entry *Entry, token string) ([]byte, bool, error) {
 	var existingETag string
 	if entry != nil {
 		existingETag = entry.ETag
 	}
-	var token string
-	if len(bearerToken) > 0 {
-		token = bearerToken[0]
-	} else if c.shouldUseAPIKey(url) {
-		token = c.apiKey
-	}
+
 	data, etag, err := c.fetchFromURL(url, existingETag, token)
 	if err != nil {
 		// If fetch fails but we have stale cache, use it
