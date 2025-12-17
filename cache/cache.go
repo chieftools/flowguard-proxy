@@ -63,9 +63,16 @@ func (c *Cache) FetchWithCache(url string, maxAge time.Duration, bearerToken ...
 	}
 	cacheFile := c.getCacheFilePath(url)
 
+	// For maxAge > 2 minutes, subtract 1 minute buffer to ensure cache is stale when periodic refreshes run
+	// This prevents race conditions where a refresh ticker fires slightly before the cache expires
+	effectiveMaxAge := maxAge
+	if maxAge > 2*time.Minute {
+		effectiveMaxAge = maxAge - time.Minute
+	}
+
 	// Try to load from cache first
 	entry, err := c.loadCacheEntry(cacheFile)
-	if err == nil && time.Since(entry.Timestamp) < maxAge {
+	if err == nil && time.Since(entry.Timestamp) < effectiveMaxAge {
 		if c.verbose {
 			log.Printf("[cache] Using cached data for %s (age: %v)", url, time.Since(entry.Timestamp))
 		}
@@ -135,6 +142,13 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken
 		return "", false, fmt.Errorf("cache not initialized")
 	}
 
+	// For maxAge > 2 minutes, subtract 1 minute buffer to ensure cache is stale when periodic refreshes run
+	// This prevents race conditions where a refresh ticker fires slightly before the cache expires
+	effectiveMaxAge := maxAge
+	if maxAge > 2*time.Minute {
+		effectiveMaxAge = maxAge - time.Minute
+	}
+
 	// Use a different naming scheme for binary files
 	hash := sha256.Sum256([]byte(url))
 	cacheFile := filepath.Join(c.cacheDir, hex.EncodeToString(hash[:])+"_file.bin")
@@ -149,7 +163,7 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken
 	if metaData, err := os.ReadFile(metaFile); err == nil {
 		if err := json.Unmarshal(metaData, &meta); err == nil {
 			// Check if cache is still fresh
-			if time.Since(meta.Timestamp) < maxAge {
+			if time.Since(meta.Timestamp) < effectiveMaxAge {
 				// Verify file exists
 				if _, err := os.Stat(cacheFile); err == nil {
 					log.Printf("[cache] Using cached file for %s (age: %v)", url, time.Since(meta.Timestamp))
