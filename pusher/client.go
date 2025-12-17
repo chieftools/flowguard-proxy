@@ -30,6 +30,20 @@ type Message struct {
 	Channel string          `json:"channel,omitempty"`
 }
 
+// UnmarshalData decodes the message data into the provided value.
+// Pusher sends data as a JSON-encoded string, so this unmarshals twice:
+// first to get the inner JSON string, then to parse the actual object.
+func (m Message) UnmarshalData(v interface{}) error {
+	var dataStr string
+	if err := json.Unmarshal(m.Data, &dataStr); err != nil {
+		return fmt.Errorf("failed to unmarshal data string: %w", err)
+	}
+	if err := json.Unmarshal([]byte(dataStr), v); err != nil {
+		return fmt.Errorf("failed to unmarshal data: %w", err)
+	}
+	return nil
+}
+
 // MessageHandler defines the callback function for handling Realtime events
 type MessageHandler func(message Message)
 
@@ -281,7 +295,7 @@ func (c *Client) handlePusherMessage(msg Message) {
 	switch msg.Event {
 	case "pusher:connection_established":
 		var data ConnectionEstablishedMessageData
-		if err := c.unmarshalMessageData(msg.Data, &data); err == nil {
+		if err := msg.UnmarshalData(&data); err == nil {
 			c.mu.Lock()
 			c.socketID = data.SocketID
 			c.isConnected = true
@@ -324,21 +338,6 @@ func (c *Client) handlePusherMessage(msg Message) {
 			log.Printf("[realtime] Received unhandled event: %s", msg.Event)
 		}
 	}
-}
-
-// unmarshalMessageData handles double-encoded JSON data from Pusher messages
-func (c *Client) unmarshalMessageData(data json.RawMessage, v interface{}) error {
-	var dataStr string
-
-	if err := json.Unmarshal(data, &dataStr); err != nil {
-		return fmt.Errorf("failed to unmarshal data string: %w", err)
-	}
-
-	if err := json.Unmarshal([]byte(dataStr), v); err != nil {
-		return fmt.Errorf("failed to unmarshal data: %w", err)
-	}
-
-	return nil
 }
 
 // startPingTicker starts the ping ticker for keepalive

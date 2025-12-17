@@ -995,12 +995,10 @@ func (m *Manager) updatePusherClient(config *Config) {
 
 			// Set up event handler for IP list updates
 			m.realtimeClient.OnEvent("iplist.updated", func(message pusher.Message) {
-				// Parse the list ID from the message data
-				// Expected format: {"id": "listname"}
 				var eventData struct {
 					ID string `json:"id"`
 				}
-				if err := json.Unmarshal(message.Data, &eventData); err != nil {
+				if err := message.UnmarshalData(&eventData); err != nil {
 					log.Printf("[config] Failed to parse iplist.updated event data: %v", err)
 					return
 				}
