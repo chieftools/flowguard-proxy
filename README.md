@@ -8,7 +8,7 @@ It features an (optional) [control panel](https://flowguard.network/) for easy m
 > FlowGuard is intended for use by experienced system administrators and security professionals. Improper configuration may lead to service disruption. Always test configurations in a safe environment before deploying to production.
 
 > [!CAUTION]
-> FlowGuard is a new project in acive development and may have undiscovered bugs or security vulnerabilities. Use at your own risk and always keep software up to date.
+> FlowGuard is a new project in active development and may have undiscovered bugs or security vulnerabilities. Use at your own risk and always keep software up to date.
 
 ## Features
 
@@ -48,8 +48,8 @@ It features an (optional) [control panel](https://flowguard.network/) for easy m
 
 ```bash
 # Clone the repository
-git clone https://github.com/chieftools/flowguard.git
-cd flowguard
+git clone https://github.com/chieftools/flowguard-proxy.git
+cd flowguard-proxy
 
 # Build for current platform
 go build -o flowguard .
@@ -165,28 +165,6 @@ Certificate files are:
 - Cached in memory for performance
 - Automatically refreshed periodically to support rotation
 - Validated on load to ensure proper format
-
-### Configuration
-
-```json
-{
-  "proxy": {
-    "transparent_mode": true,
-    "tproxy_mark": 1,
-    "tproxy_routing_table": 100
-  }
-}
-```
-
-### Requirements
-
-- Linux kernel 2.6.28+ with TPROXY support
-- CAP_NET_ADMIN capability (already required for iptables)
-- Modern iptables with TPROXY target
-
-### Important Limitation
-
-TPROXY only works when the proxy and backend are on **different machines**. For same-machine deployments, use standard mode (simpler, same result).
 
 ## Logging
 
@@ -348,9 +326,13 @@ Rules support complex conditions with logical operators:
   - `header`: Arbitrary header matching
   - `ip`: Client IP matching
   - `asn`: Autonomous System Number matching
+  - `as-name`: ASN organization name matching
+  - `as-domain`: ASN domain matching
+  - `country`: Country code matching (from GeoIP database)
+  - `continent`: Continent code matching (from GeoIP database)
   - `ipset`: Linux ipset membership checking (external tool required)
   - `iplist`: In-memory IP list matching (built-in, no dependencies)
-- **Match Operations**: `equals`, `contains`, `starts-with`, `ends-with`, `regex`, `in`, `not-in`, `exists`, `missing`
+- **Match Operations**: `equals`, `not-equals`, `contains`, `not-contains`, `starts-with`, `not-starts-with`, `ends-with`, `not-ends-with`, `regex`, `not-regex`, `in`, `not-in`, `exists`, `missing`
 
 ## Security Configuration
 
