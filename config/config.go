@@ -777,8 +777,7 @@ func (m *Manager) RefreshTrustedProxies() error {
 					m.cache.ClearCacheEntry(proxy)
 					log.Printf("[config] Cleared stale cache entry for %s", proxy)
 				} else {
-					log.Printf("[config] Cache still fresh for %s (age: %v, TTL: %v)",
-						proxy, time.Since(timestamp), cacheTTL)
+					log.Printf("[config] Cache still fresh for %s (age: %v, TTL: %v)", proxy, time.Since(timestamp), cacheTTL)
 				}
 			}
 		}
