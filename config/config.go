@@ -210,6 +210,15 @@ func (m *Manager) Load() error {
 		return fmt.Errorf("failed to parse config JSON: %w", err)
 	}
 
+	// Set host key in API client and cache if available
+	if config.Host != nil && config.Host.Key != "" {
+		m.apiClient.SetHostKey(config.Host.Key)
+
+		if m.cache != nil {
+			m.cache.SetAPICredentials(m.apiClient.GetBaseURL(), config.Host.Key)
+		}
+	}
+
 	// Parse trusted proxy IPs and fetch from URLs
 	var trustedProxyIPs []net.IPNet
 	if config.TrustedProxies != nil {
@@ -247,17 +256,6 @@ func (m *Manager) Load() error {
 	m.trustedProxyIPs = trustedProxyIPs
 	m.lastModified = info.ModTime()
 	m.currentConfigID = config.ID
-
-	// Update API client with host key if available
-	if config.Host != nil && config.Host.Key != "" {
-		m.apiClient.SetHostKey(config.Host.Key)
-	}
-
-	// Update cache with API credentials
-	if m.cache != nil && config.Host != nil && config.Host.Key != "" {
-		apiBase := m.apiClient.GetBaseURL()
-		m.cache.SetAPICredentials(apiBase, config.Host.Key)
-	}
 
 	m.mu.Unlock()
 
