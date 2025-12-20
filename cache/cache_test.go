@@ -195,7 +195,7 @@ func TestCacheClearOperations(t *testing.T) {
 	}
 
 	// Clear all cache
-	err = cache.ClearCache()
+	_, err = cache.ClearCache()
 	if err != nil {
 		t.Errorf("Failed to clear all cache: %v", err)
 	}

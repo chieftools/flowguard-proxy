@@ -315,26 +315,40 @@ func (c *Cache) SaveToCache(url string, data []byte) error {
 }
 
 // ClearCache removes all cached entries
-func (c *Cache) ClearCache() error {
+func (c *Cache) ClearCache() (int, error) {
 	entries, err := os.ReadDir(c.cacheDir)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
+	removed := 0
 	for _, entry := range entries {
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".json" {
+		if entry.IsDir() {
+			continue
+		}
+
+		ext := filepath.Ext(entry.Name())
+		// Remove JSON cache files, binary cache files, and metadata files
+		if ext == ".json" || ext == ".bin" || ext == ".meta" {
 			if err := os.Remove(filepath.Join(c.cacheDir, entry.Name())); err != nil {
 				log.Printf("[cache] Failed to remove cache file %s: %v", entry.Name(), err)
+			} else {
+				removed++
 			}
 		}
 	}
-	return nil
+	return removed, nil
 }
 
 // ClearCacheEntry removes a specific cached entry
 func (c *Cache) ClearCacheEntry(url string) error {
 	cacheFile := c.getCacheFilePath(url)
 	return os.Remove(cacheFile)
+}
+
+// Dir returns the cache directory path
+func (c *Cache) Dir() string {
+	return c.cacheDir
 }
 
 func (c *Cache) getCacheFilePath(url string) string {
