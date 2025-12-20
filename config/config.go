@@ -858,6 +858,28 @@ func (m *Manager) GetIPDatabasePath() (string, error) {
 	return cachedPath, nil
 }
 
+// parseIPOrCIDR parses a string as either a CIDR or plain IP address.
+// Plain IPs are converted to /32 (IPv4) or /128 (IPv6) networks.
+func parseIPOrCIDR(s string) (net.IPNet, error) {
+	if strings.Contains(s, "/") {
+		_, network, err := net.ParseCIDR(s)
+		if err != nil {
+			return net.IPNet{}, fmt.Errorf("invalid CIDR %s: %w", s, err)
+		}
+		return *network, nil
+	}
+
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return net.IPNet{}, fmt.Errorf("invalid IP address: %s", s)
+	}
+
+	if ip.To4() != nil {
+		return net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}, nil
+	}
+	return net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}, nil
+}
+
 // parseTrustedProxies parses trusted proxy configuration
 func (m *Manager) parseTrustedProxies(proxies []string) ([]net.IPNet, error) {
 	var result []net.IPNet
@@ -879,27 +901,9 @@ func (m *Manager) parseTrustedProxies(proxies []string) ([]net.IPNet, error) {
 				}
 			}
 		} else {
-			// Parse as IP or CIDR
-			var ipNet net.IPNet
-			if strings.Contains(proxy, "/") {
-				// Parse as CIDR
-				_, network, err := net.ParseCIDR(proxy)
-				if err != nil {
-					return nil, fmt.Errorf("invalid CIDR %s: %w", proxy, err)
-				}
-				ipNet = *network
-			} else {
-				// Parse as single IP
-				ip := net.ParseIP(proxy)
-				if ip == nil {
-					return nil, fmt.Errorf("invalid IP address: %s", proxy)
-				}
-				// Create a /32 or /128 network for single IP
-				if ip.To4() != nil {
-					ipNet = net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}
-				} else {
-					ipNet = net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}
-				}
+			ipNet, err := parseIPOrCIDR(proxy)
+			if err != nil {
+				return nil, err
 			}
 
 			key := ipNet.String()
@@ -934,7 +938,7 @@ func (m *Manager) fetchIPRangesFromURL(url string) ([]net.IPNet, error) {
 	return m.parseIPRanges(data, url)
 }
 
-// parseIPRanges parses IP ranges from raw data
+// parseIPRanges parses IP ranges from raw data (supports plain IPs and CIDR notation)
 func (m *Manager) parseIPRanges(data []byte, source string) ([]net.IPNet, error) {
 	var result []net.IPNet
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
@@ -945,12 +949,12 @@ func (m *Manager) parseIPRanges(data []byte, source string) ([]net.IPNet, error)
 			continue
 		}
 
-		_, network, err := net.ParseCIDR(line)
+		ipNet, err := parseIPOrCIDR(line)
 		if err != nil {
-			log.Printf("[config] Invalid CIDR from %s: %s", source, line)
+			log.Printf("[config] %v from %s", err, source)
 			continue
 		}
-		result = append(result, *network)
+		result = append(result, ipNet)
 	}
 
 	if err := scanner.Err(); err != nil {
