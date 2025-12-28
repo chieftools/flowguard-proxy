@@ -98,6 +98,14 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 	w.ResponseWriter.WriteHeader(statusCode)
 }
 
+// Flush implements http.Flusher interface to support streaming responses (SSE, chunked)
+// This method delegates to the underlying ResponseWriter if it supports flushing
+func (w *ResponseWriterWrapper) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 // Hijack implements http.Hijacker interface to support WebSocket upgrades
 // This method delegates to the underlying ResponseWriter if it supports hijacking
 func (w *ResponseWriterWrapper) Hijack() (net.Conn, *bufio.ReadWriter, error) {
