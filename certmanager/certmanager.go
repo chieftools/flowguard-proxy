@@ -45,6 +45,8 @@ type Manager struct {
 	watcher          *fsnotify.Watcher
 	stopChan         chan struct{}
 	nginxConfigFiles []string // List of NGINX config files to watch
+	nginxCertFiles   []string // List of certificate files referenced in NGINX config
+	watchedDirs      map[string]bool // Track which directories we're watching
 }
 
 // New creates a new certificate manager
@@ -60,55 +62,24 @@ func New(config Config) *Manager {
 		watcher:          watcher,
 		stopChan:         make(chan struct{}),
 		nginxConfigFiles: make([]string, 0),
+		nginxCertFiles:   make([]string, 0),
+		watchedDirs:      make(map[string]bool),
 	}
 
 	cm.loadAllCertificates(false)
 
-	// Watch certificate directory if provided
-	if watcher != nil && config.CertPath != "" {
-		err = watcher.Add(config.CertPath)
-		if err != nil {
-			log.Printf("[cert_manager] Warning: Failed to watch certificate directory %s: %v", config.CertPath, err)
+	// Setup file watches
+	if watcher != nil {
+		cm.setupWatches()
+
+		// Start watching if we have any paths to watch
+		if len(cm.watchedDirs) > 0 {
+			go cm.watchCertificates()
 		} else {
-			if config.Verbose {
-				log.Printf("[cert_manager] Watching certificate directory %s for changes", config.CertPath)
-			}
+			// No paths to watch, close the watcher
+			watcher.Close()
+			cm.watcher = nil
 		}
-	}
-
-	// Watch NGINX config files if provided
-	if watcher != nil && config.NginxConfigPath != "" {
-		// Track which directories we've already added to avoid duplicates
-		watchedDirs := make(map[string]bool)
-
-		for _, configFile := range cm.nginxConfigFiles {
-			// Watch the directory containing each config file
-			configDir := filepath.Dir(configFile)
-
-			// Skip if we've already added this directory
-			if watchedDirs[configDir] {
-				continue
-			}
-
-			err = watcher.Add(configDir)
-			if err != nil {
-				log.Printf("[cert_manager] Warning: Failed to watch NGINX config directory %s: %v", configDir, err)
-			} else {
-				watchedDirs[configDir] = true
-				if config.Verbose {
-					log.Printf("[cert_manager] Watching NGINX config directory %s for changes", configDir)
-				}
-			}
-		}
-	}
-
-	// Start watching if we have any paths to watch
-	if watcher != nil && (config.CertPath != "" || config.NginxConfigPath != "") {
-		go cm.watchCertificates()
-	} else if watcher != nil {
-		// No paths to watch, close the watcher
-		watcher.Close()
-		cm.watcher = nil
 	}
 
 	return cm
@@ -463,6 +434,60 @@ func (cm *Manager) Stop() {
 	close(cm.stopChan)
 }
 
+// setupWatches configures file system watches for certificate and config directories
+func (cm *Manager) setupWatches() {
+	if cm.watcher == nil {
+		return
+	}
+
+	// Watch certificate directory if provided
+	if cm.config.CertPath != "" {
+		if !cm.watchedDirs[cm.config.CertPath] {
+			err := cm.watcher.Add(cm.config.CertPath)
+			if err != nil {
+				log.Printf("[cert_manager] Warning: Failed to watch certificate directory %s: %v", cm.config.CertPath, err)
+			} else {
+				cm.watchedDirs[cm.config.CertPath] = true
+				if cm.config.Verbose {
+					log.Printf("[cert_manager] Watching certificate directory %s for changes", cm.config.CertPath)
+				}
+			}
+		}
+	}
+
+	// Watch NGINX config file directories
+	for _, configFile := range cm.nginxConfigFiles {
+		configDir := filepath.Dir(configFile)
+		if !cm.watchedDirs[configDir] {
+			err := cm.watcher.Add(configDir)
+			if err != nil {
+				log.Printf("[cert_manager] Warning: Failed to watch NGINX config directory %s: %v", configDir, err)
+			} else {
+				cm.watchedDirs[configDir] = true
+				if cm.config.Verbose {
+					log.Printf("[cert_manager] Watching NGINX config directory %s for changes", configDir)
+				}
+			}
+		}
+	}
+
+	// Watch directories containing certificate files referenced in NGINX config
+	for _, certFile := range cm.nginxCertFiles {
+		certDir := filepath.Dir(certFile)
+		if !cm.watchedDirs[certDir] {
+			err := cm.watcher.Add(certDir)
+			if err != nil {
+				log.Printf("[cert_manager] Warning: Failed to watch certificate directory %s: %v", certDir, err)
+			} else {
+				cm.watchedDirs[certDir] = true
+				if cm.config.Verbose {
+					log.Printf("[cert_manager] Watching certificate directory %s for changes", certDir)
+				}
+			}
+		}
+	}
+}
+
 // extractCertificateMetadata creates a metadata wrapper for a certificate
 func (cm *Manager) extractCertificateMetadata(cert *tls.Certificate, filePath string, hostnames []string) *certificateWithMetadata {
 	if cert.Leaf == nil {
@@ -606,6 +631,16 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 		} else {
 			// Store the list of config files for watching
 			cm.nginxConfigFiles = configFiles
+
+			// Collect all certificate file paths for watching
+			var certFiles []string
+			for _, pair := range pairs {
+				certFiles = append(certFiles, pair.CertPath)
+				if pair.KeyPath != pair.CertPath {
+					certFiles = append(certFiles, pair.KeyPath)
+				}
+			}
+			cm.nginxCertFiles = certFiles
 
 			for _, pair := range pairs {
 				// Read cert and key files separately
@@ -835,6 +870,8 @@ func (cm *Manager) watchCertificates() {
 			if pendingReload {
 				pendingReload = false
 				cm.loadAllCertificates(false)
+				// Update watches in case new certificate files were added
+				cm.setupWatches()
 			}
 
 		case <-cm.stopChan:
