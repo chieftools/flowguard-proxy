@@ -122,10 +122,10 @@ chmod 755 /usr/bin/flowguard
 # Reload systemd
 systemctl daemon-reload
 
-# Check if this is an upgrade (service was previously enabled)
+# Check if this is an upgrade
 if [ "$1" = "configure" ] && [ -n "$2" ]; then
-    # This is an upgrade - restart the service if it was previously enabled
-    if systemctl is-enabled --quiet flowguard.service 2>/dev/null; then
+    # This is an upgrade - restart the service if it was running
+    if systemctl is-active --quiet flowguard.service 2>/dev/null; then
         echo "Restarting FlowGuard service after upgrade..."
         systemctl restart flowguard.service || true
     fi
