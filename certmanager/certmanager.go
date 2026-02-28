@@ -85,6 +85,13 @@ func New(config Config) *Manager {
 	return cm
 }
 
+// HostnameCount returns the number of hostnames with loaded certificates
+func (cm *Manager) HostnameCount() int {
+	cm.cacheMutex.RLock()
+	defer cm.cacheMutex.RUnlock()
+	return len(cm.hostnameCache)
+}
+
 // GetTlsConfig returns the tls configuration for use in servers
 func (cm *Manager) GetTlsConfig() *tls.Config {
 	return &tls.Config{

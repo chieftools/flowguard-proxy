@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"sync"
@@ -33,7 +34,7 @@ type Manager struct {
 	mu              sync.RWMutex
 }
 
-func NewManager(configMgr *config.Manager, cfg *Config) *Manager {
+func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 	// Start config file watcher for hot-reload
 	configMgr.StartWatcher()
 
@@ -112,7 +113,12 @@ func NewManager(configMgr *config.Manager, cfg *Config) *Manager {
 		pm.handleIPListUpdateEvent(listIDs)
 	})
 
-	return pm
+	// Verify that at least some certificates were loaded
+	if pm.certManager.HostnameCount() == 0 {
+		return nil, fmt.Errorf("no valid certificates found (checked cert_path=%q, nginx_config_path=%q)", certPath, nginxConfigPath)
+	}
+
+	return pm, nil
 }
 
 // initializeIPListManager creates and initializes the IP list manager from config
