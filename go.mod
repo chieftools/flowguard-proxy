@@ -10,7 +10,7 @@ require (
 	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/phemmer/go-iptrie v0.0.0-20240326174613-ba542f5282c9
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/net v0.48.0
+	golang.org/x/net v0.51.0
 )
 
 require (
@@ -28,5 +28,5 @@ require (
 	go.opentelemetry.io/otel v1.39.0 // indirect
 	go.opentelemetry.io/otel/metric v1.39.0 // indirect
 	go.opentelemetry.io/otel/trace v1.39.0 // indirect
-	golang.org/x/sys v0.39.0 // indirect
+	golang.org/x/sys v0.41.0 // indirect
 )
