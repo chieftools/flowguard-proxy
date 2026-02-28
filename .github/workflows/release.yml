@@ -109,8 +109,13 @@ jobs:
           # Append new entry
           printf '%s' "${NEW_ENTRY}" >> "${PACKAGES_DIR}/Packages"
 
-          # Generate compressed version
+          # Generate compressed versions
           gzip -9c "${PACKAGES_DIR}/Packages" > "${PACKAGES_DIR}/Packages.gz"
+          bzip2 -9c "${PACKAGES_DIR}/Packages" > "${PACKAGES_DIR}/Packages.bz2"
+
+          # Remove any stale files from old aptly-generated repo that we don't manage
+          find repo-sync/deb/dists/ -name "*.xz" -delete 2>/dev/null || true
+          find repo-sync/deb/dists/ -name "Contents-*" -delete 2>/dev/null || true
 
           # Generate Release file
           cd repo-sync/deb
@@ -160,6 +165,7 @@ jobs:
           if [ -f "${REPO_DIR}/repodata/repomd.xml" ]; then
             mkdir -p merged-rpm
             mergerepo_c \
+              --all \
               --repo "${REPO_DIR}" \
               --repo new-rpm/ \
               -o merged-rpm/
