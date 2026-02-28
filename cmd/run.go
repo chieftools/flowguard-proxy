@@ -60,7 +60,7 @@ func runProxy() {
 	}
 
 	// Create and start proxy manager
-	proxyManager := proxy.NewManager(configMgr, &proxy.Config{
+	proxyManager, err := proxy.NewManager(configMgr, &proxy.Config{
 		Verbose:    verbose,
 		Version:    GetVersion(),
 		HTTPPort:   httpPort,
@@ -69,6 +69,9 @@ func runProxy() {
 		UserAgent:  GetUserAgent(),
 		NoRedirect: noRedirect,
 	})
+	if err != nil {
+		log.Fatalf("[FATAL] Failed to initialize proxy: %v", err)
+	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
