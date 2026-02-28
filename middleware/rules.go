@@ -238,8 +238,6 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 	switch match.Type {
 	case "domain":
 		value = r.Host
-	case "registerable-domain":
-		value = normalization.RegisterableDomain(r.Host)
 	case "path":
 		// Use raw path if raw_match is true, otherwise normalize for consistent matching
 		if match.RawMatch {
@@ -732,8 +730,6 @@ func (kg *RateLimitKeyGenerator) extractKeyParts(conditions *config.RuleConditio
 		switch match.Type {
 		case "domain", "host":
 			*keyParts = append(*keyParts, "domain:"+r.Host)
-		case "registerable-domain":
-			*keyParts = append(*keyParts, "reg-domain:"+normalization.RegisterableDomain(r.Host))
 		case "agent", "user-agent":
 			agent := r.Header.Get("User-Agent")
 			if agent != "" {
