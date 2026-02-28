@@ -124,11 +124,10 @@ systemctl daemon-reload
 
 # Check if this is an upgrade
 if [ "$1" = "configure" ] && [ -n "$2" ]; then
-    # This is an upgrade - restart the service if it was running
-    if systemctl is-active --quiet flowguard.service 2>/dev/null; then
-        echo "Restarting FlowGuard service after upgrade..."
-        systemctl restart flowguard.service || true
-    fi
+    # This is an upgrade - restart the service if it was running.
+    # The service was left running during the upgrade (not stopped in prerm),
+    # so try-restart will restart it to pick up the new binary.
+    systemctl try-restart flowguard.service || true
 else
     # Fresh install - show setup instructions
     echo ""
@@ -159,15 +158,15 @@ cat > "${DEB_DIR}/DEBIAN/prerm" << 'EOF'
 #!/bin/bash
 set -e
 
-# Stop the service if it's running
-if systemctl is-active --quiet flowguard.service; then
-    echo "Stopping FlowGuard service..."
-    systemctl stop flowguard.service || true
-fi
-
-# Only disable service on actual removal, not upgrades
+# Only stop the service on removal, not on upgrades.
+# On upgrades we leave the service running; postinst will try-restart it
+# to pick up the new binary (this is the standard dh_installsystemd pattern).
 if [ "$1" = "remove" ]; then
-    if systemctl is-enabled --quiet flowguard.service; then
+    if systemctl is-active --quiet flowguard.service 2>/dev/null; then
+        echo "Stopping FlowGuard service..."
+        systemctl stop flowguard.service || true
+    fi
+    if systemctl is-enabled --quiet flowguard.service 2>/dev/null; then
         systemctl disable flowguard.service || true
     fi
 fi

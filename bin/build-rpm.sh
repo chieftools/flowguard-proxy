@@ -176,14 +176,8 @@ chmod 755 /usr/bin/flowguard
 # Reload systemd
 systemctl daemon-reload
 
-# Check if this is an upgrade
-if [ "\$1" -eq 2 ]; then
-    # This is an upgrade - restart the service if it was running
-    if systemctl is-active --quiet flowguard.service 2>/dev/null; then
-        echo "Restarting FlowGuard service after upgrade..."
-        systemctl restart flowguard.service || true
-    fi
-else
+# Check if this is a fresh install (not upgrade)
+if [ "\$1" -eq 1 ]; then
     # Fresh install - show setup instructions
     echo ""
     echo "FlowGuard has been installed successfully!"
@@ -207,16 +201,14 @@ exit 0
 
 %preun
 # Pre-uninstallation script
-
-# Stop the service if it's running
-if systemctl is-active --quiet flowguard.service; then
-    echo "Stopping FlowGuard service..."
-    systemctl stop flowguard.service || true
-fi
-
-# Only disable service on actual removal, not upgrades
+# Only stop and disable the service on removal (\$1 -eq 0), not on upgrades.
+# On upgrades we leave the service running; %postun will try-restart it.
 if [ "\$1" -eq 0 ]; then
-    if systemctl is-enabled --quiet flowguard.service; then
+    if systemctl is-active --quiet flowguard.service 2>/dev/null; then
+        echo "Stopping FlowGuard service..."
+        systemctl stop flowguard.service || true
+    fi
+    if systemctl is-enabled --quiet flowguard.service 2>/dev/null; then
         systemctl disable flowguard.service || true
     fi
 fi
@@ -226,12 +218,16 @@ exit 0
 %postun
 # Post-uninstallation script
 
-# Reload systemd after removal
+# Reload systemd
 systemctl daemon-reload || true
 
-# On complete removal (not upgrade), clean up
-if [ "\$1" -eq 0 ]; then
-    # Remove logs and cache (but keep config in case of reinstall)
+if [ "\$1" -ge 1 ]; then
+    # This is an upgrade - restart the service if it was running.
+    # The service was left running during the upgrade (not stopped in %preun),
+    # so try-restart will restart it to pick up the new binary.
+    systemctl try-restart flowguard.service || true
+elif [ "\$1" -eq 0 ]; then
+    # Complete removal - clean up
     # To fully remove, use: rpm -e --allmatches flowguard && rm -rf /etc/flowguard
     rm -rf /var/log/flowguard
     rm -rf /var/cache/flowguard
