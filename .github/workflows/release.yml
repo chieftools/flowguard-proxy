@@ -75,10 +75,11 @@ jobs:
           rsync -avz -e "${SSH_CMD}" \
             ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/deb/dists/ repo-sync/deb/dists/ || true
 
-          # Download existing RPM repository (packages + metadata)
-          mkdir -p repo-sync/rpm
+          # Download only RPM metadata (not the package archives)
+          mkdir -p repo-sync/rpm/stable/x86_64/repodata
           rsync -avz -e "${SSH_CMD}" \
-            ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/ repo-sync/rpm/ || true
+            ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/x86_64/repodata/ \
+            repo-sync/rpm/stable/x86_64/repodata/ || true
 
       - name: Update DEB repository
         run: |
@@ -126,10 +127,12 @@ jobs:
           rm -f dists/stable/InRelease dists/stable/Release.gpg
 
           gpg --batch --yes --clearsign \
+            --pinentry-mode loopback \
             --passphrase-file=/tmp/gpg-passphrase \
             -o dists/stable/InRelease dists/stable/Release
 
           gpg --batch --yes --detach-sign --armor \
+            --pinentry-mode loopback \
             --passphrase-file=/tmp/gpg-passphrase \
             -o dists/stable/Release.gpg dists/stable/Release
 
@@ -138,12 +141,7 @@ jobs:
       - name: Setup RPM repository
         run: |
           RPM_FILE="flowguard-${{ steps.version.outputs.VERSION }}-1.x86_64.rpm"
-
-          # Create RPM repository structure
-          mkdir -p repo-sync/rpm/stable/x86_64
-
-          # Copy new package
-          cp "${RPM_FILE}" repo-sync/rpm/stable/x86_64/
+          REPO_DIR="repo-sync/rpm/stable/x86_64"
 
           # Sign the RPM
           echo "%_gpg_name FlowGuard Team <hello@flowguard.network>" > ~/.rpmmacros
@@ -151,15 +149,37 @@ jobs:
           echo "%_gpg_path $HOME/.gnupg" >> ~/.rpmmacros
 
           rpm --addsign --define "_gpg_name FlowGuard Team <hello@flowguard.network>" \
-            repo-sync/rpm/stable/x86_64/"${RPM_FILE}" || echo "RPM signing failed, continuing..."
+            "${RPM_FILE}" || echo "RPM signing failed, continuing..."
 
-          # Create repository metadata
-          createrepo_c repo-sync/rpm/stable/x86_64/
+          # Create metadata for just the new RPM in a temp directory
+          mkdir -p new-rpm
+          cp "${RPM_FILE}" new-rpm/
+          createrepo_c new-rpm/
+
+          # Merge new metadata with existing repository metadata
+          if [ -f "${REPO_DIR}/repodata/repomd.xml" ]; then
+            mkdir -p merged-rpm
+            mergerepo_c \
+              --repo "${REPO_DIR}" \
+              --repo new-rpm/ \
+              -o merged-rpm/
+            rm -rf "${REPO_DIR}/repodata"
+            mv merged-rpm/repodata "${REPO_DIR}/repodata"
+          else
+            mkdir -p "${REPO_DIR}"
+            mv new-rpm/repodata "${REPO_DIR}/repodata"
+          fi
+
+          # Copy new RPM for upload
+          cp "${RPM_FILE}" "${REPO_DIR}/"
 
           # Sign the repository metadata
           gpg --batch --yes --detach-sign --armor \
+            --pinentry-mode loopback \
             --passphrase-file=/tmp/gpg-passphrase \
-            repo-sync/rpm/stable/x86_64/repodata/repomd.xml
+            "${REPO_DIR}/repodata/repomd.xml"
+
+          rm -rf new-rpm merged-rpm
 
       - name: Create repository configuration files
         run: |
@@ -243,9 +263,15 @@ jobs:
           rsync -avz --delete -e "${SSH_CMD}" \
             repo-sync/deb/dists/ ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/deb/dists/
 
-          # Upload RPM repository
+          # Upload new RPM package (additive only, old packages remain on server)
+          rsync -avz -e "${SSH_CMD}" \
+            "repo-sync/rpm/stable/x86_64/flowguard-${{ steps.version.outputs.VERSION }}-1.x86_64.rpm" \
+            ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/x86_64/
+
+          # Upload updated RPM metadata
           rsync -avz --delete -e "${SSH_CMD}" \
-            repo-sync/rpm/ ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/
+            repo-sync/rpm/stable/x86_64/repodata/ \
+            ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/x86_64/repodata/
 
           # Upload root config files
           rsync -avz -e "${SSH_CMD}" \
