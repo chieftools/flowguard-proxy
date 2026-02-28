@@ -1,6 +1,8 @@
 module flowguard
 
-go 1.26.0
+go 1.25.0
+
+toolchain go1.25.5
 
 require (
 	github.com/axiomhq/axiom-go v0.30.0
