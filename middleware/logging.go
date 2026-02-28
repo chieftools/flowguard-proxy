@@ -93,13 +93,13 @@ type RequestLogEntryBodyInfo struct {
 }
 
 type RequestLogEntryRequestURLInfo struct {
-	Full             string `json:"full"`
-	Path             string `json:"path"`
-	Query            string `json:"query,omitempty"`
-	Scheme           string `json:"scheme"`
-	Domain           string `json:"domain"`
-	NormalizedPath   string `json:"normalized_path"`
-	NormalizedDomain string `json:"normalized_domain"`
+	Full               string `json:"full"`
+	Path               string `json:"path"`
+	Query              string `json:"query,omitempty"`
+	Scheme             string `json:"scheme"`
+	Domain             string `json:"domain"`
+	NormalizedPath     string `json:"normalized_path"`
+	RegisterableDomain string `json:"registerable_domain"`
 }
 
 type RequestLogEntryCloudflareInfo struct {
@@ -456,13 +456,13 @@ func getRequestURLInfo(r *http.Request) RequestLogEntryRequestURLInfo {
 	}
 
 	return RequestLogEntryRequestURLInfo{
-		Full:             fullURL,
-		Path:             r.URL.Path,
-		Query:            r.URL.Query().Encode(),
-		Scheme:           scheme,
-		Domain:           domain,
-		NormalizedPath:   normalization.NormalizePath(r.URL.Path),
-		NormalizedDomain: normalization.RegisterableDomain(domain),
+		Full:               fullURL,
+		Path:               r.URL.Path,
+		Query:              r.URL.Query().Encode(),
+		Scheme:             scheme,
+		Domain:             domain,
+		NormalizedPath:     normalization.NormalizePath(r.URL.Path),
+		RegisterableDomain: normalization.RegisterableDomain(domain),
 	}
 }
 
