@@ -121,7 +121,7 @@ sudo apt update
 sudo apt install --only-upgrade flowguard
 
 # RHEL/CentOS/Rocky/Alma
-sudo yum check-update --disablerepo=* --enablerepo=flowguard
+sudo yum clean expire-cache --disablerepo=* --enablerepo=flowguard
 sudo yum update flowguard
 ```
 
