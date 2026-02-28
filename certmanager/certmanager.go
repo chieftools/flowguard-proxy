@@ -44,8 +44,8 @@ type Manager struct {
 	cacheMutex       sync.RWMutex
 	watcher          *fsnotify.Watcher
 	stopChan         chan struct{}
-	nginxConfigFiles []string        // List of NGINX config files to watch
-	nginxCertFiles   []string        // List of certificate files referenced in NGINX config
+	nginxConfigFiles []string // List of NGINX config files to watch
+	nginxCertFiles   []string // List of certificate files referenced in NGINX config
 	watchedDirs      map[string]bool // Track which directories we're watching
 }
 
