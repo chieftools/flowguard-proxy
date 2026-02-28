@@ -9,6 +9,10 @@ on:
       version:
         description: 'Version to build (e.g., 1.0.0)'
         required: true
+      rebuild_rpm_repo:
+        description: 'Download all RPM files and rebuild repo metadata from scratch'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -75,11 +79,19 @@ jobs:
           rsync -avz -e "${SSH_CMD}" \
             ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/deb/dists/ repo-sync/deb/dists/ || true
 
-          # Download only RPM metadata (not the package archives)
-          mkdir -p repo-sync/rpm/stable/x86_64/repodata
-          rsync -avz -e "${SSH_CMD}" \
-            ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/x86_64/repodata/ \
-            repo-sync/rpm/stable/x86_64/repodata/ || true
+          # Download RPM repository
+          mkdir -p repo-sync/rpm/stable/x86_64
+          if [ "${{ inputs.rebuild_rpm_repo }}" = "true" ]; then
+            echo "Rebuilding RPM repo: downloading all packages..."
+            rsync -avz -e "${SSH_CMD}" \
+              ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/x86_64/ \
+              repo-sync/rpm/stable/x86_64/ || true
+          else
+            mkdir -p repo-sync/rpm/stable/x86_64/repodata
+            rsync -avz -e "${SSH_CMD}" \
+              ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/x86_64/repodata/ \
+              repo-sync/rpm/stable/x86_64/repodata/ || true
+          fi
 
       - name: Update DEB repository
         run: |
@@ -156,28 +168,24 @@ jobs:
           rpm --addsign --define "_gpg_name FlowGuard Team <hello@flowguard.network>" \
             "${RPM_FILE}" || echo "RPM signing failed, continuing..."
 
-          # Create metadata for just the new RPM in a temp directory
-          mkdir -p new-rpm
-          cp "${RPM_FILE}" new-rpm/
-          createrepo_c new-rpm/
-
-          # Merge new metadata with existing repository metadata
-          if [ -f "${REPO_DIR}/repodata/repomd.xml" ]; then
-            mkdir -p merged-rpm
-            mergerepo_c \
-              --all \
-              --repo "${REPO_DIR}" \
-              --repo new-rpm/ \
-              -o merged-rpm/
-            rm -rf "${REPO_DIR}/repodata"
-            mv merged-rpm/repodata "${REPO_DIR}/repodata"
-          else
-            mkdir -p "${REPO_DIR}"
-            mv new-rpm/repodata "${REPO_DIR}/repodata"
-          fi
-
-          # Copy new RPM for upload
+          # Copy new RPM to repo directory
+          mkdir -p "${REPO_DIR}"
           cp "${RPM_FILE}" "${REPO_DIR}/"
+
+          if [ "${{ inputs.rebuild_rpm_repo }}" = "true" ]; then
+            # Full rebuild: all RPM files are present, generate fresh metadata
+            createrepo_c "${REPO_DIR}"
+          else
+            # Incremental: create placeholders for old RPMs so createrepo_c --update
+            # preserves their metadata without needing the actual files
+            OLD_PRIMARY=$(find "${REPO_DIR}/repodata" -name "*-primary.xml.gz" 2>/dev/null | head -1)
+            if [ -n "${OLD_PRIMARY}" ]; then
+              gunzip -c "${OLD_PRIMARY}" | grep -oP 'href="\K[^"]+' | while read -r rpm; do
+                [ ! -f "${REPO_DIR}/${rpm}" ] && touch "${REPO_DIR}/${rpm}"
+              done
+            fi
+            createrepo_c --update --skip-stat "${REPO_DIR}"
+          fi
 
           # Sign the repository metadata
           gpg --batch --yes --detach-sign --armor \
@@ -185,7 +193,8 @@ jobs:
             --passphrase-file=/tmp/gpg-passphrase \
             "${REPO_DIR}/repodata/repomd.xml"
 
-          rm -rf new-rpm merged-rpm
+          # Clean up empty placeholder files
+          find "${REPO_DIR}" -maxdepth 1 -name "*.rpm" -empty -delete
 
       - name: Create repository configuration files
         run: |
