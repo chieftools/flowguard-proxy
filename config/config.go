@@ -30,6 +30,7 @@ type Config struct {
 	Actions        map[string]*RuleAction `json:"actions"`
 	Logging        *LoggingConfig         `json:"logging,omitempty"`
 	IPLists        *IPListsConfig         `json:"ip_lists,omitempty"`
+	Updates        *UpdatesConfig         `json:"updates,omitempty"`
 	Realtime       *pusher.Config         `json:"realtime,omitempty"`
 	IPDatabase     *IPDatabaseConfig      `json:"ip_database,omitempty"`
 	TrustedProxies *TrustedProxiesConfig  `json:"trusted_proxies,omitempty"`
@@ -69,6 +70,10 @@ type IPListConfig struct {
 	Path                   string `json:"path,omitempty"`
 	Confidence             int    `json:"confidence,omitempty"`
 	RefreshIntervalSeconds int    `json:"refresh_interval_seconds,omitempty"`
+}
+
+type UpdatesConfig struct {
+	AllowUnattended bool `json:"allow_unattended"`
 }
 
 type Rule struct {
@@ -134,6 +139,10 @@ type Manager struct {
 	ipListDebounceTimer   *time.Timer
 	ipListPendingUpdates  map[string]struct{} // Set of pending list IDs to refresh
 	ipListMu              sync.Mutex          // Separate mutex for IP list update handling
+
+	// Upgrade request callback support
+	upgradeCallbacks []func(version string)
+	upgradeMu        sync.Mutex
 }
 
 // NewManager creates a new configuration manager
@@ -422,6 +431,39 @@ func (m *Manager) OnIPListUpdate(callback func(listIDs []string)) {
 	m.ipListMu.Lock()
 	defer m.ipListMu.Unlock()
 	m.ipListUpdateCallbacks = append(m.ipListUpdateCallbacks, callback)
+}
+
+// OnUpgradeRequest adds a callback to be called when a proxy upgrade is requested
+// via WebSocket. The callback receives the target version string.
+func (m *Manager) OnUpgradeRequest(callback func(version string)) {
+	m.upgradeMu.Lock()
+	defer m.upgradeMu.Unlock()
+	m.upgradeCallbacks = append(m.upgradeCallbacks, callback)
+}
+
+// handleUpgradeEvent processes the proxy.upgrade WebSocket event
+func (m *Manager) handleUpgradeEvent(version string) {
+	// Check if unattended upgrades are allowed
+	m.mu.RLock()
+	cfg := m.config
+	m.mu.RUnlock()
+
+	if cfg == nil || cfg.Updates == nil || !cfg.Updates.AllowUnattended {
+		log.Printf("[updater] Received upgrade request for version %s, but unattended upgrades are disabled", version)
+		return
+	}
+
+	log.Printf("[updater] Received upgrade request for version %s", version)
+
+	// Copy callbacks to avoid holding lock during execution
+	m.upgradeMu.Lock()
+	callbacks := make([]func(string), len(m.upgradeCallbacks))
+	copy(callbacks, m.upgradeCallbacks)
+	m.upgradeMu.Unlock()
+
+	for _, callback := range callbacks {
+		callback(version)
+	}
 }
 
 // handleIPListUpdateEvent handles the iplist.updated WebSocket event with debouncing
@@ -1011,6 +1053,24 @@ func (m *Manager) updatePusherClient(config *Config) {
 
 				log.Printf("[config] Received iplist.updated event for list: %s", eventData.ID)
 				m.handleIPListUpdateEvent(eventData.ID)
+			})
+
+			// Set up event handler for proxy upgrade requests
+			m.realtimeClient.OnEvent("proxy.upgrade", func(message pusher.Message) {
+				var eventData struct {
+					Version string `json:"version"`
+				}
+				if err := message.UnmarshalData(&eventData); err != nil {
+					log.Printf("[config] Failed to parse proxy.upgrade event data: %v", err)
+					return
+				}
+
+				if eventData.Version == "" {
+					log.Printf("[config] Received proxy.upgrade event with empty version")
+					return
+				}
+
+				m.handleUpgradeEvent(eventData.Version)
 			})
 
 			// Start connection in background

@@ -51,6 +51,9 @@
         },
         "trusted_proxies": {
             "$ref": "#/definitions/trusted_proxies_config"
+        },
+        "updates": {
+            "$ref": "#/definitions/updates_config"
         }
     },
     "additionalProperties": false,
@@ -583,6 +586,17 @@
             "required": [
                 "url"
             ],
+            "additionalProperties": false
+        },
+        "updates_config": {
+            "type": "object",
+            "description": "Configuration for remote package upgrades via WebSocket",
+            "properties": {
+                "allow_unattended": {
+                    "type": "boolean",
+                    "description": "Allow the FlowGuard control panel to trigger unattended package upgrades via WebSocket. Default: false"
+                }
+            },
             "additionalProperties": false
         },
         "trusted_proxies_config": {

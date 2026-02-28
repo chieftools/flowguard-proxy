@@ -12,6 +12,7 @@ import (
 	"flowguard/config"
 	"flowguard/iplist"
 	"flowguard/middleware"
+	"flowguard/updater"
 )
 
 type Config struct {
@@ -27,6 +28,7 @@ type Config struct {
 type Manager struct {
 	config          *Config
 	servers         []*Server
+	updater         *updater.Updater
 	certManager     *certmanager.Manager
 	configManager   *config.Manager
 	ipListManager   *iplist.Manager
@@ -112,6 +114,24 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 	configMgr.OnIPListUpdate(func(listIDs []string) {
 		pm.handleIPListUpdateEvent(listIDs)
 	})
+
+	// Initialize updater for remote package upgrades (non-fatal if detection fails)
+	cacheDir := ""
+	if configMgr.GetConfig().Host != nil && configMgr.GetConfig().Host.CacheDir != "" {
+		cacheDir = configMgr.GetConfig().Host.CacheDir
+	}
+	if cacheDir == "" {
+		cacheDir = "/var/cache/flowguard"
+	}
+	u, err := updater.New(cfg.Version, cacheDir, cfg.Verbose)
+	if err != nil {
+		log.Printf("[updater] Package upgrades unavailable: %v", err)
+	} else {
+		pm.updater = u
+		configMgr.OnUpgradeRequest(func(version string) {
+			pm.handleUpgradeRequest(version)
+		})
+	}
 
 	// Verify that at least some certificates were loaded
 	if pm.certManager.HostnameCount() == 0 {
@@ -220,6 +240,24 @@ func (p *Manager) handleIPListUpdateEvent(listIDs []string) {
 			log.Printf("[ip_list] Failed to refresh list %s: %v", listID, err)
 		}
 	}
+}
+
+// handleUpgradeRequest processes an upgrade request from the WebSocket channel.
+func (p *Manager) handleUpgradeRequest(version string) {
+	p.mu.RLock()
+	u := p.updater
+	p.mu.RUnlock()
+
+	if u == nil {
+		log.Printf("[updater] No updater available, ignoring upgrade request for version %s", version)
+		return
+	}
+
+	go func() {
+		if err := u.Upgrade(updater.UpgradeRequest{Version: version}); err != nil {
+			log.Printf("[updater] Upgrade to version %s failed: %v", version, err)
+		}
+	}()
 }
 
 func (p *Manager) Start() error {

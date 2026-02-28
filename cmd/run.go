@@ -9,6 +9,7 @@ import (
 
 	"flowguard/config"
 	"flowguard/proxy"
+	"flowguard/updater"
 
 	"github.com/spf13/cobra"
 )
@@ -57,6 +58,18 @@ func runProxy() {
 	err = configMgr.RefreshFromAPI(false)
 	if err != nil {
 		log.Printf("Warning: Failed to refresh configuration from API: %v", err)
+	}
+
+	// Check for post-upgrade state (rollback if previous upgrade failed)
+	u, uErr := updater.New(GetVersion(), cacheDir, verbose)
+	if uErr != nil {
+		if verbose {
+			log.Printf("[updater] Package upgrades unavailable: %v", uErr)
+		}
+	} else {
+		if err := u.CheckPostUpgrade(); err != nil {
+			log.Printf("[updater] Post-upgrade check failed: %v", err)
+		}
 	}
 
 	// Create and start proxy manager
