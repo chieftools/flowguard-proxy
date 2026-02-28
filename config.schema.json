@@ -172,7 +172,8 @@
                         "country",
                         "continent",
                         "ipset",
-                        "iplist"
+                        "iplist",
+                        "registerable-domain"
                     ],
                     "description": "The type of value to match against"
                 },

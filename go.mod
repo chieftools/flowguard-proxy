@@ -10,6 +10,7 @@ require (
 	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/phemmer/go-iptrie v0.0.0-20240326174613-ba542f5282c9
 	github.com/spf13/cobra v1.10.2
+	golang.org/x/net v0.48.0
 )
 
 require (
