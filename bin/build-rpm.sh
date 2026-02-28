@@ -46,7 +46,7 @@ mkdir -p "${RPMBUILD_DIR}/BUILDROOT"
 # Build the binary for Linux AMD64
 echo -e "${YELLOW}Building FlowGuard binary...${NC}"
 BINARY_DIR="${RPMBUILD_DIR}/BUILD"
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -tags netgo,osusergo -buildvcs=false -o "${BINARY_DIR}/flowguard" .
+GOEXPERIMENT=nogreenteagc CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -tags netgo,osusergo -buildvcs=false -o "${BINARY_DIR}/flowguard" .
 
 # Strip the binary to reduce size
 strip "${BINARY_DIR}/flowguard" 2>/dev/null || true
