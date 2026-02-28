@@ -42,7 +42,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y aptly createrepo-c rpm gpg rsync
+          sudo apt-get install -y apt-utils createrepo-c rpm gpg rsync
 
       - name: Import GPG key
         run: |
@@ -66,49 +66,74 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H $(echo "${{ secrets.SSH_HOST }}" | cut -d@ -f2) >> ~/.ssh/known_hosts
 
-      - name: Download existing repository
+      - name: Download existing repository metadata
         run: |
-          mkdir -p repo-sync
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
-            ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/ repo-sync/ || true
+          SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
 
-      - name: Setup aptly repository
+          # Download only DEB metadata (not the pool with all .deb archives)
+          mkdir -p repo-sync/deb/dists
+          rsync -avz -e "${SSH_CMD}" \
+            ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/deb/dists/ repo-sync/deb/dists/ || true
+
+          # Download existing RPM repository (packages + metadata)
+          mkdir -p repo-sync/rpm
+          rsync -avz -e "${SSH_CMD}" \
+            ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/ repo-sync/rpm/ || true
+
+      - name: Update DEB repository
         run: |
-          # Create aptly config
-          mkdir -p ~/.aptly
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          DEB_FILE="flowguard_${VERSION}_amd64.deb"
+          PACKAGES_DIR="repo-sync/deb/dists/stable/main/binary-amd64"
+          POOL_DIR="repo-sync/deb/pool/main/f/flowguard"
 
-          # Create the aptly repository
-          aptly repo create -distribution=stable -component=main -architectures=amd64 flowguard
+          # Place new package in pool directory structure
+          mkdir -p "${POOL_DIR}"
+          cp "${DEB_FILE}" "${POOL_DIR}/"
 
-          # Re-add existing packages from the pool so all versions are preserved
-          if [ -d "repo-sync/deb/pool" ]; then
-            echo "Importing existing packages from pool..."
-            aptly repo add flowguard repo-sync/deb/pool/
+          # Generate Packages entry for the new .deb
+          NEW_ENTRY=$(cd repo-sync/deb && apt-ftparchive packages pool/)
+
+          # Prepare Packages file
+          mkdir -p "${PACKAGES_DIR}"
+          touch "${PACKAGES_DIR}/Packages"
+
+          # Remove any existing entry for this version (in case of re-release)
+          if [ -s "${PACKAGES_DIR}/Packages" ]; then
+            awk -v RS='\n\n' -v ORS='\n\n' -v ver="flowguard_${VERSION}_amd64.deb" \
+              '$0 !~ ver && NF' "${PACKAGES_DIR}/Packages" > "${PACKAGES_DIR}/Packages.tmp"
+            mv "${PACKAGES_DIR}/Packages.tmp" "${PACKAGES_DIR}/Packages"
           fi
 
-      - name: Add DEB package to repository
-        run: |
-          DEB_FILE="flowguard_${{ steps.version.outputs.VERSION }}_amd64.deb"
+          # Append new entry
+          printf '%s' "${NEW_ENTRY}" >> "${PACKAGES_DIR}/Packages"
 
-          # Add package to repo
-          aptly repo add flowguard "${DEB_FILE}"
+          # Generate compressed version
+          gzip -9c "${PACKAGES_DIR}/Packages" > "${PACKAGES_DIR}/Packages.gz"
 
-          # Always publish (aptly will handle updates internally via the pool)
-          echo "Publishing repository..."
-          mkdir -p repo-sync/deb
-          aptly publish repo \
-            -distribution=stable \
-            -component=main \
-            -architectures=amd64 \
-            -batch \
-            -force-overwrite \
-            -passphrase-file=/tmp/gpg-passphrase \
-            flowguard
+          # Generate Release file
+          cd repo-sync/deb
+          apt-ftparchive \
+            -o APT::FTPArchive::Release::Origin="FlowGuard" \
+            -o APT::FTPArchive::Release::Label="FlowGuard" \
+            -o APT::FTPArchive::Release::Suite="stable" \
+            -o APT::FTPArchive::Release::Codename="stable" \
+            -o APT::FTPArchive::Release::Components="main" \
+            -o APT::FTPArchive::Release::Architectures="amd64" \
+            release dists/stable/ > dists/stable/Release
 
-          # Move published files to our sync directory
-          if [ -d "$HOME/.aptly/public" ]; then
-            rsync -av $HOME/.aptly/public/ repo-sync/deb/
-          fi
+          # Sign Release file
+          rm -f dists/stable/InRelease dists/stable/Release.gpg
+
+          gpg --batch --yes --clearsign \
+            --passphrase-file=/tmp/gpg-passphrase \
+            -o dists/stable/InRelease dists/stable/Release
+
+          gpg --batch --yes --detach-sign --armor \
+            --passphrase-file=/tmp/gpg-passphrase \
+            -o dists/stable/Release.gpg dists/stable/Release
+
+          cd ../..
 
       - name: Setup RPM repository
         run: |
@@ -208,9 +233,24 @@ jobs:
 
       - name: Upload to server
         run: |
-          # Sync everything to the server
-          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
-            repo-sync/ ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/
+          SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+
+          # Upload new .deb to pool (additive only, old packages remain on server)
+          rsync -avz -e "${SSH_CMD}" \
+            repo-sync/deb/pool/ ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/deb/pool/
+
+          # Upload updated DEB metadata
+          rsync -avz --delete -e "${SSH_CMD}" \
+            repo-sync/deb/dists/ ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/deb/dists/
+
+          # Upload RPM repository
+          rsync -avz --delete -e "${SSH_CMD}" \
+            repo-sync/rpm/ ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/
+
+          # Upload root config files
+          rsync -avz -e "${SSH_CMD}" \
+            repo-sync/install.sh repo-sync/gpg.key repo-sync/config.schema.json \
+            ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/
 
       - name: Clean up
         if: always()
