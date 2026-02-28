@@ -77,14 +77,13 @@ jobs:
           # Create aptly config
           mkdir -p ~/.aptly
 
-          # Import existing repo if it exists
+          # Create the aptly repository
+          aptly repo create -distribution=stable -component=main -architectures=amd64 flowguard
+
+          # Re-add existing packages from the pool so all versions are preserved
           if [ -d "repo-sync/deb/pool" ]; then
-            echo "Importing existing repository..."
-            aptly repo create -distribution=stable -component=main -architectures=amd64 flowguard || true
-            aptly repo import flowguard repo-sync/deb/pool/ || true
-          else
-            echo "Creating new repository..."
-            aptly repo create -distribution=stable -component=main -architectures=amd64 flowguard
+            echo "Importing existing packages from pool..."
+            aptly repo add flowguard repo-sync/deb/pool/
           fi
 
       - name: Add DEB package to repository
