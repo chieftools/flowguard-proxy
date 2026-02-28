@@ -3,13 +3,14 @@ module flowguard
 go 1.26.0
 
 require (
-	github.com/axiomhq/axiom-go v0.30.0
+	github.com/axiomhq/axiom-go v0.27.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/phemmer/go-iptrie v0.0.0-20240326174613-ba542f5282c9
 	github.com/spf13/cobra v1.10.2
+	golang.org/x/net v0.51.0
 )
 
 require (
@@ -27,6 +28,5 @@ require (
 	go.opentelemetry.io/otel v1.40.0 // indirect
 	go.opentelemetry.io/otel/metric v1.40.0 // indirect
 	go.opentelemetry.io/otel/trace v1.40.0 // indirect
-	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 )
