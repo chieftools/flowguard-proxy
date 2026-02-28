@@ -336,8 +336,7 @@ func getRuleInfo(r *http.Request) RequestLogEntryRuleInfo {
 	if middlewareEndTime, ok := r.Context().Value(ContextKeyMiddlewareEndTime).(time.Time); ok && !startTime.IsZero() {
 		latency := middlewareEndTime.Sub(startTime)
 		if latency > 0 {
-			latencyUS := latency.Microseconds()
-			info.TookUS = &latencyUS
+			info.TookUS = new(latency.Microseconds())
 		}
 	}
 
