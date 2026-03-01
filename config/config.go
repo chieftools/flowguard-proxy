@@ -32,6 +32,7 @@ type Config struct {
 	IPLists        *IPListsConfig         `json:"ip_lists,omitempty"`
 	Updates        *UpdatesConfig         `json:"updates,omitempty"`
 	Realtime       *pusher.Config         `json:"realtime,omitempty"`
+	Heartbeat      *HeartbeatConfig       `json:"heartbeat,omitempty"`
 	IPDatabase     *IPDatabaseConfig      `json:"ip_database,omitempty"`
 	TrustedProxies *TrustedProxiesConfig  `json:"trusted_proxies,omitempty"`
 }
@@ -52,6 +53,16 @@ type LoggingConfig struct {
 	HeaderWhitelist []string                          `json:"header_whitelist,omitempty"`
 }
 
+type UpdatesConfig struct {
+	AllowUnattended bool `json:"allow_unattended"`
+}
+
+type HeartbeatConfig struct {
+	Enabled         *bool `json:"enabled,omitempty"`
+	JitterSeconds   int   `json:"jitter_seconds,omitempty"`
+	IntervalSeconds int   `json:"interval_seconds,omitempty"`
+}
+
 type IPDatabaseConfig struct {
 	URL                    string `json:"url"`
 	RefreshIntervalSeconds int    `json:"refresh_interval_seconds"`
@@ -70,10 +81,6 @@ type IPListConfig struct {
 	Path                   string `json:"path,omitempty"`
 	Confidence             int    `json:"confidence,omitempty"`
 	RefreshIntervalSeconds int    `json:"refresh_interval_seconds,omitempty"`
-}
-
-type UpdatesConfig struct {
-	AllowUnattended bool `json:"allow_unattended"`
 }
 
 type Rule struct {
@@ -300,6 +307,11 @@ func (m *Manager) GetConfig() *Config {
 // GetCache returns the HTTP cache instance
 func (m *Manager) GetCache() *cache.Cache {
 	return m.cache
+}
+
+// GetAPIClient returns the API client instance
+func (m *Manager) GetAPIClient() *api.Client {
+	return m.apiClient
 }
 
 // GetRules returns the current rules configuration

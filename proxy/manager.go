@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
+	"flowguard/api"
 	"flowguard/certmanager"
 	"flowguard/config"
 	"flowguard/iplist"
@@ -29,7 +32,9 @@ type Manager struct {
 	config          *Config
 	servers         []*Server
 	updater         *updater.Updater
+	startedAt       time.Time
 	certManager     *certmanager.Manager
+	stopHeartbeat   chan struct{}
 	configManager   *config.Manager
 	ipListManager   *iplist.Manager
 	middlewareChain *middleware.Chain
@@ -91,13 +96,15 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 
 	// Create the proxy manager
 	pm := &Manager{
-		config: cfg,
+		config:    cfg,
+		startedAt: time.Now(),
 		certManager: certmanager.New(certmanager.Config{
 			Verbose:         cfg.Verbose,
 			CertPath:        certPath,
 			NginxConfigPath: nginxConfigPath,
 			DefaultHostname: defaultHostname,
 		}),
+		stopHeartbeat:   make(chan struct{}),
 		configManager:   configMgr,
 		middlewareChain: middlewareChain,
 	}
@@ -260,6 +267,122 @@ func (p *Manager) handleUpgradeRequest(version string) {
 	}()
 }
 
+func (p *Manager) runHeartbeat() {
+	// Read heartbeat config defaults
+	const defaultInterval = 300 // 5 minutes
+	const defaultJitter = 30    // 30 seconds
+
+	getConfig := func() (enabled bool, interval, jitter int) {
+		hbCfg := p.configManager.GetConfig().Heartbeat
+
+		enabled = true
+		interval = defaultInterval
+		jitter = defaultJitter
+
+		if hbCfg != nil {
+			if hbCfg.Enabled != nil {
+				enabled = *hbCfg.Enabled
+			}
+			if hbCfg.IntervalSeconds > 0 {
+				interval = hbCfg.IntervalSeconds
+			}
+			if hbCfg.JitterSeconds > 0 {
+				jitter = hbCfg.JitterSeconds
+			}
+		}
+
+		return
+	}
+
+	enabled, _, _ := getConfig()
+	if !enabled {
+		if p.config.Verbose {
+			log.Println("[heartbeat] Disabled by configuration")
+		}
+		// Still listen for stop signal, but also re-check config each default interval
+		// in case it gets re-enabled
+		for {
+			timer := time.NewTimer(time.Duration(defaultInterval) * time.Second)
+			select {
+			case <-p.stopHeartbeat:
+				timer.Stop()
+				return
+			case <-timer.C:
+				enabled, _, _ = getConfig()
+				if enabled {
+					log.Println("[heartbeat] Re-enabled by configuration")
+					break
+				}
+				continue
+			}
+			break
+		}
+	}
+
+	log.Println("[heartbeat] Started")
+
+	// Send immediately on startup
+	p.sendHeartbeat()
+
+	for {
+		enabled, interval, jitter := getConfig()
+		if !enabled {
+			if p.config.Verbose {
+				log.Println("[heartbeat] Disabled by configuration, pausing")
+			}
+			// Wait until re-enabled or stopped
+			timer := time.NewTimer(time.Duration(defaultInterval) * time.Second)
+			select {
+			case <-p.stopHeartbeat:
+				timer.Stop()
+				log.Println("[heartbeat] Stopped")
+				return
+			case <-timer.C:
+				continue
+			}
+		}
+
+		// Apply jitter: interval +/- jitter (uniform random)
+		jitteredInterval := interval
+		if jitter > 0 {
+			jitteredInterval += rand.IntN(2*jitter+1) - jitter
+		}
+		if jitteredInterval < 1 {
+			jitteredInterval = 1
+		}
+
+		timer := time.NewTimer(time.Duration(jitteredInterval) * time.Second)
+		select {
+		case <-p.stopHeartbeat:
+			timer.Stop()
+			log.Println("[heartbeat] Stopped")
+			return
+		case <-timer.C:
+			p.sendHeartbeat()
+		}
+	}
+}
+
+func (p *Manager) sendHeartbeat() {
+	payload := api.HeartbeatPayload{
+		OS:            runtime.GOOS,
+		Arch:          runtime.GOARCH,
+		Version:       p.config.Version,
+		StartedAt:     p.startedAt.Unix(),
+		HostnameCount: p.certManager.HostnameCount(),
+		BindAddresses: p.config.BindAddrs,
+	}
+
+	if err := p.configManager.GetAPIClient().SendHeartbeat(payload); err != nil {
+		log.Printf("[heartbeat] Failed to send: %v", err)
+		return
+	}
+
+	if p.config.Verbose {
+		log.Println("[heartbeat] Sent successfully")
+	}
+}
+
 func (p *Manager) Start() error {
 	trustedProxiesRefreshInterval := p.configManager.GetRefreshInterval()
 	log.Printf("[trusted_proxy] Starting trusted proxy refresh with interval: %v", trustedProxiesRefreshInterval)
@@ -283,6 +406,12 @@ func (p *Manager) Start() error {
 			}
 		}
 	}()
+
+	// Start heartbeat if running in managed mode
+	cfg := p.configManager.GetConfig()
+	if cfg.Host != nil && cfg.Host.Key != "" {
+		go p.runHeartbeat()
+	}
 
 	errChan := make(chan error, len(p.config.BindAddrs)*2)
 
@@ -359,7 +488,10 @@ func (p *Manager) Shutdown() error {
 		server.CleanupPortRedirect()
 	}
 
-	// Stop the configuration mamager
+	// Stop the heartbeat goroutine
+	close(p.stopHeartbeat)
+
+	// Stop the configuration manager
 	p.configManager.Stop()
 
 	// Stop the certificate manager

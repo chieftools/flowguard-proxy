@@ -1,9 +1,9 @@
 {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "$id": "https://pkg.flowguard.network/config.schema.json",
-    "title": "FlowGuard Proxy Configuration",
-    "description": "Configuration schema for FlowGuard reverse proxy security rules",
     "type": "object",
+    "title": "FlowGuard Proxy Configuration",
+    "description": "Configuration schema for the FlowGuard reverse proxy.",
     "properties": {
         "$schema": {
             "type": "string",
@@ -40,23 +40,25 @@
         "logging": {
             "$ref": "#/definitions/logger_config"
         },
+        "updates": {
+            "$ref": "#/definitions/updates_config"
+        },
         "ip_lists": {
             "$ref": "#/definitions/ip_lists_config"
         },
         "realtime": {
             "$ref": "#/definitions/realtime_config"
         },
+        "heartbeat": {
+            "$ref": "#/definitions/heartbeat_config"
+        },
         "ip_database": {
             "$ref": "#/definitions/ip_database_config"
         },
         "trusted_proxies": {
             "$ref": "#/definitions/trusted_proxies_config"
-        },
-        "updates": {
-            "$ref": "#/definitions/updates_config"
         }
     },
-    "additionalProperties": false,
     "definitions": {
         "host_config": {
             "type": "object",
@@ -475,6 +477,17 @@
             ],
             "additionalProperties": false
         },
+        "updates_config": {
+            "type": "object",
+            "description": "Configuration for remote package upgrades via WebSocket",
+            "properties": {
+                "allow_unattended": {
+                    "type": "boolean",
+                    "description": "Allow the FlowGuard control panel to trigger unattended package upgrades via WebSocket. Default: false"
+                }
+            },
+            "additionalProperties": false
+        },
         "ip_lists_config": {
             "type": "object",
             "description": "In-memory IP list configurations for high-performance IP matching",
@@ -568,6 +581,27 @@
             ],
             "additionalProperties": false
         },
+        "heartbeat_config": {
+            "type": "object",
+            "description": "Heartbeat configuration for managed proxies to report operational status",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Whether heartbeat reporting is enabled. Default: true"
+                },
+                "interval_seconds": {
+                    "type": "integer",
+                    "minimum": 30,
+                    "description": "How often to send heartbeats in seconds. Default: 300 (5 minutes)"
+                },
+                "jitter_seconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Random jitter applied as +/- seconds to each interval. Default: 30"
+                }
+            },
+            "additionalProperties": false
+        },
         "ip_database_config": {
             "type": "object",
             "description": "IP geolocation database configuration",
@@ -586,17 +620,6 @@
             "required": [
                 "url"
             ],
-            "additionalProperties": false
-        },
-        "updates_config": {
-            "type": "object",
-            "description": "Configuration for remote package upgrades via WebSocket",
-            "properties": {
-                "allow_unattended": {
-                    "type": "boolean",
-                    "description": "Allow the FlowGuard control panel to trigger unattended package upgrades via WebSocket. Default: false"
-                }
-            },
             "additionalProperties": false
         },
         "trusted_proxies_config": {
@@ -635,5 +658,6 @@
             ],
             "additionalProperties": false
         }
-    }
+    },
+    "additionalProperties": false
 }

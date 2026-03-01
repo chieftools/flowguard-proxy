@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -100,6 +101,48 @@ func (c *Client) GetConfig(etag string) ([]byte, error) {
 	}
 
 	return body, nil
+}
+
+// HeartbeatPayload is the data sent in each heartbeat POST
+type HeartbeatPayload struct {
+	OS            string   `json:"os"`
+	Arch          string   `json:"arch"`
+	Version       string   `json:"version"`
+	StartedAt     int64    `json:"started_at"`
+	HostnameCount int      `json:"hostname_count"`
+	BindAddresses []string `json:"bind_addresses"`
+}
+
+// SendHeartbeat POSTs the heartbeat payload to the API
+func (c *Client) SendHeartbeat(payload HeartbeatPayload) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal heartbeat payload: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", c.buildURL("heartbeat"), bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create heartbeat request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.hostKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", c.userAgent)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send heartbeat: %w", err)
+	}
+	defer func() {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("heartbeat returned status %d", resp.StatusCode)
+	}
+
+	return nil
 }
 
 // SetHostKey updates the host key for the client
