@@ -7,7 +7,7 @@ import (
 
 	"flowguard/cache"
 
-	"github.com/phemmer/go-iptrie"
+	"github.com/gaissmai/bart"
 )
 
 func TestParseIPsToTrie(t *testing.T) {
@@ -339,7 +339,7 @@ func TestManagerMultipleLists(t *testing.T) {
 }
 
 // Helper function to check if an IP is in a trie
-func containsIP(trie *iptrie.Trie, ip string) bool {
+func containsIP(trie *bart.Lite, ip string) bool {
 	if trie == nil {
 		return false
 	}

@@ -12,7 +12,7 @@ import (
 
 	"flowguard/cache"
 
-	"github.com/phemmer/go-iptrie"
+	"github.com/gaissmai/bart"
 )
 
 // ListConfig represents configuration for a single IP list
@@ -28,7 +28,7 @@ type ListConfig struct {
 type IPList struct {
 	name   string
 	config ListConfig
-	trie   *iptrie.Trie
+	trie   *bart.Lite
 	loaded bool // tracks if list has been loaded at least once
 	empty  bool // true if list has 0 entries (optimization to skip lookups)
 	mu     sync.RWMutex
@@ -170,8 +170,8 @@ func (l *IPList) loadInternal(cacheInstance *cache.Cache, verbose bool, forceRef
 }
 
 // parseIPsToTrie parses IP data and builds a new trie
-func parseIPsToTrie(data []byte, source string) (*iptrie.Trie, int, error) {
-	newTrie := iptrie.NewTrie()
+func parseIPsToTrie(data []byte, source string) (*bart.Lite, int, error) {
+	newTrie := new(bart.Lite)
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	count := 0
 	lineNum := 0
@@ -192,7 +192,7 @@ func parseIPsToTrie(data []byte, source string) (*iptrie.Trie, int, error) {
 				log.Printf("[ip_list] Invalid CIDR at line %d in %s: %s", lineNum, source, line)
 				continue
 			}
-			newTrie.Insert(prefix, true)
+			newTrie.Insert(prefix)
 			count++
 		} else {
 			// Parse as individual IP
@@ -207,7 +207,7 @@ func parseIPsToTrie(data []byte, source string) (*iptrie.Trie, int, error) {
 				bits = 128
 			}
 			prefix := netip.PrefixFrom(addr, bits)
-			newTrie.Insert(prefix, true)
+			newTrie.Insert(prefix)
 			count++
 		}
 	}
