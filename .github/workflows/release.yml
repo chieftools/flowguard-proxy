@@ -167,10 +167,10 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
 
-          # RPM signing macros
+          # RPM signing macros with explicit passphrase handling
           echo "%_gpg_name FlowGuard Team <hello@flowguard.network>" > ~/.rpmmacros
           echo "%_signature gpg" >> ~/.rpmmacros
-          echo "%_gpg_path $HOME/.gnupg" >> ~/.rpmmacros
+          echo '%__gpg_sign_cmd %{__gpg} gpg --batch --verbose --no-armor --pinentry-mode loopback --passphrase-file /tmp/gpg-passphrase --no-secmem-warning -u "%{_gpg_name}" -sbo %{__signature_filename} --digest-algo sha256 %{__plaintext_filename}' >> ~/.rpmmacros
 
           for RPM_ARCH in x86_64 aarch64; do
             RPM_FILE="flowguard-${VERSION}-1.${RPM_ARCH}.rpm"
@@ -188,15 +188,19 @@ jobs:
               # Full rebuild: all RPM files are present, generate fresh metadata
               createrepo_c "${REPO_DIR}"
             else
-              # Incremental: create placeholders for old RPMs so createrepo_c --update
-              # preserves their metadata without needing the actual files
+              # Check if existing repo metadata exists for incremental update
               OLD_PRIMARY=$(find "${REPO_DIR}/repodata" -name "*-primary.xml.gz" 2>/dev/null | head -1)
               if [ -n "${OLD_PRIMARY}" ]; then
+                # Create placeholders for old RPMs so createrepo_c --update
+                # preserves their metadata without needing the actual files
                 gunzip -c "${OLD_PRIMARY}" | grep -oP 'href="\K[^"]+' | while read -r rpm; do
                   [ ! -f "${REPO_DIR}/${rpm}" ] && touch "${REPO_DIR}/${rpm}"
                 done
+                createrepo_c --update --skip-stat "${REPO_DIR}"
+              else
+                # No existing metadata (new architecture), create fresh repo
+                createrepo_c "${REPO_DIR}"
               fi
-              createrepo_c --update --skip-stat "${REPO_DIR}"
             fi
 
             # Sign the repository metadata
