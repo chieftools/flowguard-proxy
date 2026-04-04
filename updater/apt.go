@@ -46,8 +46,11 @@ func (a *aptManager) Install(pkg, version string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), aptTimeout)
 	defer cancel()
 
-	// apt-get install -y --allow-downgrades flowguard=<version>
-	cmd := exec.CommandContext(ctx, "apt-get", "install", "-y", "--allow-downgrades", fmt.Sprintf("%s=%s", pkg, version))
+	// Run via systemd-run --scope so apt-get/dpkg live in a separate cgroup.
+	// Without this, the post-install script's "systemctl restart flowguard"
+	// causes systemd to kill apt-get/dpkg (same cgroup), leaving dpkg broken.
+	cmd := exec.CommandContext(ctx, "systemd-run", "--scope", "--description=FlowGuard package upgrade", "--",
+		"apt-get", "install", "-y", "--allow-downgrades", fmt.Sprintf("%s=%s", pkg, version))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("apt-get install failed: %w\nOutput: %s", err, string(output))
