@@ -3,6 +3,7 @@ package updater
 import (
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 	"time"
@@ -22,7 +23,10 @@ func (a *aptManager) CheckAvailable(pkg, version string) error {
 	defer updateCancel()
 
 	if output, err := exec.CommandContext(updateCtx, "apt-get", "update").CombinedOutput(); err != nil {
-		return fmt.Errorf("apt-get update failed: %w\nOutput: %s", err, string(output))
+		// Don't fail on apt-get update errors — unrelated broken repos (e.g. expired
+		// nodesource) cause a non-zero exit even when the flowguard repo updates fine.
+		// The apt-cache policy check below will catch it if the version is truly missing.
+		log.Printf("[updater] apt-get update returned an error (continuing anyway): %v\nOutput: %s", err, string(output))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
