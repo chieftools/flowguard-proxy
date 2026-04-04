@@ -17,6 +17,14 @@ func (a *aptManager) Name() string {
 }
 
 func (a *aptManager) CheckAvailable(pkg, version string) error {
+	// Refresh the local package cache so newly published versions are visible
+	updateCtx, updateCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer updateCancel()
+
+	if output, err := exec.CommandContext(updateCtx, "apt-get", "update").CombinedOutput(); err != nil {
+		return fmt.Errorf("apt-get update failed: %w\nOutput: %s", err, string(output))
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

@@ -19,6 +19,14 @@ func (y *yumManager) Name() string {
 }
 
 func (y *yumManager) CheckAvailable(pkg, version string) error {
+	// Refresh the local package cache so newly published versions are visible
+	updateCtx, updateCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer updateCancel()
+
+	if output, err := exec.CommandContext(updateCtx, y.binary, "clean", "expire-cache", "--disablerepo=*", "--enablerepo=flowguard").CombinedOutput(); err != nil {
+		return fmt.Errorf("%s clean expire-cache failed: %w\nOutput: %s", y.name, err, string(output))
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
