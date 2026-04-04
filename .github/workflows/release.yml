@@ -194,7 +194,7 @@ jobs:
                 # Create placeholders for old RPMs so createrepo_c --update
                 # preserves their metadata without needing the actual files
                 gunzip -c "${OLD_PRIMARY}" | grep -oP 'href="\K[^"]+' | while read -r rpm; do
-                  [ ! -f "${REPO_DIR}/${rpm}" ] && touch "${REPO_DIR}/${rpm}"
+                  [ -f "${REPO_DIR}/${rpm}" ] || touch "${REPO_DIR}/${rpm}"
                 done
                 createrepo_c --update --skip-stat "${REPO_DIR}"
               else
