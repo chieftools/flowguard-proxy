@@ -5,7 +5,14 @@ set -e
 # Package information
 PACKAGE_NAME="flowguard"
 VERSION="${1:-1.0.0}"
-ARCH="amd64"
+ARCH="${2:-amd64}"
+
+# Map Debian architecture to Go architecture
+case "${ARCH}" in
+    amd64) GOARCH="amd64" ;;
+    arm64) GOARCH="arm64" ;;
+    *) echo -e "${RED}Unsupported architecture: ${ARCH}${NC}"; exit 1 ;;
+esac
 MAINTAINER="FlowGuard Team <hello@flowguard.network>"
 DESCRIPTION="High-performance reverse proxy with dynamic rule-based security filtering."
 
@@ -32,12 +39,9 @@ mkdir -p "${DEB_DIR}/var/log/flowguard"
 mkdir -p "${DEB_DIR}/var/cache/flowguard"
 mkdir -p "${DEB_DIR}/usr/share/doc/flowguard"
 
-# Build the binary for Linux AMD64
+# Build the binary
 echo -e "${YELLOW}Building FlowGuard binary...${NC}"
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -tags netgo,osusergo -buildvcs=false -o "${DEB_DIR}/usr/bin/flowguard" .
-
-# Strip the binary to reduce size
-strip "${DEB_DIR}/usr/bin/flowguard" 2>/dev/null || true
+CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -tags netgo,osusergo -buildvcs=false -o "${DEB_DIR}/usr/bin/flowguard" .
 
 # Create default configuration file
 echo -e "${YELLOW}Creating default configuration...${NC}"

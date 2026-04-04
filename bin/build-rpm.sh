@@ -6,7 +6,14 @@ set -e
 PACKAGE_NAME="flowguard"
 VERSION="${1:-1.0.0}"
 RELEASE="${2:-1}"
-ARCH="x86_64"
+ARCH="${3:-x86_64}"
+
+# Map RPM architecture to Go architecture
+case "${ARCH}" in
+    x86_64)  GOARCH="amd64" ;;
+    aarch64) GOARCH="arm64" ;;
+    *) echo -e "${RED}Unsupported architecture: ${ARCH}${NC}"; exit 1 ;;
+esac
 MAINTAINER="FlowGuard Team <hello@flowguard.network>"
 DESCRIPTION="High-performance reverse proxy with dynamic rule-based security filtering."
 URL="https://flowguard.network"
@@ -43,13 +50,10 @@ echo -e "${YELLOW}Creating RPM build structure...${NC}"
 mkdir -p "${RPMBUILD_DIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 mkdir -p "${RPMBUILD_DIR}/BUILDROOT"
 
-# Build the binary for Linux AMD64
+# Build the binary
 echo -e "${YELLOW}Building FlowGuard binary...${NC}"
 BINARY_DIR="${RPMBUILD_DIR}/BUILD"
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -tags netgo,osusergo -buildvcs=false -o "${BINARY_DIR}/flowguard" .
-
-# Strip the binary to reduce size
-strip "${BINARY_DIR}/flowguard" 2>/dev/null || true
+CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -tags netgo,osusergo -buildvcs=false -o "${BINARY_DIR}/flowguard" .
 
 # Create default configuration file
 echo -e "${YELLOW}Creating default configuration...${NC}"
@@ -268,7 +272,7 @@ DOCKERFILE_EOF
     docker run --rm -v "${BUILD_DIR}:/build" flowguard-rpm-builder \
         rpmbuild --define "_topdir /build/rpmbuild" \
                  --define "_builddir /build/rpmbuild/BUILD" \
-                 --target x86_64 \
+                 --target ${ARCH} \
                  -bb /build/rpmbuild/SPECS/flowguard.spec
 
     # Clean up Docker image

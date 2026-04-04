@@ -21,16 +21,26 @@ echo ""
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Build DEB package
-echo -e "${YELLOW}[1/2] Building Debian package...${NC}"
+# Build DEB packages
+echo -e "${YELLOW}[1/4] Building Debian amd64 package...${NC}"
 echo ""
-"${SCRIPT_DIR}/build-deb.sh" "${VERSION}"
+"${SCRIPT_DIR}/build-deb.sh" "${VERSION}" "amd64"
 echo ""
 
-# Build RPM package
-echo -e "${YELLOW}[2/2] Building RPM package...${NC}"
+echo -e "${YELLOW}[2/4] Building Debian arm64 package...${NC}"
 echo ""
-"${SCRIPT_DIR}/build-rpm.sh" "${VERSION}" "${RELEASE}"
+"${SCRIPT_DIR}/build-deb.sh" "${VERSION}" "arm64"
+echo ""
+
+# Build RPM packages
+echo -e "${YELLOW}[3/4] Building RPM x86_64 package...${NC}"
+echo ""
+"${SCRIPT_DIR}/build-rpm.sh" "${VERSION}" "${RELEASE}" "x86_64"
+echo ""
+
+echo -e "${YELLOW}[4/4] Building RPM aarch64 package...${NC}"
+echo ""
+"${SCRIPT_DIR}/build-rpm.sh" "${VERSION}" "${RELEASE}" "aarch64"
 echo ""
 
 # Summary
@@ -39,7 +49,8 @@ echo -e "${GREEN}All packages built successfully!${NC}"
 echo -e "${BLUE}======================================${NC}"
 echo ""
 echo "Built packages:"
-ls -lh flowguard_${VERSION}_amd64.deb flowguard-${VERSION}-${RELEASE}.x86_64.rpm 2>/dev/null || {
+ls -lh flowguard_${VERSION}_amd64.deb flowguard_${VERSION}_arm64.deb \
+       flowguard-${VERSION}-${RELEASE}.x86_64.rpm flowguard-${VERSION}-${RELEASE}.aarch64.rpm 2>/dev/null || {
     echo -e "${RED}Warning: Some package files may not be found${NC}"
     ls -lh flowguard*.deb flowguard*.rpm 2>/dev/null || true
 }

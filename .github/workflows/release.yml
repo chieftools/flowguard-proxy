@@ -53,15 +53,17 @@ jobs:
           echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
           echo "${{ secrets.GPG_PASSPHRASE }}" > /tmp/gpg-passphrase
 
-      - name: Build DEB package
+      - name: Build DEB packages
         run: |
           chmod +x ./bin/build-deb.sh
-          ./bin/build-deb.sh ${{ steps.version.outputs.VERSION }}
+          ./bin/build-deb.sh ${{ steps.version.outputs.VERSION }} amd64
+          ./bin/build-deb.sh ${{ steps.version.outputs.VERSION }} arm64
 
-      - name: Build RPM package
+      - name: Build RPM packages
         run: |
           chmod +x ./bin/build-rpm.sh
-          ./bin/build-rpm.sh ${{ steps.version.outputs.VERSION }} 1
+          ./bin/build-rpm.sh ${{ steps.version.outputs.VERSION }} 1 x86_64
+          ./bin/build-rpm.sh ${{ steps.version.outputs.VERSION }} 1 aarch64
 
       - name: Setup SSH
         run: |
@@ -79,51 +81,57 @@ jobs:
           rsync -avz -e "${SSH_CMD}" \
             ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/deb/dists/ repo-sync/deb/dists/ || true
 
-          # Download RPM repository
-          mkdir -p repo-sync/rpm/stable/x86_64
-          if [ "${{ inputs.rebuild_rpm_repo }}" = "true" ]; then
-            echo "Rebuilding RPM repo: downloading all packages..."
-            rsync -avz -e "${SSH_CMD}" \
-              ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/x86_64/ \
-              repo-sync/rpm/stable/x86_64/ || true
-          else
-            mkdir -p repo-sync/rpm/stable/x86_64/repodata
-            rsync -avz -e "${SSH_CMD}" \
-              ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/x86_64/repodata/ \
-              repo-sync/rpm/stable/x86_64/repodata/ || true
-          fi
+          # Download RPM repositories
+          for RPM_ARCH in x86_64 aarch64; do
+            mkdir -p repo-sync/rpm/stable/${RPM_ARCH}
+            if [ "${{ inputs.rebuild_rpm_repo }}" = "true" ]; then
+              echo "Rebuilding RPM ${RPM_ARCH} repo: downloading all packages..."
+              rsync -avz -e "${SSH_CMD}" \
+                ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/${RPM_ARCH}/ \
+                repo-sync/rpm/stable/${RPM_ARCH}/ || true
+            else
+              mkdir -p repo-sync/rpm/stable/${RPM_ARCH}/repodata
+              rsync -avz -e "${SSH_CMD}" \
+                ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/${RPM_ARCH}/repodata/ \
+                repo-sync/rpm/stable/${RPM_ARCH}/repodata/ || true
+            fi
+          done
 
       - name: Update DEB repository
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
-          DEB_FILE="flowguard_${VERSION}_amd64.deb"
-          PACKAGES_DIR="repo-sync/deb/dists/stable/main/binary-amd64"
           POOL_DIR="repo-sync/deb/pool/main/f/flowguard"
-
-          # Place new package in pool directory structure
           mkdir -p "${POOL_DIR}"
-          cp "${DEB_FILE}" "${POOL_DIR}/"
 
-          # Generate Packages entry for the new .deb
-          NEW_ENTRY=$(cd repo-sync/deb && apt-ftparchive packages pool/)
+          for DEB_ARCH in amd64 arm64; do
+            DEB_FILE="flowguard_${VERSION}_${DEB_ARCH}.deb"
+            PACKAGES_DIR="repo-sync/deb/dists/stable/main/binary-${DEB_ARCH}"
 
-          # Prepare Packages file
-          mkdir -p "${PACKAGES_DIR}"
-          touch "${PACKAGES_DIR}/Packages"
+            # Place new package in pool directory structure
+            cp "${DEB_FILE}" "${POOL_DIR}/"
 
-          # Remove any existing entry for this version (in case of re-release)
-          if [ -s "${PACKAGES_DIR}/Packages" ]; then
-            awk -v RS='\n\n' -v ORS='\n\n' -v ver="flowguard_${VERSION}_amd64.deb" \
-              '$0 !~ ver && NF' "${PACKAGES_DIR}/Packages" > "${PACKAGES_DIR}/Packages.tmp"
-            mv "${PACKAGES_DIR}/Packages.tmp" "${PACKAGES_DIR}/Packages"
-          fi
+            # Generate Packages entries for all .deb files in pool
+            NEW_ENTRY=$(cd repo-sync/deb && apt-ftparchive packages pool/)
 
-          # Append new entry
-          printf '%s' "${NEW_ENTRY}" >> "${PACKAGES_DIR}/Packages"
+            # Prepare Packages file
+            mkdir -p "${PACKAGES_DIR}"
+            touch "${PACKAGES_DIR}/Packages"
 
-          # Generate compressed versions
-          gzip -9c "${PACKAGES_DIR}/Packages" > "${PACKAGES_DIR}/Packages.gz"
-          bzip2 -9c "${PACKAGES_DIR}/Packages" > "${PACKAGES_DIR}/Packages.bz2"
+            # Remove any existing entry for this version (in case of re-release)
+            if [ -s "${PACKAGES_DIR}/Packages" ]; then
+              awk -v RS='\n\n' -v ORS='\n\n' -v ver="flowguard_${VERSION}_${DEB_ARCH}.deb" \
+                '$0 !~ ver && NF' "${PACKAGES_DIR}/Packages" > "${PACKAGES_DIR}/Packages.tmp"
+              mv "${PACKAGES_DIR}/Packages.tmp" "${PACKAGES_DIR}/Packages"
+            fi
+
+            # Append new entry — filter to only entries matching this architecture
+            printf '%s' "${NEW_ENTRY}" | awk -v RS='\n\n' -v ORS='\n\n' -v arch="${DEB_ARCH}" \
+              '$0 ~ "Architecture: "arch' >> "${PACKAGES_DIR}/Packages"
+
+            # Generate compressed versions
+            gzip -9c "${PACKAGES_DIR}/Packages" > "${PACKAGES_DIR}/Packages.gz"
+            bzip2 -9c "${PACKAGES_DIR}/Packages" > "${PACKAGES_DIR}/Packages.bz2"
+          done
 
           # Remove any stale files from old aptly-generated repo that we don't manage
           find repo-sync/deb/dists/ -name "*.xz" -delete 2>/dev/null || true
@@ -137,7 +145,7 @@ jobs:
             -o APT::FTPArchive::Release::Suite="stable" \
             -o APT::FTPArchive::Release::Codename="stable" \
             -o APT::FTPArchive::Release::Components="main" \
-            -o APT::FTPArchive::Release::Architectures="amd64" \
+            -o APT::FTPArchive::Release::Architectures="amd64 arm64" \
             release dists/stable/ > dists/stable/Release
 
           # Sign Release file
@@ -157,44 +165,49 @@ jobs:
 
       - name: Setup RPM repository
         run: |
-          RPM_FILE="flowguard-${{ steps.version.outputs.VERSION }}-1.x86_64.rpm"
-          REPO_DIR="repo-sync/rpm/stable/x86_64"
+          VERSION="${{ steps.version.outputs.VERSION }}"
 
-          # Sign the RPM
+          # RPM signing macros
           echo "%_gpg_name FlowGuard Team <hello@flowguard.network>" > ~/.rpmmacros
           echo "%_signature gpg" >> ~/.rpmmacros
           echo "%_gpg_path $HOME/.gnupg" >> ~/.rpmmacros
 
-          rpm --addsign --define "_gpg_name FlowGuard Team <hello@flowguard.network>" \
-            "${RPM_FILE}" || echo "RPM signing failed, continuing..."
+          for RPM_ARCH in x86_64 aarch64; do
+            RPM_FILE="flowguard-${VERSION}-1.${RPM_ARCH}.rpm"
+            REPO_DIR="repo-sync/rpm/stable/${RPM_ARCH}"
 
-          # Copy new RPM to repo directory
-          mkdir -p "${REPO_DIR}"
-          cp "${RPM_FILE}" "${REPO_DIR}/"
+            # Sign the RPM
+            rpm --addsign --define "_gpg_name FlowGuard Team <hello@flowguard.network>" \
+              "${RPM_FILE}" || echo "RPM signing failed for ${RPM_ARCH}, continuing..."
 
-          if [ "${{ inputs.rebuild_rpm_repo }}" = "true" ]; then
-            # Full rebuild: all RPM files are present, generate fresh metadata
-            createrepo_c "${REPO_DIR}"
-          else
-            # Incremental: create placeholders for old RPMs so createrepo_c --update
-            # preserves their metadata without needing the actual files
-            OLD_PRIMARY=$(find "${REPO_DIR}/repodata" -name "*-primary.xml.gz" 2>/dev/null | head -1)
-            if [ -n "${OLD_PRIMARY}" ]; then
-              gunzip -c "${OLD_PRIMARY}" | grep -oP 'href="\K[^"]+' | while read -r rpm; do
-                [ ! -f "${REPO_DIR}/${rpm}" ] && touch "${REPO_DIR}/${rpm}"
-              done
+            # Copy new RPM to repo directory
+            mkdir -p "${REPO_DIR}"
+            cp "${RPM_FILE}" "${REPO_DIR}/"
+
+            if [ "${{ inputs.rebuild_rpm_repo }}" = "true" ]; then
+              # Full rebuild: all RPM files are present, generate fresh metadata
+              createrepo_c "${REPO_DIR}"
+            else
+              # Incremental: create placeholders for old RPMs so createrepo_c --update
+              # preserves their metadata without needing the actual files
+              OLD_PRIMARY=$(find "${REPO_DIR}/repodata" -name "*-primary.xml.gz" 2>/dev/null | head -1)
+              if [ -n "${OLD_PRIMARY}" ]; then
+                gunzip -c "${OLD_PRIMARY}" | grep -oP 'href="\K[^"]+' | while read -r rpm; do
+                  [ ! -f "${REPO_DIR}/${rpm}" ] && touch "${REPO_DIR}/${rpm}"
+                done
+              fi
+              createrepo_c --update --skip-stat "${REPO_DIR}"
             fi
-            createrepo_c --update --skip-stat "${REPO_DIR}"
-          fi
 
-          # Sign the repository metadata
-          gpg --batch --yes --detach-sign --armor \
-            --pinentry-mode loopback \
-            --passphrase-file=/tmp/gpg-passphrase \
-            "${REPO_DIR}/repodata/repomd.xml"
+            # Sign the repository metadata
+            gpg --batch --yes --detach-sign --armor \
+              --pinentry-mode loopback \
+              --passphrase-file=/tmp/gpg-passphrase \
+              "${REPO_DIR}/repodata/repomd.xml"
 
-          # Clean up empty placeholder files
-          find "${REPO_DIR}" -maxdepth 1 -name "*.rpm" -empty -delete
+            # Clean up empty placeholder files
+            find "${REPO_DIR}" -maxdepth 1 -name "*.rpm" -empty -delete
+          done
 
       - name: Create repository configuration files
         run: |
@@ -202,6 +215,15 @@ jobs:
           cat > repo-sync/install.sh << 'INSTALL_EOF'
           #!/bin/bash
           set -e
+
+          # Detect architecture
+          MACHINE_ARCH=$(uname -m)
+          case "${MACHINE_ARCH}" in
+              x86_64)  RPM_ARCH="x86_64" ;;
+              aarch64) RPM_ARCH="aarch64" ;;
+              arm64)   RPM_ARCH="aarch64" ;;
+              *) echo "Unsupported architecture: ${MACHINE_ARCH}"; exit 1 ;;
+          esac
 
           # Detect OS
           if [ -f /etc/os-release ]; then
@@ -231,10 +253,10 @@ jobs:
                   echo "Setting up FlowGuard repository for RHEL/CentOS/Rocky/Alma/Fedora..."
 
                   # Add repository
-                  cat > /etc/yum.repos.d/flowguard.repo << 'EOF'
+                  cat > /etc/yum.repos.d/flowguard.repo << EOF
           [flowguard]
           name=FlowGuard Repository
-          baseurl=https://pkg.flowguard.network/rpm/stable/x86_64
+          baseurl=https://pkg.flowguard.network/rpm/stable/$RPM_ARCH
           enabled=1
           gpgcheck=1
           gpgkey=https://pkg.flowguard.network/gpg.key
@@ -278,15 +300,18 @@ jobs:
           rsync -avz --delete -e "${SSH_CMD}" \
             repo-sync/deb/dists/ ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/deb/dists/
 
-          # Upload new RPM package (additive only, old packages remain on server)
-          rsync -avz -e "${SSH_CMD}" \
-            "repo-sync/rpm/stable/x86_64/flowguard-${{ steps.version.outputs.VERSION }}-1.x86_64.rpm" \
-            ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/x86_64/
+          # Upload RPM packages and metadata for each architecture
+          for RPM_ARCH in x86_64 aarch64; do
+            # Upload new RPM package (additive only, old packages remain on server)
+            rsync -avz -e "${SSH_CMD}" \
+              "repo-sync/rpm/stable/${RPM_ARCH}/flowguard-${{ steps.version.outputs.VERSION }}-1.${RPM_ARCH}.rpm" \
+              ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/${RPM_ARCH}/
 
-          # Upload updated RPM metadata
-          rsync -avz --delete -e "${SSH_CMD}" \
-            repo-sync/rpm/stable/x86_64/repodata/ \
-            ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/x86_64/repodata/
+            # Upload updated RPM metadata
+            rsync -avz --delete -e "${SSH_CMD}" \
+              repo-sync/rpm/stable/${RPM_ARCH}/repodata/ \
+              ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/${RPM_ARCH}/repodata/
+          done
 
           # Upload root config files
           rsync -avz -e "${SSH_CMD}" \
@@ -315,7 +340,9 @@ jobs:
         with:
           files: |
             flowguard_${{ steps.version.outputs.VERSION }}_amd64.deb
+            flowguard_${{ steps.version.outputs.VERSION }}_arm64.deb
             flowguard-${{ steps.version.outputs.VERSION }}-1.x86_64.rpm
+            flowguard-${{ steps.version.outputs.VERSION }}-1.aarch64.rpm
           body: |
             - Installation instructions: https://github.com/chieftools/flowguard-proxy#quick-install
             - Upgrade instructions: https://github.com/chieftools/flowguard-proxy#upgrading
