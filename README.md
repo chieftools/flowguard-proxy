@@ -64,18 +64,33 @@ curl -sS https://pkg.flowguard.network/install.sh | sudo bash
 ### Install on Debian/Ubuntu
 
 ```bash
-# Add FlowGuard repository
-curl -sS https://pkg.flowguard.network/gpg.key | gpg --dearmor --yes -o /etc/apt/trusted.gpg.d/flowguard.gpg
-echo "deb https://pkg.flowguard.network/deb stable main" | sudo tee /etc/apt/sources.list.d/flowguard.list
+# Create a dedicated keyring directory
+sudo install -d -m 0755 /etc/apt/keyrings
+
+# Add the FlowGuard repository key
+curl -fsSL https://pkg.flowguard.network/gpg.key | sudo gpg --dearmor --yes -o /etc/apt/keyrings/flowguard.gpg
+sudo chmod a+r /etc/apt/keyrings/flowguard.gpg
+
+# Detect the local Debian architecture
+DEB_ARCH="$(dpkg --print-architecture)"
+
+# Add the FlowGuard repository
+cat <<EOF | sudo tee /etc/apt/sources.list.d/flowguard.sources >/dev/null
+Types: deb
+URIs: https://pkg.flowguard.network/deb
+Suites: stable
+Components: main
+Architectures: ${DEB_ARCH}
+Signed-By: /etc/apt/keyrings/flowguard.gpg
+EOF
 
 # Update package list and install
 sudo apt update
 sudo apt install flowguard
 
 # Setup initial configuration (optional - use FlowGuard control panel or create manually)
-flowguard setup fgsvr_...
-
 # Alternatively create the /etc/flowguard/config.json manually
+flowguard setup fgsvr_...
 
 # Ensure certificates are properly detected
 flowguard certificates

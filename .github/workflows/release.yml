@@ -223,9 +223,9 @@ jobs:
           # Detect architecture
           MACHINE_ARCH=$(uname -m)
           case "${MACHINE_ARCH}" in
-              x86_64)  RPM_ARCH="x86_64" ;;
-              aarch64) RPM_ARCH="aarch64" ;;
-              arm64)   RPM_ARCH="aarch64" ;;
+              x86_64)  RPM_ARCH="x86_64"; DEB_ARCH="amd64" ;;
+              aarch64) RPM_ARCH="aarch64"; DEB_ARCH="arm64" ;;
+              arm64)   RPM_ARCH="aarch64"; DEB_ARCH="arm64" ;;
               *) echo "Unsupported architecture: ${MACHINE_ARCH}"; exit 1 ;;
           esac
 
@@ -242,11 +242,25 @@ jobs:
               ubuntu|debian)
                   echo "Setting up FlowGuard repository for Debian/Ubuntu..."
 
-                  # Add GPG key
-                  curl -sS https://pkg.flowguard.network/gpg.key | gpg --dearmor --yes -o /etc/apt/trusted.gpg.d/flowguard.gpg
+                  # Create a dedicated keyring directory
+                  install -d -m 0755 /etc/apt/keyrings
 
-                  # Add repository
-                  echo "deb https://pkg.flowguard.network/deb stable main" | tee /etc/apt/sources.list.d/flowguard.list
+                  # Migrate any legacy FlowGuard APT config
+                  rm -f /etc/apt/sources.list.d/flowguard.list /etc/apt/trusted.gpg.d/flowguard.gpg
+
+                  # Add GPG key
+                  curl -fsSL https://pkg.flowguard.network/gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/flowguard.gpg
+                  chmod a+r /etc/apt/keyrings/flowguard.gpg
+
+                  # Add repository using deb822 format
+                  printf '%s\n' \
+                      'Types: deb' \
+                      'URIs: https://pkg.flowguard.network/deb' \
+                      'Suites: stable' \
+                      'Components: main' \
+                      "Architectures: ${DEB_ARCH}" \
+                      'Signed-By: /etc/apt/keyrings/flowguard.gpg' \
+                      > /etc/apt/sources.list.d/flowguard.sources
 
                   # Update and install
                   apt-get update
