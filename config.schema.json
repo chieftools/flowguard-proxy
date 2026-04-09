@@ -361,7 +361,6 @@
                     "type": "string",
                     "enum": [
                         "file",
-                        "axiom",
                         "loki",
                         "openobserve"
                     ],
@@ -370,14 +369,6 @@
                 "path": {
                     "type": "string",
                     "description": "For file sink: path to the log file"
-                },
-                "token": {
-                    "type": "string",
-                    "description": "For axiom sink: Axiom API token"
-                },
-                "dataset": {
-                    "type": "string",
-                    "description": "For axiom sink: Axiom dataset name"
                 },
                 "url": {
                     "type": "string",
@@ -427,21 +418,6 @@
                     "then": {
                         "required": [
                             "path"
-                        ]
-                    }
-                },
-                {
-                    "if": {
-                        "properties": {
-                            "type": {
-                                "const": "axiom"
-                            }
-                        }
-                    },
-                    "then": {
-                        "required": [
-                            "token",
-                            "dataset"
                         ]
                     }
                 },

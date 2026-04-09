@@ -28,7 +28,7 @@ It features an (optional) [control panel](https://flowguard.network/) for easy m
 - **Hot Configuration Reload**: Automatic configuration file monitoring and reloading without restart
 
 ### Advanced Features
-- **Structured Logging**: Sink-based logging to files, Axiom, Loki, or OpenObserve with hot-reload support
+- **Structured Logging**: Sink-based logging to files, Loki, or OpenObserve with hot-reload support
 - **Efficient connection handling**: Minimal overhead with optimized middleware chain
 - **Certificate caching**: Automatic refresh for seamless rotation
 - **Network interface binding**: Support for multi-homed systems
@@ -173,7 +173,6 @@ FlowGuard provides structured logging with multiple simultaneous destinations (s
 ### Supported Sinks
 
 - **File**: Local file logging
-- **Axiom**: Axiom analytics platform
 - **Loki**: Grafana Loki with JSON flattening
 - **OpenObserve**: OpenObserve with automatic field flattening
 
@@ -186,11 +185,6 @@ FlowGuard provides structured logging with multiple simultaneous destinations (s
       "local_log": {
         "type": "file",
         "path": "/var/log/flowguard/main.log"
-      },
-      "axiom": {
-        "type": "axiom",
-        "token": "xaat-your-token",
-        "dataset": "flowguard-production"
       },
       "loki": {
         "type": "loki",
@@ -242,7 +236,7 @@ FlowGuard uses a JSON configuration file for advanced filtering rules. The confi
 - **IP Database**: Configure IP geolocation database source and refresh interval
 - **Trusted Proxies**: Configure trusted proxy networks for proper client IP detection
 - **IP Lists**: Configure in-memory IP lists for high-performance matching
-- **Logging**: Configure structured logging sinks (file, Axiom, Loki, OpenObserve)
+- **Logging**: Configure structured logging sinks (file, Loki, OpenObserve)
 
 #### JSON Schema Support
 

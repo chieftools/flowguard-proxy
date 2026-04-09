@@ -26,6 +26,7 @@ flowguard_*.rpm
 .idea
 .cache
 go.work
+.gocache
 go.work.sum
 
 # env files

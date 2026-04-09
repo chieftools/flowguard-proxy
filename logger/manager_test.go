@@ -3,6 +3,7 @@ package logger
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -273,5 +274,34 @@ func TestManagerSinkRemoval(t *testing.T) {
 
 	if manager.HasSinks() {
 		t.Error("Manager should not have sinks after removal")
+	}
+}
+
+func TestManagerRejectsUnsupportedSinkType(t *testing.T) {
+	manager := NewManager("FlowGuard/test")
+	defer manager.Close()
+
+	err := manager.UpdateSinks(map[string]map[string]interface{}{
+		"unsupported": {
+			"type": "unsupported",
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSinks returned unexpected error: %v", err)
+	}
+
+	if manager.HasSinks() {
+		t.Fatal("Manager should not create unsupported sink")
+	}
+
+	_, err = CreateSink("unsupported", map[string]interface{}{
+		"type": "unsupported",
+	}, "FlowGuard/test")
+	if err == nil {
+		t.Fatal("CreateSink should reject unsupported sink type")
+	}
+
+	if !strings.Contains(err.Error(), "unknown sink type 'unsupported'") {
+		t.Fatalf("expected unknown sink type error, got: %v", err)
 	}
 }
