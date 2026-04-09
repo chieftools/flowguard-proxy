@@ -9,6 +9,7 @@ import (
 
 	"flowguard/config"
 	"flowguard/proxy"
+	"flowguard/systemdnotify"
 	"flowguard/updater"
 
 	"github.com/spf13/cobra"
@@ -98,8 +99,26 @@ func runProxy() {
 		log.Fatalf("[FATAL] Failed to start proxy: %v", err)
 	}
 
+	if err := systemdnotify.NotifyReady("FlowGuard is running and ready for requests"); err != nil && verbose {
+		log.Printf("[systemd] Failed to notify readiness: %v", err)
+	}
+
 	log.Println("FlowGuard is running and ready for requests...")
-	<-sigChan
+
+	select {
+	case sig := <-sigChan:
+		if err := systemdnotify.NotifyStopping("Received signal: " + sig.String()); err != nil && verbose {
+			log.Printf("[systemd] Failed to notify stopping state: %v", err)
+		}
+	case err := <-proxyManager.Errors():
+		if notifyErr := systemdnotify.NotifyStopping("Proxy runtime failure: " + err.Error()); notifyErr != nil && verbose {
+			log.Printf("[systemd] Failed to notify stopping state: %v", notifyErr)
+		}
+		if shutdownErr := proxyManager.Shutdown(); shutdownErr != nil {
+			log.Printf("Shutdown error: %v", shutdownErr)
+		}
+		log.Fatalf("[FATAL] Proxy runtime failure: %v", err)
+	}
 
 	if err := proxyManager.Shutdown(); err != nil {
 		log.Printf("Shutdown error: %v", err)

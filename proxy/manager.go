@@ -34,6 +34,7 @@ type Manager struct {
 	updater         *updater.Updater
 	startedAt       time.Time
 	certManager     *certmanager.Manager
+	serveErrChan    chan error
 	stopHeartbeat   chan struct{}
 	configManager   *config.Manager
 	ipListManager   *iplist.Manager
@@ -104,6 +105,7 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 			NginxConfigPath: nginxConfigPath,
 			DefaultHostname: defaultHostname,
 		}),
+		serveErrChan:    make(chan error, max(1, len(cfg.BindAddrs)*2)),
 		stopHeartbeat:   make(chan struct{}),
 		configManager:   configMgr,
 		middlewareChain: middlewareChain,
@@ -413,8 +415,6 @@ func (p *Manager) Start() error {
 		go p.runHeartbeat()
 	}
 
-	errChan := make(chan error, len(p.config.BindAddrs)*2)
-
 	// Create servers for each bind address
 	for _, bindAddr := range p.config.BindAddrs {
 		httpRedirPort := ""
@@ -447,18 +447,12 @@ func (p *Manager) Start() error {
 		})
 		p.servers = append(p.servers, httpsServer)
 
-		// Start HTTP server
-		go func(server *Server) {
-			errChan <- server.Start(nil)
-		}(httpServer)
-
-		// Start HTTPS server
-		go func(server *Server) {
-			errChan <- server.Start(p.certManager.GetTlsConfig())
-		}(httpsServer)
-
-		// Small delay between server starts to avoid race conditions
-		time.Sleep(10 * time.Millisecond)
+		if err := httpServer.Start(nil, p.serveErrChan); err != nil {
+			return err
+		}
+		if err := httpsServer.Start(p.certManager.GetTlsConfig(), p.serveErrChan); err != nil {
+			return err
+		}
 	}
 
 	// Small delay before we setup port redirection rules
@@ -473,11 +467,15 @@ func (p *Manager) Start() error {
 	}
 
 	select {
-	case err := <-errChan:
+	case err := <-p.serveErrChan:
 		return err
 	default:
 		return nil
 	}
+}
+
+func (p *Manager) Errors() <-chan error {
+	return p.serveErrChan
 }
 
 func (p *Manager) Shutdown() error {

@@ -82,7 +82,8 @@ After=network.target network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 User=root
 Group=root
 ExecStart=/usr/bin/flowguard run --config /etc/flowguard/config.json

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"flowguard/middleware"
@@ -30,6 +31,8 @@ type ServerConfig struct {
 type Server struct {
 	config     *ServerConfig
 	httpServer *http.Server
+	listener   net.Listener
+	serveOnce  sync.Once
 }
 
 func NewServer(config *ServerConfig) *Server {
@@ -38,7 +41,7 @@ func NewServer(config *ServerConfig) *Server {
 	}
 }
 
-func (s *Server) Start(tlsConfig *tls.Config) error {
+func (s *Server) Start(tlsConfig *tls.Config, errChan chan<- error) error {
 	s.httpServer = &http.Server{
 		Addr:         fmt.Sprintf("%s:%s", maybeFormatV6Addr(s.config.bindAddr), s.config.bindPort),
 		Handler:      http.HandlerFunc(s.handleRequest),
@@ -50,17 +53,55 @@ func (s *Server) Start(tlsConfig *tls.Config) error {
 	}
 
 	log.Printf("[%s:%s] Starting %s proxy server", s.config.bindAddr, s.config.bindPort, s.config.scheme)
-	if tlsConfig == nil {
-		if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("[%s:%s] %s server failed: %w", s.config.bindAddr, s.config.bindPort, s.config.scheme, err)
-		}
-	} else {
-		if err := s.httpServer.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("[%s:%s] %s server failed: %w", s.config.bindAddr, s.config.bindPort, s.config.scheme, err)
-		}
+	listener, err := net.Listen("tcp", s.httpServer.Addr)
+	if err != nil {
+		return fmt.Errorf("[%s:%s] %s server failed: %w", s.config.bindAddr, s.config.bindPort, s.config.scheme, err)
 	}
+	s.listener = listener
+
+	go s.serve(tlsConfig, errChan)
 
 	return nil
+}
+
+func (s *Server) serve(tlsConfig *tls.Config, errChan chan<- error) {
+	listener := s.listener
+	if tlsConfig != nil {
+		listener = tls.NewListener(listener, tlsConfig)
+	}
+
+	if err := s.httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		errChan <- fmt.Errorf("[%s:%s] %s server failed: %w", s.config.bindAddr, s.config.bindPort, s.config.scheme, err)
+	}
+}
+
+func (s *Server) CloseListener() error {
+	if s.listener == nil {
+		return nil
+	}
+
+	var err error
+	s.serveOnce.Do(func() {
+		err = s.listener.Close()
+		s.listener = nil
+	})
+
+	if errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+
+	return err
+}
+
+func (s *Server) markListenerClosed() {
+	s.serveOnce.Do(func() {
+		s.listener = nil
+	})
+}
+
+func (s *Server) resetListenerState() {
+	s.listener = nil
+	s.serveOnce = sync.Once{}
 }
 
 func (s *Server) Shutdown(ctx context.Context) {
@@ -71,10 +112,20 @@ func (s *Server) Shutdown(ctx context.Context) {
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil {
 			log.Printf("[%s:%s] Error shutting down server: %v", s.config.bindAddr, s.config.bindPort, err)
+			if closeErr := s.CloseListener(); closeErr != nil {
+				log.Printf("[%s:%s] Error closing listener: %v", s.config.bindAddr, s.config.bindPort, closeErr)
+			}
 		} else {
-			s.httpServer = nil
+			s.markListenerClosed()
 			log.Printf("[%s:%s] Proxy server stopped gracefully", s.config.bindAddr, s.config.bindPort)
 		}
+		s.httpServer = nil
+		s.resetListenerState()
+	} else {
+		if err := s.CloseListener(); err != nil {
+			log.Printf("[%s:%s] Error closing listener: %v", s.config.bindAddr, s.config.bindPort, err)
+		}
+		s.resetListenerState()
 	}
 }
 
