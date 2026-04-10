@@ -262,8 +262,21 @@ jobs:
                       'Signed-By: /etc/apt/keyrings/flowguard.gpg' \
                       > /etc/apt/sources.list.d/flowguard.sources
 
-                  # Update and install
-                  apt-get update
+                  # Refresh package metadata. Unrelated third-party repos can make
+                  # "apt-get update" return non-zero even when FlowGuard fetched
+                  # successfully, so only fail if FlowGuard itself is unavailable.
+                  if ! apt-get update; then
+                      echo "apt-get update reported errors; continuing because unrelated repositories may be broken."
+                  fi
+
+                  if ! apt-cache show flowguard >/dev/null 2>&1; then
+                      echo "FlowGuard package metadata not present after general update; refreshing the FlowGuard repo only..."
+                      apt-get update \
+                          -o Dir::Etc::sourcelist='sources.list.d/flowguard.sources' \
+                          -o Dir::Etc::sourceparts='-' \
+                          -o APT::Get::List-Cleanup='0'
+                  fi
+
                   apt-get install -y flowguard
                   ;;
 
