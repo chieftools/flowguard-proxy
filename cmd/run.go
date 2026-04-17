@@ -99,11 +99,12 @@ func runProxy() {
 		log.Fatalf("[FATAL] Failed to start proxy: %v", err)
 	}
 
-	if err := systemdnotify.NotifyReady("FlowGuard is running and ready for requests"); err != nil && verbose {
+	status := proxyManager.StatusMessage()
+	if err := systemdnotify.NotifyReady(status); err != nil && verbose {
 		log.Printf("[systemd] Failed to notify readiness: %v", err)
 	}
 
-	log.Println("FlowGuard is running and ready for requests...")
+	log.Println(status)
 
 	select {
 	case sig := <-sigChan:

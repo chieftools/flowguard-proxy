@@ -19,6 +19,14 @@ type Client struct {
 	httpClient *http.Client
 }
 
+type FirewallHeartbeat struct {
+	Status           string `json:"status"`
+	LastError        string `json:"last_error,omitempty"`
+	LastCheckedAt    int64  `json:"last_checked_at,omitempty"`
+	LastRepairedAt   int64  `json:"last_repaired_at,omitempty"`
+	MissingRuleCount int    `json:"missing_rule_count,omitempty"`
+}
+
 // NewClient creates a new FlowGuard API client
 func NewClient(hostKey, userAgent string) *Client {
 	// Get base URL from environment variable, default to production
@@ -105,12 +113,13 @@ func (c *Client) GetConfig(etag string) ([]byte, error) {
 
 // HeartbeatPayload is the data sent in each heartbeat POST
 type HeartbeatPayload struct {
-	OS            string   `json:"os"`
-	Arch          string   `json:"arch"`
-	Version       string   `json:"version"`
-	StartedAt     int64    `json:"started_at"`
-	HostnameCount int      `json:"hostname_count"`
-	BindAddresses []string `json:"bind_addresses"`
+	OS            string            `json:"os"`
+	Arch          string            `json:"arch"`
+	Version       string            `json:"version"`
+	Firewall      FirewallHeartbeat `json:"firewall"`
+	StartedAt     int64             `json:"started_at"`
+	HostnameCount int               `json:"hostname_count"`
+	BindAddresses []string          `json:"bind_addresses"`
 }
 
 // SendHeartbeat POSTs the heartbeat payload to the API

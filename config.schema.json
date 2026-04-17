@@ -43,6 +43,9 @@
         "updates": {
             "$ref": "#/definitions/updates_config"
         },
+        "firewall": {
+            "$ref": "#/definitions/firewall_config"
+        },
         "ip_lists": {
             "$ref": "#/definitions/ip_lists_config"
         },
@@ -460,6 +463,26 @@
                 "allow_unattended": {
                     "type": "boolean",
                     "description": "Allow the FlowGuard control panel to trigger unattended package upgrades via WebSocket. Default: false"
+                }
+            },
+            "additionalProperties": false
+        },
+        "firewall_config": {
+            "type": "object",
+            "description": "Firewall monitoring and repair settings for FlowGuard-managed redirect rules",
+            "properties": {
+                "monitor_enabled": {
+                    "type": "boolean",
+                    "description": "Whether FlowGuard should periodically verify its redirect rules while running. Default: true when redirects are managed"
+                },
+                "auto_repair": {
+                    "type": "boolean",
+                    "description": "Whether FlowGuard should automatically re-add missing redirect rules. Default: true"
+                },
+                "check_interval_seconds": {
+                    "type": "integer",
+                    "minimum": 5,
+                    "description": "How often to verify redirect rules in seconds. Default: 30"
                 }
             },
             "additionalProperties": false

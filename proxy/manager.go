@@ -15,6 +15,7 @@ import (
 	"flowguard/config"
 	"flowguard/iplist"
 	"flowguard/middleware"
+	"flowguard/systemdnotify"
 	"flowguard/updater"
 )
 
@@ -29,17 +30,20 @@ type Config struct {
 }
 
 type Manager struct {
-	config          *Config
-	servers         []*Server
-	updater         *updater.Updater
-	startedAt       time.Time
-	certManager     *certmanager.Manager
-	serveErrChan    chan error
-	stopHeartbeat   chan struct{}
-	configManager   *config.Manager
-	ipListManager   *iplist.Manager
-	middlewareChain *middleware.Chain
-	mu              sync.RWMutex
+	config              *Config
+	servers             []*Server
+	updater             *updater.Updater
+	startedAt           time.Time
+	certManager         *certmanager.Manager
+	serveErrChan        chan error
+	stopHeartbeat       chan struct{}
+	stopFirewallMonitor chan struct{}
+	forceHeartbeat      chan struct{}
+	configManager       *config.Manager
+	ipListManager       *iplist.Manager
+	middlewareChain     *middleware.Chain
+	firewallState       api.FirewallHeartbeat
+	mu                  sync.RWMutex
 }
 
 func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
@@ -105,10 +109,12 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 			NginxConfigPath: nginxConfigPath,
 			DefaultHostname: defaultHostname,
 		}),
-		serveErrChan:    make(chan error, max(1, len(cfg.BindAddrs)*2)),
-		stopHeartbeat:   make(chan struct{}),
-		configManager:   configMgr,
-		middlewareChain: middlewareChain,
+		serveErrChan:        make(chan error, max(1, len(cfg.BindAddrs)*2)),
+		stopHeartbeat:       make(chan struct{}),
+		stopFirewallMonitor: make(chan struct{}),
+		forceHeartbeat:      make(chan struct{}, 1),
+		configManager:       configMgr,
+		middlewareChain:     middlewareChain,
 	}
 
 	// Initialize IP list manager with current config
@@ -269,6 +275,220 @@ func (p *Manager) handleUpgradeRequest(version string) {
 	}()
 }
 
+func (p *Manager) managesRedirect() bool {
+	return !p.config.NoRedirect
+}
+
+func (p *Manager) firewallMonitorSettings() (enabled bool, autoRepair bool, interval time.Duration) {
+	const defaultInterval = 30 * time.Second
+
+	if !p.managesRedirect() {
+		return false, false, defaultInterval
+	}
+
+	enabled = true
+	autoRepair = true
+	interval = defaultInterval
+
+	cfg := p.configManager.GetConfig()
+	if cfg != nil && cfg.Firewall != nil {
+		if cfg.Firewall.MonitorEnabled != nil {
+			enabled = *cfg.Firewall.MonitorEnabled
+		}
+		if cfg.Firewall.AutoRepair != nil {
+			autoRepair = *cfg.Firewall.AutoRepair
+		}
+		if cfg.Firewall.CheckIntervalSeconds > 0 {
+			interval = time.Duration(cfg.Firewall.CheckIntervalSeconds) * time.Second
+		}
+	}
+
+	if interval < 5*time.Second {
+		interval = 5 * time.Second
+	}
+
+	return enabled, autoRepair, interval
+}
+
+func (p *Manager) setInitialFirewallState(state api.FirewallHeartbeat) {
+	p.mu.Lock()
+	p.firewallState = state
+	p.mu.Unlock()
+}
+
+func (p *Manager) getFirewallState() api.FirewallHeartbeat {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.firewallState
+}
+
+func (p *Manager) updateFirewallState(next api.FirewallHeartbeat) {
+	p.mu.Lock()
+	prev := p.firewallState
+	if next.LastRepairedAt == 0 {
+		next.LastRepairedAt = prev.LastRepairedAt
+	}
+	p.firewallState = next
+	p.mu.Unlock()
+
+	if prev.Status == next.Status {
+		return
+	}
+
+	log.Printf("[firewall] State changed from %q to %q", prev.Status, next.Status)
+	if err := systemdnotify.NotifyStatus(p.statusMessageFromState(next)); err != nil && p.config.Verbose {
+		log.Printf("[systemd] Failed to update status: %v", err)
+	}
+	p.requestImmediateHeartbeat()
+}
+
+func (p *Manager) requestImmediateHeartbeat() {
+	select {
+	case p.forceHeartbeat <- struct{}{}:
+	default:
+	}
+}
+
+func (p *Manager) statusMessageFromState(state api.FirewallHeartbeat) string {
+	switch state.Status {
+	case firewallStatusDisabled:
+		return "FlowGuard running; firewall redirect management disabled"
+	case firewallStatusDegraded:
+		if state.MissingRuleCount > 0 {
+			return fmt.Sprintf("FlowGuard running; firewall degraded (%d missing redirect rules)", state.MissingRuleCount)
+		}
+		if state.LastError != "" {
+			return fmt.Sprintf("FlowGuard running; firewall degraded (%s)", state.LastError)
+		}
+		return "FlowGuard running; firewall degraded"
+	default:
+		return "FlowGuard running; firewall healthy"
+	}
+}
+
+func (p *Manager) StatusMessage() string {
+	return p.statusMessageFromState(p.getFirewallState())
+}
+
+func (p *Manager) initialFirewallState() api.FirewallHeartbeat {
+	if !p.managesRedirect() {
+		return api.FirewallHeartbeat{Status: firewallStatusDisabled}
+	}
+
+	return api.FirewallHeartbeat{
+		Status:        firewallStatusHealthy,
+		LastCheckedAt: time.Now().Unix(),
+	}
+}
+
+func (p *Manager) setupPortRedirects() error {
+	if !p.managesRedirect() {
+		return nil
+	}
+
+	for _, server := range p.servers {
+		if err := server.SetupPortRedirect(); err != nil {
+			return fmt.Errorf("failed to setup port redirection for %s:%s: %w", server.config.bindAddr, server.config.bindPort, err)
+		}
+	}
+
+	return nil
+}
+
+func (p *Manager) evaluateFirewall(autoRepair bool) api.FirewallHeartbeat {
+	state := api.FirewallHeartbeat{
+		Status:        firewallStatusHealthy,
+		LastCheckedAt: time.Now().Unix(),
+	}
+
+	if !p.managesRedirect() {
+		state.Status = firewallStatusDisabled
+		return state
+	}
+
+	totalMissing := 0
+	lastError := ""
+	repairError := ""
+	repairedAt := int64(0)
+
+	checkServers := func(repair bool) {
+		for _, server := range p.servers {
+			missing, err := server.CheckPortRedirect()
+			if err != nil {
+				lastError = err.Error()
+				if totalMissing == 0 {
+					totalMissing = 1
+				}
+				continue
+			}
+
+			totalMissing += len(missing)
+			if len(missing) == 0 || !repair {
+				continue
+			}
+
+			log.Printf("[firewall] Detected %d missing redirect rule(s) for %s:%s, attempting repair", len(missing), server.config.bindAddr, server.config.bindPort)
+			if err := server.RepairPortRedirect(missing); err != nil {
+				lastError = err.Error()
+				repairError = lastError
+				continue
+			}
+
+			repairedAt = time.Now().Unix()
+		}
+	}
+
+	checkServers(autoRepair)
+
+	if autoRepair && totalMissing > 0 {
+		totalMissing = 0
+		lastError = ""
+		checkServers(false)
+		if lastError == "" {
+			lastError = repairError
+		}
+	}
+
+	state.MissingRuleCount = totalMissing
+	state.LastError = lastError
+	state.LastRepairedAt = repairedAt
+
+	if totalMissing > 0 || lastError != "" {
+		state.Status = firewallStatusDegraded
+	}
+
+	return state
+}
+
+func (p *Manager) runFirewallMonitor() {
+	log.Println("[firewall] Monitor started")
+
+	for {
+		enabled, autoRepair, interval := p.firewallMonitorSettings()
+		if !enabled {
+			timer := time.NewTimer(interval)
+			select {
+			case <-p.stopFirewallMonitor:
+				timer.Stop()
+				log.Println("[firewall] Monitor stopped")
+				return
+			case <-timer.C:
+				continue
+			}
+		}
+
+		timer := time.NewTimer(interval)
+		select {
+		case <-p.stopFirewallMonitor:
+			timer.Stop()
+			log.Println("[firewall] Monitor stopped")
+			return
+		case <-timer.C:
+			p.updateFirewallState(p.evaluateFirewall(autoRepair))
+		}
+	}
+}
+
 func (p *Manager) runHeartbeat() {
 	// Read heartbeat config defaults
 	const defaultInterval = 300 // 5 minutes
@@ -309,6 +529,9 @@ func (p *Manager) runHeartbeat() {
 			case <-p.stopHeartbeat:
 				timer.Stop()
 				return
+			case <-p.forceHeartbeat:
+				timer.Stop()
+				continue
 			case <-timer.C:
 				enabled, _, _ = getConfig()
 				if enabled {
@@ -339,6 +562,9 @@ func (p *Manager) runHeartbeat() {
 				timer.Stop()
 				log.Println("[heartbeat] Stopped")
 				return
+			case <-p.forceHeartbeat:
+				timer.Stop()
+				continue
 			case <-timer.C:
 				continue
 			}
@@ -359,6 +585,9 @@ func (p *Manager) runHeartbeat() {
 			timer.Stop()
 			log.Println("[heartbeat] Stopped")
 			return
+		case <-p.forceHeartbeat:
+			timer.Stop()
+			p.sendHeartbeat()
 		case <-timer.C:
 			p.sendHeartbeat()
 		}
@@ -370,6 +599,7 @@ func (p *Manager) sendHeartbeat() {
 		OS:            runtime.GOOS,
 		Arch:          runtime.GOARCH,
 		Version:       p.config.Version,
+		Firewall:      p.getFirewallState(),
 		StartedAt:     p.startedAt.Unix(),
 		HostnameCount: p.certManager.HostnameCount(),
 		BindAddresses: p.config.BindAddrs,
@@ -408,12 +638,6 @@ func (p *Manager) Start() error {
 			}
 		}
 	}()
-
-	// Start heartbeat if running in managed mode
-	cfg := p.configManager.GetConfig()
-	if cfg.Host != nil && cfg.Host.Key != "" {
-		go p.runHeartbeat()
-	}
 
 	// Create servers for each bind address
 	for _, bindAddr := range p.config.BindAddrs {
@@ -458,12 +682,19 @@ func (p *Manager) Start() error {
 	// Small delay before we setup port redirection rules
 	time.Sleep(100 * time.Millisecond)
 
-	for _, server := range p.servers {
-		err := server.SetupPortRedirect()
-		if err != nil {
-			server.CleanupPortRedirect()
-			log.Printf("Warning: Failed to setup port redirection for %s:%s: %v", server.config.bindAddr, server.config.bindPort, err)
-		}
+	if err := p.setupPortRedirects(); err != nil {
+		return err
+	}
+
+	p.setInitialFirewallState(p.initialFirewallState())
+
+	cfg := p.configManager.GetConfig()
+	if cfg.Host != nil && cfg.Host.Key != "" {
+		go p.runHeartbeat()
+	}
+
+	if p.managesRedirect() {
+		go p.runFirewallMonitor()
 	}
 
 	select {
@@ -488,6 +719,7 @@ func (p *Manager) Shutdown() error {
 
 	// Stop the heartbeat goroutine
 	close(p.stopHeartbeat)
+	close(p.stopFirewallMonitor)
 
 	// Stop the configuration manager
 	p.configManager.Stop()

@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -29,15 +28,19 @@ type ServerConfig struct {
 }
 
 type Server struct {
-	config     *ServerConfig
-	httpServer *http.Server
-	listener   net.Listener
-	serveOnce  sync.Once
+	config          *ServerConfig
+	httpServer      *http.Server
+	listener        net.Listener
+	serveOnce       sync.Once
+	runner          firewallRunner
+	interfaceLookup func(string) (string, error)
 }
 
 func NewServer(config *ServerConfig) *Server {
 	return &Server{
-		config: config,
+		config:          config,
+		runner:          execFirewallRunner{},
+		interfaceLookup: getInterfaceForIP,
 	}
 }
 
@@ -126,106 +129,6 @@ func (s *Server) Shutdown(ctx context.Context) {
 			log.Printf("[%s:%s] Error closing listener: %v", s.config.bindAddr, s.config.bindPort, err)
 		}
 		s.resetListenerState()
-	}
-}
-
-func (s *Server) SetupPortRedirect() error {
-	// If no redirection port is set we can skip the setup
-	if s.config.redirPort == "" {
-		return nil
-	}
-
-	// Clean up any existing rules first (in case of previous crash)
-	s.CleanupPortRedirect()
-
-	// Detect the interface for this IP
-	iface, err := getInterfaceForIP(s.config.bindAddr)
-	if err != nil {
-		log.Printf("Warning: Could not detect interface for IP %s: %v", s.config.bindAddr, err)
-		return err
-	}
-
-	// Determine if this is IPv6
-	parsedIP := net.ParseIP(s.config.bindAddr)
-	isIPv6 := parsedIP != nil && parsedIP.To4() == nil
-
-	// Choose the correct iptables command
-	iptablesCmd := "iptables"
-	if isIPv6 {
-		iptablesCmd = "ip6tables"
-	}
-
-	commands := [][]string{
-		// INPUT rule to allow traffic to the redirection port
-		{iptablesCmd, "-I", "INPUT", "-d", s.config.bindAddr, "-p", "tcp", "--dport", s.config.bindPort, "-j", "ACCEPT", "-m", "comment", "--comment", "FlowGuard"},
-		// PREROUTING rule for external traffic - use DNAT for explicit destination
-		{iptablesCmd, "-t", "nat", "-A", "PREROUTING", "-i", iface, "-d", s.config.bindAddr, "-p", "tcp", "--dport", s.config.redirPort, "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", maybeFormatV6Addr(s.config.bindAddr), s.config.bindPort), "-m", "comment", "--comment", "FlowGuard"},
-	}
-
-	// Execute all commands
-	for _, cmd := range commands {
-		err = exec.Command(cmd[0], cmd[1:]...).Run()
-		if err != nil {
-			s.CleanupPortRedirect()
-			return fmt.Errorf("failed to setup %s rules for %s:%s: %w", iptablesCmd, s.config.bindAddr, s.config.bindPort, err)
-		}
-	}
-
-	log.Printf("[%s] redirection setup complete for %s:%s on interface %s", iptablesCmd, s.config.bindAddr, s.config.bindPort, iface)
-	return nil
-}
-
-func (s *Server) CleanupPortRedirect() {
-	// If no redirection port was set we can skip the cleanup
-	if s.config.redirPort == "" {
-		return
-	}
-
-	// Detect the interface for this IP
-	iface, err := getInterfaceForIP(s.config.bindAddr)
-	if err != nil {
-		log.Printf("Warning: Could not detect interface for IP %s: %v", s.config.bindAddr, err)
-		return
-	}
-
-	// Determine if this is IPv6
-	parsedIP := net.ParseIP(s.config.bindAddr)
-	isIPv6 := parsedIP != nil && parsedIP.To4() == nil
-
-	// Choose the correct iptables command
-	iptablesCmd := "iptables"
-	if isIPv6 {
-		iptablesCmd = "ip6tables"
-	}
-
-	commands := [][]string{
-		// Remove PREROUTING rule
-		{iptablesCmd, "-t", "nat", "-D", "PREROUTING", "-i", iface, "-d", s.config.bindAddr, "-p", "tcp", "--dport", s.config.redirPort, "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", maybeFormatV6Addr(s.config.bindAddr), s.config.bindPort), "-m", "comment", "--comment", "FlowGuard"},
-		// Remove INPUT rule
-		{iptablesCmd, "-D", "INPUT", "-d", s.config.bindAddr, "-p", "tcp", "--dport", s.config.bindPort, "-j", "ACCEPT", "-m", "comment", "--comment", "FlowGuard"},
-	}
-
-	// Remove all instances of each rule (loop until deletion fails)
-	totalRemoved := 0
-	for _, cmd := range commands {
-		removed := 0
-		// Keep removing until we get an error (rule doesn't exist)
-		for {
-			err = exec.Command(cmd[0], cmd[1:]...).Run()
-			if err != nil {
-				// Rule doesn't exist anymore, move to next rule
-				break
-			}
-			removed++
-			totalRemoved++
-		}
-		if s.config.verbose && removed > 0 {
-			log.Printf("[%s] removed %d instance(s) of rule: %v", iptablesCmd, removed, cmd[1:])
-		}
-	}
-
-	if totalRemoved > 0 {
-		log.Printf("[%s] redirection cleanup complete for %s:%s (%d rules removed)", iptablesCmd, s.config.bindAddr, s.config.bindPort, totalRemoved)
 	}
 }
 

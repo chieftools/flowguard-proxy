@@ -31,6 +31,7 @@ type Config struct {
 	Logging        *LoggingConfig         `json:"logging,omitempty"`
 	IPLists        *IPListsConfig         `json:"ip_lists,omitempty"`
 	Updates        *UpdatesConfig         `json:"updates,omitempty"`
+	Firewall       *FirewallConfig        `json:"firewall,omitempty"`
 	Realtime       *pusher.Config         `json:"realtime,omitempty"`
 	Heartbeat      *HeartbeatConfig       `json:"heartbeat,omitempty"`
 	IPDatabase     *IPDatabaseConfig      `json:"ip_database,omitempty"`
@@ -55,6 +56,12 @@ type LoggingConfig struct {
 
 type UpdatesConfig struct {
 	AllowUnattended bool `json:"allow_unattended"`
+}
+
+type FirewallConfig struct {
+	MonitorEnabled       *bool `json:"monitor_enabled,omitempty"`
+	AutoRepair           *bool `json:"auto_repair,omitempty"`
+	CheckIntervalSeconds int   `json:"check_interval_seconds,omitempty"`
 }
 
 type HeartbeatConfig struct {
