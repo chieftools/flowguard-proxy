@@ -11,6 +11,13 @@ import (
 	"flowguard/config"
 )
 
+func newConditionTestRequest(path string) *http.Request {
+	req := httptest.NewRequest("GET", "https://example.com"+path, nil)
+	req.Host = "example.com"
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	return req
+}
+
 // Mock ConfigProvider for testing
 type MockConfigProvider struct {
 	rules   map[string]*config.Rule
@@ -647,6 +654,111 @@ func TestRegexMatcher(t *testing.T) {
 			result := rm.matchesStringValue(tt.value, &match)
 			if result != tt.expected {
 				t.Errorf("Expected %v, got %v", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestMatchesConditions_MixedANDRequiresAllDirectChildren(t *testing.T) {
+	rm := &RulesMiddleware{}
+	req := newConditionTestRequest("/admin/dashboard")
+
+	conditions := &config.RuleConditions{
+		Operator: "AND",
+		Matches: []config.MatchCondition{
+			{
+				Type:  "path",
+				Match: "starts-with",
+				Value: "/admin",
+			},
+			{
+				Type:  "user-agent",
+				Match: "contains",
+				Value: "bot",
+			},
+		},
+		Groups: []config.RuleConditions{
+			{
+				Matches: []config.MatchCondition{
+					{
+						Type:  "domain",
+						Match: "equals",
+						Value: "example.com",
+					},
+				},
+			},
+		},
+	}
+
+	if rm.matchesConditions(req, conditions) {
+		t.Fatal("expected mixed AND group to fail when one direct match fails")
+	}
+}
+
+func TestMatchesConditions_MixedORAllowsMatchOrGroup(t *testing.T) {
+	rm := &RulesMiddleware{}
+
+	tests := []struct {
+		name       string
+		path       string
+		userAgent  string
+		host       string
+		shouldPass bool
+	}{
+		{
+			name:       "direct match succeeds",
+			path:       "/api/test",
+			userAgent:  "Mozilla/5.0",
+			host:       "other.example",
+			shouldPass: true,
+		},
+		{
+			name:       "nested group succeeds",
+			path:       "/other",
+			userAgent:  "Mozilla/5.0",
+			host:       "example.com",
+			shouldPass: true,
+		},
+		{
+			name:       "neither succeeds",
+			path:       "/other",
+			userAgent:  "Mozilla/5.0",
+			host:       "other.example",
+			shouldPass: false,
+		},
+	}
+
+	conditions := &config.RuleConditions{
+		Operator: "OR",
+		Matches: []config.MatchCondition{
+			{
+				Type:  "path",
+				Match: "starts-with",
+				Value: "/api",
+			},
+		},
+		Groups: []config.RuleConditions{
+			{
+				Matches: []config.MatchCondition{
+					{
+						Type:  "domain",
+						Match: "equals",
+						Value: "example.com",
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := newConditionTestRequest(tt.path)
+			req.Host = tt.host
+			req.Header.Set("User-Agent", tt.userAgent)
+
+			result := rm.matchesConditions(req, conditions)
+			if result != tt.shouldPass {
+				t.Fatalf("expected %v, got %v", tt.shouldPass, result)
 			}
 		})
 	}

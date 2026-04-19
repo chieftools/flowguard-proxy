@@ -147,62 +147,43 @@ func (rm *RulesMiddleware) matchesConditions(r *http.Request, conditions *config
 		operator = "AND"
 	}
 
-	// Handle leaf conditions (matches only)
-	if len(conditions.Matches) > 0 && len(conditions.Groups) == 0 {
-		return rm.evaluateMatches(r, operator, conditions.Matches)
+	hasMatches := len(conditions.Matches) > 0
+	hasGroups := len(conditions.Groups) > 0
+	if !hasMatches && !hasGroups {
+		return false
 	}
 
-	// Handle group conditions (groups only)
-	if len(conditions.Matches) == 0 && len(conditions.Groups) > 0 {
-		switch operator {
-		case "OR":
-			for _, group := range conditions.Groups {
-				if rm.matchesConditions(r, &group) {
+	switch operator {
+	case "OR":
+		if hasMatches {
+			for i := range conditions.Matches {
+				if rm.evaluateMatch(r, &conditions.Matches[i]) {
 					return true
 				}
 			}
-			return false
-		default:
-			// Default to AND for unknown operators
-			for _, group := range conditions.Groups {
-				if !rm.matchesConditions(r, &group) {
-					return false
-				}
-			}
-			return true
 		}
-	}
-
-	// Handle mixed conditions (both matches and groups)
-	if len(conditions.Matches) > 0 && len(conditions.Groups) > 0 {
-		matchesResult := rm.evaluateMatches(r, "OR", conditions.Matches)
-
-		switch operator {
-		case "OR":
-			if matchesResult {
+		for _, group := range conditions.Groups {
+			if rm.matchesConditions(r, &group) {
 				return true
 			}
-			for _, group := range conditions.Groups {
-				if rm.matchesConditions(r, &group) {
-					return true
-				}
-			}
-			return false
-		default:
-			// Default to AND
-			if !matchesResult {
-				return false
-			}
-			for _, group := range conditions.Groups {
-				if !rm.matchesConditions(r, &group) {
+		}
+		return false
+	default:
+		// Default to AND for unknown operators
+		if hasMatches {
+			for i := range conditions.Matches {
+				if !rm.evaluateMatch(r, &conditions.Matches[i]) {
 					return false
 				}
 			}
-			return true
 		}
+		for _, group := range conditions.Groups {
+			if !rm.matchesConditions(r, &group) {
+				return false
+			}
+		}
+		return true
 	}
-
-	return false
 }
 
 // evaluateMatches evaluates a list of matches with the specified operator
