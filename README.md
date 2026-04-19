@@ -327,7 +327,8 @@ Example configuration structure:
 
 Rules support complex conditions with logical operators:
 
-- **Operators**: `AND`, `OR`, `NOT`
+- **Operators**: `AND`, `OR`, `NAND`, `NOR`
+- Unsupported operator values are rejected when the configuration is loaded.
 - **Match Types**:
   - `path`: URL path matching
   - `domain`: Host header matching

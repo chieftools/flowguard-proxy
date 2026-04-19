@@ -141,11 +141,7 @@ func (rm *RulesMiddleware) matchesRule(r *http.Request, rule *config.Rule) bool 
 
 // matchesConditions evaluates conditions recursively
 func (rm *RulesMiddleware) matchesConditions(r *http.Request, conditions *config.RuleConditions) bool {
-	// Determine the operator, defaulting to AND
-	operator := conditions.Operator
-	if operator == "" {
-		operator = "AND"
-	}
+	operator := normalizeConditionOperator(conditions.Operator)
 
 	hasMatches := len(conditions.Matches) > 0
 	hasGroups := len(conditions.Groups) > 0
@@ -153,37 +149,59 @@ func (rm *RulesMiddleware) matchesConditions(r *http.Request, conditions *config
 		return false
 	}
 
-	switch operator {
+	baseOperator := operator
+	if operator == "NAND" {
+		baseOperator = "AND"
+	} else if operator == "NOR" {
+		baseOperator = "OR"
+	}
+
+	var result bool
+	switch baseOperator {
 	case "OR":
 		if hasMatches {
 			for i := range conditions.Matches {
 				if rm.evaluateMatch(r, &conditions.Matches[i]) {
-					return true
+					result = true
+					break
 				}
 			}
 		}
-		for _, group := range conditions.Groups {
-			if rm.matchesConditions(r, &group) {
-				return true
+		if !result {
+			for _, group := range conditions.Groups {
+				if rm.matchesConditions(r, &group) {
+					result = true
+					break
+				}
 			}
 		}
-		return false
-	default:
-		// Default to AND for unknown operators
+	case "AND":
+		result = true
 		if hasMatches {
 			for i := range conditions.Matches {
 				if !rm.evaluateMatch(r, &conditions.Matches[i]) {
-					return false
+					result = false
+					break
 				}
 			}
 		}
-		for _, group := range conditions.Groups {
-			if !rm.matchesConditions(r, &group) {
-				return false
+		if result {
+			for _, group := range conditions.Groups {
+				if !rm.matchesConditions(r, &group) {
+					result = false
+					break
+				}
 			}
 		}
-		return true
+	default:
+		return false
 	}
+
+	if operator == "NAND" || operator == "NOR" {
+		return !result
+	}
+
+	return result
 }
 
 // evaluateMatches evaluates a list of matches with the specified operator
@@ -209,6 +227,14 @@ func (rm *RulesMiddleware) evaluateMatches(r *http.Request, operator string, mat
 		}
 		return true
 	}
+}
+
+func normalizeConditionOperator(operator string) string {
+	operator = strings.TrimSpace(operator)
+	if operator == "" {
+		return "AND"
+	}
+	return operator
 }
 
 // evaluateMatch evaluates a single match condition

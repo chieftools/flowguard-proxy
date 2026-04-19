@@ -137,7 +137,9 @@
                     "type": "string",
                     "enum": [
                         "AND",
-                        "OR"
+                        "OR",
+                        "NAND",
+                        "NOR"
                     ],
                     "description": "Logical operator for combining conditions (default: AND)"
                 },

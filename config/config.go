@@ -109,7 +109,7 @@ type RuleAction struct {
 }
 
 type RuleConditions struct {
-	Operator string           `json:"operator,omitempty"` // AND, OR, NOT
+	Operator string           `json:"operator,omitempty"` // AND, OR, NAND, NOR
 	Groups   []RuleConditions `json:"groups,omitempty"`
 	Matches  []MatchCondition `json:"matches,omitempty"`
 	Comment  string           `json:"comment,omitempty"`
@@ -256,6 +256,9 @@ func (m *Manager) Load() error {
 			rule.ID = id
 
 			if rule.Conditions != nil {
+				if err := validateConditionOperators(rule.ID, rule.Conditions, "conditions"); err != nil {
+					return err
+				}
 				m.compileConditionRegex(rule.Conditions)
 			}
 		}
@@ -1131,6 +1134,34 @@ func (m *Manager) compileConditionRegex(cond *RuleConditions) {
 	for i := range cond.Groups {
 		m.compileConditionRegex(&cond.Groups[i])
 	}
+}
+
+func validateConditionOperators(ruleID string, cond *RuleConditions, path string) error {
+	if cond == nil {
+		return nil
+	}
+
+	operator := normalizeConditionOperator(cond.Operator)
+	if operator != "" && !isSupportedConditionOperator(operator) {
+		return fmt.Errorf("invalid operator %q in rule %q at %s", cond.Operator, ruleID, path)
+	}
+
+	for i := range cond.Groups {
+		groupPath := fmt.Sprintf("%s.groups[%d]", path, i)
+		if err := validateConditionOperators(ruleID, &cond.Groups[i], groupPath); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func normalizeConditionOperator(operator string) string {
+	return strings.TrimSpace(operator)
+}
+
+func isSupportedConditionOperator(operator string) bool {
+	return operator == "" || operator == "AND" || operator == "OR" || operator == "NAND" || operator == "NOR"
 }
 
 // GetCompiledRegex returns the compiled regex for a MatchCondition

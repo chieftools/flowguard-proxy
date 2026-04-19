@@ -763,3 +763,227 @@ func TestMatchesConditions_MixedORAllowsMatchOrGroup(t *testing.T) {
 		})
 	}
 }
+
+func TestMatchesConditions_DefaultOperatorIsAND(t *testing.T) {
+	rm := &RulesMiddleware{}
+	req := newConditionTestRequest("/admin/dashboard")
+
+	conditions := &config.RuleConditions{
+		Matches: []config.MatchCondition{
+			{
+				Type:  "path",
+				Match: "starts-with",
+				Value: "/admin",
+			},
+			{
+				Type:  "user-agent",
+				Match: "contains",
+				Value: "bot",
+			},
+		},
+	}
+
+	if rm.matchesConditions(req, conditions) {
+		t.Fatal("expected missing operator to default to AND")
+	}
+}
+
+func TestMatchesConditions_NANDAndNOR(t *testing.T) {
+	rm := &RulesMiddleware{}
+
+	tests := []struct {
+		name       string
+		operator   string
+		path       string
+		host       string
+		shouldPass bool
+	}{
+		{
+			name:       "NAND fails when all direct children match",
+			operator:   "NAND",
+			path:       "/admin/panel",
+			host:       "example.com",
+			shouldPass: false,
+		},
+		{
+			name:       "NAND passes when one direct child fails",
+			operator:   "NAND",
+			path:       "/public",
+			host:       "example.com",
+			shouldPass: true,
+		},
+		{
+			name:       "NOR fails when any direct child matches",
+			operator:   "NOR",
+			path:       "/admin/panel",
+			host:       "other.example",
+			shouldPass: false,
+		},
+		{
+			name:       "NOR passes when no direct children match",
+			operator:   "NOR",
+			path:       "/public",
+			host:       "other.example",
+			shouldPass: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := newConditionTestRequest(tt.path)
+			req.Host = tt.host
+
+			conditions := &config.RuleConditions{
+				Operator: tt.operator,
+				Matches: []config.MatchCondition{
+					{
+						Type:  "path",
+						Match: "starts-with",
+						Value: "/admin",
+					},
+				},
+				Groups: []config.RuleConditions{
+					{
+						Matches: []config.MatchCondition{
+							{
+								Type:  "domain",
+								Match: "equals",
+								Value: "example.com",
+							},
+						},
+					},
+				},
+			}
+
+			result := rm.matchesConditions(req, conditions)
+			if result != tt.shouldPass {
+				t.Fatalf("expected %v, got %v", tt.shouldPass, result)
+			}
+		})
+	}
+}
+
+func TestMatchesConditions_EmptyNegatedGroupDoesNotMatch(t *testing.T) {
+	rm := &RulesMiddleware{}
+	req := newConditionTestRequest("/anything")
+
+	for _, operator := range []string{"NAND", "NOR"} {
+		t.Run(operator, func(t *testing.T) {
+			conditions := &config.RuleConditions{
+				Operator: operator,
+			}
+
+			if rm.matchesConditions(req, conditions) {
+				t.Fatalf("expected empty %s group to remain non-matching", operator)
+			}
+		})
+	}
+}
+
+func TestMatchesConditions_NestedNANDAndNOR(t *testing.T) {
+	rm := &RulesMiddleware{}
+
+	tests := []struct {
+		name       string
+		path       string
+		host       string
+		shouldPass bool
+	}{
+		{
+			name:       "nested NAND causes parent AND to fail",
+			path:       "/admin/panel",
+			host:       "example.com",
+			shouldPass: false,
+		},
+		{
+			name:       "nested NAND passes when one child fails",
+			path:       "/admin/panel",
+			host:       "other.example",
+			shouldPass: true,
+		},
+		{
+			name:       "nested NOR fails when child matches",
+			path:       "/public",
+			host:       "example.com",
+			shouldPass: false,
+		},
+		{
+			name:       "nested NOR passes when no children match",
+			path:       "/public",
+			host:       "other.example",
+			shouldPass: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := newConditionTestRequest(tt.path)
+			req.Host = tt.host
+
+			conditions := &config.RuleConditions{
+				Operator: "OR",
+				Groups: []config.RuleConditions{
+					{
+						Operator: "AND",
+						Matches: []config.MatchCondition{
+							{
+								Type:  "path",
+								Match: "starts-with",
+								Value: "/admin",
+							},
+						},
+						Groups: []config.RuleConditions{
+							{
+								Operator: "NAND",
+								Matches: []config.MatchCondition{
+									{
+										Type:  "domain",
+										Match: "equals",
+										Value: "example.com",
+									},
+								},
+								Groups: []config.RuleConditions{
+									{
+										Matches: []config.MatchCondition{
+											{
+												Type:  "path",
+												Match: "contains",
+												Value: "/panel",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+					{
+						Operator: "NOR",
+						Matches: []config.MatchCondition{
+							{
+								Type:  "domain",
+								Match: "equals",
+								Value: "example.com",
+							},
+						},
+						Groups: []config.RuleConditions{
+							{
+								Matches: []config.MatchCondition{
+									{
+										Type:  "path",
+										Match: "starts-with",
+										Value: "/admin",
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			result := rm.matchesConditions(req, conditions)
+			if result != tt.shouldPass {
+				t.Fatalf("expected %v, got %v", tt.shouldPass, result)
+			}
+		})
+	}
+}
