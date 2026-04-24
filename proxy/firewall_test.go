@@ -78,8 +78,12 @@ func normalizeFirewallCommand(name string, args []string) string {
 }
 
 func newTestServer(bindAddr string, redirPort string, runner *fakeFirewallRunner) *Server {
+	return newTestServerWithScheme("http", bindAddr, redirPort, runner)
+}
+
+func newTestServerWithScheme(scheme string, bindAddr string, redirPort string, runner *fakeFirewallRunner) *Server {
 	server := NewServer(&ServerConfig{
-		scheme:    "http",
+		scheme:    scheme,
 		verbose:   true,
 		bindAddr:  bindAddr,
 		bindPort:  "11080",
@@ -160,6 +164,68 @@ func TestServerFirewallRulesBuildConsistently(t *testing.T) {
 				t.Fatalf("unexpected DNAT args: %#v", dnatArgs)
 			}
 		})
+	}
+}
+
+func TestServerFirewallRulesIncludeUDPForHTTPS(t *testing.T) {
+	server := newTestServerWithScheme("https", "203.0.113.10", "443", newFakeFirewallRunner())
+
+	rules, iface, err := server.firewallRules()
+	if err != nil {
+		t.Fatalf("firewallRules: %v", err)
+	}
+	if iface != "eth0" {
+		t.Fatalf("unexpected iface: %s", iface)
+	}
+	if len(rules) != 4 {
+		t.Fatalf("expected 4 rules, got %d", len(rules))
+	}
+
+	expected := [][]string{
+		{
+			"-I", "INPUT",
+			"-d", "203.0.113.10",
+			"-p", "tcp",
+			"--dport", "11080",
+			"-j", "ACCEPT",
+			"-m", "comment", "--comment", "FlowGuard",
+		},
+		{
+			"-t", "nat",
+			"-A", "PREROUTING",
+			"-i", "eth0",
+			"-d", "203.0.113.10",
+			"-p", "tcp",
+			"--dport", "443",
+			"-j", "DNAT",
+			"--to-destination", "203.0.113.10:11080",
+			"-m", "comment", "--comment", "FlowGuard",
+		},
+		{
+			"-I", "INPUT",
+			"-d", "203.0.113.10",
+			"-p", "udp",
+			"--dport", "11080",
+			"-j", "ACCEPT",
+			"-m", "comment", "--comment", "FlowGuard",
+		},
+		{
+			"-t", "nat",
+			"-A", "PREROUTING",
+			"-i", "eth0",
+			"-d", "203.0.113.10",
+			"-p", "udp",
+			"--dport", "443",
+			"-j", "DNAT",
+			"--to-destination", "203.0.113.10:11080",
+			"-m", "comment", "--comment", "FlowGuard",
+		},
+	}
+
+	for i, rule := range rules {
+		if !reflect.DeepEqual(rule.commandArgs(rule.setupVerb), expected[i]) {
+			t.Fatalf("unexpected rule %d args: %#v", i, rule.commandArgs(rule.setupVerb))
+		}
 	}
 }
 

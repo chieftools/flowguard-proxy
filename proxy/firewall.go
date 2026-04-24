@@ -56,35 +56,45 @@ func (s *Server) firewallRules() ([]firewallRuleSpec, string, error) {
 		iptablesCmd = "ip6tables"
 	}
 
-	return []firewallRuleSpec{
-		{
-			command:   iptablesCmd,
-			setupVerb: "-I",
-			chain:     "INPUT",
-			args: []string{
-				"-d", s.config.bindAddr,
-				"-p", "tcp",
-				"--dport", s.config.bindPort,
-				"-j", "ACCEPT",
-				"-m", "comment", "--comment", "FlowGuard",
+	protocols := []string{"tcp"}
+	if s.config.scheme == "https" {
+		protocols = append(protocols, "udp")
+	}
+
+	rules := make([]firewallRuleSpec, 0, len(protocols)*2)
+	for _, protocol := range protocols {
+		rules = append(rules,
+			firewallRuleSpec{
+				command:   iptablesCmd,
+				setupVerb: "-I",
+				chain:     "INPUT",
+				args: []string{
+					"-d", s.config.bindAddr,
+					"-p", protocol,
+					"--dport", s.config.bindPort,
+					"-j", "ACCEPT",
+					"-m", "comment", "--comment", "FlowGuard",
+				},
 			},
-		},
-		{
-			command:   iptablesCmd,
-			table:     "nat",
-			setupVerb: "-A",
-			chain:     "PREROUTING",
-			args: []string{
-				"-i", iface,
-				"-d", s.config.bindAddr,
-				"-p", "tcp",
-				"--dport", s.config.redirPort,
-				"-j", "DNAT",
-				"--to-destination", fmt.Sprintf("%s:%s", maybeFormatV6Addr(s.config.bindAddr), s.config.bindPort),
-				"-m", "comment", "--comment", "FlowGuard",
+			firewallRuleSpec{
+				command:   iptablesCmd,
+				table:     "nat",
+				setupVerb: "-A",
+				chain:     "PREROUTING",
+				args: []string{
+					"-i", iface,
+					"-d", s.config.bindAddr,
+					"-p", protocol,
+					"--dport", s.config.redirPort,
+					"-j", "DNAT",
+					"--to-destination", fmt.Sprintf("%s:%s", maybeFormatV6Addr(s.config.bindAddr), s.config.bindPort),
+					"-m", "comment", "--comment", "FlowGuard",
+				},
 			},
-		},
-	}, iface, nil
+		)
+	}
+
+	return rules, iface, nil
 }
 
 func (s *Server) managesRedirect() bool {

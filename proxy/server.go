@@ -16,6 +16,9 @@ import (
 	"time"
 
 	"flowguard/middleware"
+
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 )
 
 type ServerConfig struct {
@@ -30,8 +33,11 @@ type ServerConfig struct {
 type Server struct {
 	config          *ServerConfig
 	httpServer      *http.Server
+	http3Server     *http3.Server
 	listener        net.Listener
-	serveOnce       sync.Once
+	udpConn         net.PacketConn
+	listenerOnce    sync.Once
+	udpOnce         sync.Once
 	runner          firewallRunner
 	interfaceLookup func(string) (string, error)
 }
@@ -45,8 +51,9 @@ func NewServer(config *ServerConfig) *Server {
 }
 
 func (s *Server) Start(tlsConfig *tls.Config, errChan chan<- error) error {
+	addr := fmt.Sprintf("%s:%s", maybeFormatV6Addr(s.config.bindAddr), s.config.bindPort)
 	s.httpServer = &http.Server{
-		Addr:         fmt.Sprintf("%s:%s", maybeFormatV6Addr(s.config.bindAddr), s.config.bindPort),
+		Addr:         addr,
 		Handler:      http.HandlerFunc(s.handleRequest),
 		ErrorLog:     newFilteredLogger(s.config.verbose),
 		TLSConfig:    tlsConfig,
@@ -56,11 +63,33 @@ func (s *Server) Start(tlsConfig *tls.Config, errChan chan<- error) error {
 	}
 
 	log.Printf("[%s:%s] Starting %s proxy server", s.config.bindAddr, s.config.bindPort, s.config.scheme)
-	listener, err := net.Listen("tcp", s.httpServer.Addr)
+	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("[%s:%s] %s server failed: %w", s.config.bindAddr, s.config.bindPort, s.config.scheme, err)
 	}
 	s.listener = listener
+
+	if tlsConfig != nil {
+		udpConn, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			if closeErr := s.CloseListener(); closeErr != nil {
+				log.Printf("[%s:%s] Error closing listener after HTTP/3 bind failure: %v", s.config.bindAddr, s.config.bindPort, closeErr)
+			}
+			s.resetListenerState()
+			return fmt.Errorf("[%s:%s] http/3 server failed: %w", s.config.bindAddr, s.config.bindPort, err)
+		}
+
+		s.udpConn = udpConn
+		s.http3Server = &http3.Server{
+			Addr:        addr,
+			TLSConfig:   http3.ConfigureTLSConfig(tlsConfig),
+			QUICConfig:  &quic.Config{},
+			Handler:     http.HandlerFunc(s.handleRequest),
+			IdleTimeout: 900 * time.Second,
+		}
+
+		go s.serveHTTP3(s.http3Server, s.udpConn, errChan)
+	}
 
 	go s.serve(tlsConfig, errChan)
 
@@ -78,39 +107,65 @@ func (s *Server) serve(tlsConfig *tls.Config, errChan chan<- error) {
 	}
 }
 
-func (s *Server) CloseListener() error {
-	if s.listener == nil {
-		return nil
+func (s *Server) serveHTTP3(server *http3.Server, conn net.PacketConn, errChan chan<- error) {
+	if err := server.Serve(conn); err != nil &&
+		!errors.Is(err, http.ErrServerClosed) &&
+		!errors.Is(err, net.ErrClosed) {
+		errChan <- fmt.Errorf("[%s:%s] http/3 server failed: %w", s.config.bindAddr, s.config.bindPort, err)
 	}
+}
 
-	var err error
-	s.serveOnce.Do(func() {
-		err = s.listener.Close()
-		s.listener = nil
+func (s *Server) CloseListener() error {
+	var closeErr error
+
+	s.listenerOnce.Do(func() {
+		if s.listener != nil {
+			if err := s.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				closeErr = errors.Join(closeErr, err)
+			}
+			s.listener = nil
+		}
 	})
 
-	if errors.Is(err, net.ErrClosed) {
-		return nil
-	}
+	s.udpOnce.Do(func() {
+		if s.udpConn != nil {
+			if err := s.udpConn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				closeErr = errors.Join(closeErr, err)
+			}
+			s.udpConn = nil
+		}
+	})
 
-	return err
+	return closeErr
 }
 
 func (s *Server) markListenerClosed() {
-	s.serveOnce.Do(func() {
+	s.listenerOnce.Do(func() {
 		s.listener = nil
 	})
 }
 
 func (s *Server) resetListenerState() {
 	s.listener = nil
-	s.serveOnce = sync.Once{}
+	s.udpConn = nil
+	s.listenerOnce = sync.Once{}
+	s.udpOnce = sync.Once{}
 }
 
 func (s *Server) Shutdown(ctx context.Context) {
 	log.Printf("[%s:%s] Request received to shutdown server", s.config.bindAddr, s.config.bindPort)
 
 	s.CleanupPortRedirect()
+
+	if s.http3Server != nil {
+		if err := s.http3Server.Shutdown(ctx); err != nil {
+			log.Printf("[%s:%s] Error shutting down HTTP/3 server: %v", s.config.bindAddr, s.config.bindPort, err)
+			if closeErr := s.http3Server.Close(); closeErr != nil {
+				log.Printf("[%s:%s] Error closing HTTP/3 server: %v", s.config.bindAddr, s.config.bindPort, closeErr)
+			}
+		}
+		s.http3Server = nil
+	}
 
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil {
@@ -121,6 +176,9 @@ func (s *Server) Shutdown(ctx context.Context) {
 		} else {
 			s.markListenerClosed()
 			log.Printf("[%s:%s] Proxy server stopped gracefully", s.config.bindAddr, s.config.bindPort)
+			if closeErr := s.CloseListener(); closeErr != nil {
+				log.Printf("[%s:%s] Error closing listener: %v", s.config.bindAddr, s.config.bindPort, closeErr)
+			}
 		}
 		s.httpServer = nil
 		s.resetListenerState()
@@ -163,6 +221,7 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 				ServerName:         proxyHost, // Use the original hostname for the TLS handshake
 				InsecureSkipVerify: true,      // Skip verification as we're proxying to the same server
 			},
+			ForceAttemptHTTP2: true,
 		}
 	}
 
