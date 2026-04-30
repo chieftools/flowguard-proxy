@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"slices"
 	"testing"
 	"time"
 )
@@ -84,6 +85,16 @@ func createSelfSignedRSACert(t *testing.T, hostname string, notAfter time.Time) 
 	}
 
 	return createTestCert(t, template, template, &privKey.PublicKey, privKey)
+}
+
+func TestGetTLSConfigAdvertisesHTTP2AndHTTP1(t *testing.T) {
+	manager := &Manager{}
+
+	tlsConfig := manager.GetTlsConfig()
+
+	if !slices.Equal(tlsConfig.NextProtos, []string{"h2", "http/1.1"}) {
+		t.Fatalf("unexpected ALPN protocols: %v", tlsConfig.NextProtos)
+	}
 }
 
 // Create a CA-signed ECDSA certificate

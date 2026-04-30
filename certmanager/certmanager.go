@@ -97,6 +97,7 @@ func (cm *Manager) GetTlsConfig() *tls.Config {
 	return &tls.Config{
 		GetCertificate: cm.getCertificate,
 		MinVersion:     tls.VersionTLS12,
+		NextProtos:     []string{"h2", "http/1.1"},
 	}
 }
 
