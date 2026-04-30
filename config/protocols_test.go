@@ -36,3 +36,21 @@ func TestProtocolSettingsAppliesOverrides(t *testing.T) {
 		t.Fatal("expected HTTP/3 to be disabled")
 	}
 }
+
+func TestAdvertiseHTTP3DefaultsToDisabled(t *testing.T) {
+	if (*Config)(nil).AdvertiseHTTP3() {
+		t.Fatal("expected HTTP/3 advertisement to be disabled by default")
+	}
+}
+
+func TestAdvertiseHTTP3AppliesOverride(t *testing.T) {
+	cfg := &Config{
+		Server: &ServerConfig{
+			AdvertiseHTTP3: boolPtr(true),
+		},
+	}
+
+	if !cfg.AdvertiseHTTP3() {
+		t.Fatal("expected HTTP/3 advertisement to be enabled")
+	}
+}

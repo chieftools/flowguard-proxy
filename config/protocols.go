@@ -22,6 +22,18 @@ func (c *Config) ProtocolSettings() ProtocolSettings {
 	return c.Server.ProtocolSettings()
 }
 
+func (c *Config) AdvertiseHTTP3() bool {
+	if c == nil || c.Server == nil {
+		return false
+	}
+
+	return c.Server.ShouldAdvertiseHTTP3()
+}
+
+func (s *ServerConfig) ShouldAdvertiseHTTP3() bool {
+	return s != nil && s.AdvertiseHTTP3 != nil && *s.AdvertiseHTTP3
+}
+
 func (s *ServerConfig) ProtocolSettings() ProtocolSettings {
 	settings := DefaultProtocolSettings()
 	if s == nil || s.Protocols == nil {

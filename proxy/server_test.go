@@ -158,6 +158,114 @@ func TestReverseProxyPreservesOriginAltSvc(t *testing.T) {
 	}
 }
 
+func TestReverseProxyAddsHTTP3AltSvcWhenEnabled(t *testing.T) {
+	protocols := config.ProtocolSettings{HTTP1: true, HTTP2: true, HTTP3: true}
+	server := NewServer(&ServerConfig{
+		scheme:    "https",
+		bindAddr:  "127.0.0.1",
+		bindPort:  "11443",
+		redirPort: "443",
+		protocols: &protocols,
+		altSvc:    true,
+	})
+	target, err := url.Parse("https://127.0.0.1")
+	if err != nil {
+		t.Fatalf("parse target: %v", err)
+	}
+
+	proxy := server.createReverseProxyWithHost(target, "example.com")
+	req, err := http.NewRequest(http.MethodGet, "https://example.com/", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp := &http.Response{
+		Header:     http.Header{},
+		ProtoMajor: 2,
+		ProtoMinor: 0,
+		Request:    req,
+	}
+
+	if err := proxy.ModifyResponse(resp); err != nil {
+		t.Fatalf("modify response: %v", err)
+	}
+	if got := resp.Header.Get("Alt-Svc"); got != `h3=":443"; ma=86400` {
+		t.Fatalf("expected HTTP/3 Alt-Svc to be added, got %q", got)
+	}
+}
+
+func TestReverseProxyDoesNotDuplicateHTTP3AltSvc(t *testing.T) {
+	protocols := config.ProtocolSettings{HTTP1: true, HTTP2: true, HTTP3: true}
+	server := NewServer(&ServerConfig{
+		scheme:    "https",
+		bindAddr:  "127.0.0.1",
+		bindPort:  "11443",
+		redirPort: "443",
+		protocols: &protocols,
+		altSvc:    true,
+	})
+	target, err := url.Parse("https://127.0.0.1")
+	if err != nil {
+		t.Fatalf("parse target: %v", err)
+	}
+
+	proxy := server.createReverseProxyWithHost(target, "example.com")
+	req, err := http.NewRequest(http.MethodGet, "https://example.com/", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp := &http.Response{
+		Header: http.Header{
+			"Alt-Svc": []string{`h3=":443"; ma=3600`},
+		},
+		ProtoMajor: 2,
+		ProtoMinor: 0,
+		Request:    req,
+	}
+
+	if err := proxy.ModifyResponse(resp); err != nil {
+		t.Fatalf("modify response: %v", err)
+	}
+	values := resp.Header.Values("Alt-Svc")
+	if len(values) != 1 || values[0] != `h3=":443"; ma=3600` {
+		t.Fatalf("expected existing HTTP/3 Alt-Svc to be preserved without duplicate, got %v", values)
+	}
+}
+
+func TestReverseProxyDoesNotAddHTTP3AltSvcWhenHTTP3Disabled(t *testing.T) {
+	protocols := config.ProtocolSettings{HTTP1: true, HTTP2: true, HTTP3: false}
+	server := NewServer(&ServerConfig{
+		scheme:    "https",
+		bindAddr:  "127.0.0.1",
+		bindPort:  "11443",
+		redirPort: "443",
+		protocols: &protocols,
+		altSvc:    true,
+	})
+	target, err := url.Parse("https://127.0.0.1")
+	if err != nil {
+		t.Fatalf("parse target: %v", err)
+	}
+
+	proxy := server.createReverseProxyWithHost(target, "example.com")
+	req, err := http.NewRequest(http.MethodGet, "https://example.com/", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp := &http.Response{
+		Header:     http.Header{},
+		ProtoMajor: 2,
+		ProtoMinor: 0,
+		Request:    req,
+	}
+
+	if err := proxy.ModifyResponse(resp); err != nil {
+		t.Fatalf("modify response: %v", err)
+	}
+	if got := resp.Header.Get("Alt-Svc"); got != "" {
+		t.Fatalf("expected no Alt-Svc when HTTP/3 is disabled, got %q", got)
+	}
+}
+
 func TestServerStartServesAndShutsDown(t *testing.T) {
 	server := NewServer(&ServerConfig{
 		scheme:     "http",

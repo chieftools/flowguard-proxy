@@ -112,6 +112,10 @@
             "properties": {
                 "protocols": {
                     "$ref": "#/definitions/protocols_config"
+                },
+                "advertise_http3": {
+                    "type": "boolean",
+                    "description": "Advertise HTTP/3 availability on HTTPS responses by adding an Alt-Svc header when HTTP/3 is enabled"
                 }
             },
             "additionalProperties": false

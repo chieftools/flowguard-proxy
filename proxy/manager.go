@@ -20,14 +20,15 @@ import (
 )
 
 type Config struct {
-	Verbose    bool
-	Version    string
-	HTTPPort   string
-	HTTPSPort  string
-	BindAddrs  []string
-	UserAgent  string
-	Protocols  config.ProtocolSettings
-	NoRedirect bool
+	Verbose        bool
+	Version        string
+	HTTPPort       string
+	HTTPSPort      string
+	BindAddrs      []string
+	UserAgent      string
+	Protocols      config.ProtocolSettings
+	NoRedirect     bool
+	AdvertiseHTTP3 bool
 }
 
 type Manager struct {
@@ -104,6 +105,7 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 	}
 	protocols := configMgr.GetConfig().ProtocolSettings()
 	cfg.Protocols = protocols
+	cfg.AdvertiseHTTP3 = configMgr.GetConfig().AdvertiseHTTP3()
 
 	pm := &Manager{
 		config:          cfg,
@@ -131,7 +133,7 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 	// Register callback to handle IP list configuration changes
 	configMgr.OnChange(func(newConfig *config.Config) {
 		pm.handleIPListConfigChange(newConfig, rulesMiddleware)
-		pm.handleProtocolConfigChange(newConfig)
+		pm.handleServerConfigChange(newConfig)
 	})
 
 	// Register callback to handle IP list update events from WebSocket
@@ -266,52 +268,57 @@ func (p *Manager) handleIPListUpdateEvent(listIDs []string) {
 	}
 }
 
-func (p *Manager) handleProtocolConfigChange(newConfig *config.Config) {
+func (p *Manager) handleServerConfigChange(newConfig *config.Config) {
 	if newConfig == nil {
 		return
 	}
 
 	newProtocols := newConfig.ProtocolSettings()
+	newAdvertiseHTTP3 := newConfig.AdvertiseHTTP3()
 
 	p.serverMu.Lock()
 	defer p.serverMu.Unlock()
 
 	oldProtocols := p.config.resolvedProtocols()
-	if oldProtocols == newProtocols {
+	oldAdvertiseHTTP3 := p.config.AdvertiseHTTP3
+	if oldProtocols == newProtocols && oldAdvertiseHTTP3 == newAdvertiseHTTP3 {
 		return
 	}
 
 	oldServers := p.servers
-	log.Printf("[protocols] Protocol configuration changed from %+v to %+v, restarting listeners", oldProtocols, newProtocols)
+	log.Printf("[server] Server configuration changed, restarting listeners")
 
 	p.stopServers(oldServers)
 	p.servers = nil
 
-	newServers, err := p.startServers(newProtocols)
+	newServers, err := p.startServers(newProtocols, newAdvertiseHTTP3)
 	if err != nil {
-		log.Printf("[protocols] Failed to restart listeners with new protocol configuration: %v", err)
+		log.Printf("[server] Failed to restart listeners with new server configuration: %v", err)
 		p.stopServers(newServers)
 
-		rollbackServers, rollbackErr := p.startServers(oldProtocols)
+		rollbackServers, rollbackErr := p.startServers(oldProtocols, oldAdvertiseHTTP3)
 		if rollbackErr != nil {
-			log.Printf("[protocols] Failed to roll back to previous protocol configuration: %v", rollbackErr)
+			log.Printf("[server] Failed to roll back to previous server configuration: %v", rollbackErr)
 			p.config.Protocols = oldProtocols
+			p.config.AdvertiseHTTP3 = oldAdvertiseHTTP3
 			p.servers = nil
 			return
 		}
 
 		p.config.Protocols = oldProtocols
+		p.config.AdvertiseHTTP3 = oldAdvertiseHTTP3
 		p.servers = rollbackServers
 		if err := p.setupPortRedirectsLocked(); err != nil {
-			log.Printf("[protocols] Failed to restore port redirection after rollback: %v", err)
+			log.Printf("[server] Failed to restore port redirection after rollback: %v", err)
 		}
 		return
 	}
 
 	p.config.Protocols = newProtocols
+	p.config.AdvertiseHTTP3 = newAdvertiseHTTP3
 	p.servers = newServers
 	if err := p.setupPortRedirectsLocked(); err != nil {
-		log.Printf("[protocols] Failed to refresh port redirection after protocol change: %v", err)
+		log.Printf("[server] Failed to refresh port redirection after server configuration change: %v", err)
 	}
 }
 
@@ -698,7 +705,7 @@ func (p *Manager) sendHeartbeat() {
 	}
 }
 
-func (p *Manager) startServers(protocols config.ProtocolSettings) ([]*Server, error) {
+func (p *Manager) startServers(protocols config.ProtocolSettings, advertiseHTTP3 bool) ([]*Server, error) {
 	started := make([]*Server, 0, len(p.config.BindAddrs)*2)
 
 	for _, bindAddr := range p.config.BindAddrs {
@@ -710,12 +717,13 @@ func (p *Manager) startServers(protocols config.ProtocolSettings) ([]*Server, er
 
 			httpServer := NewServer(&ServerConfig{
 				scheme:     "http",
+				altSvc:     advertiseHTTP3,
 				verbose:    p.config.Verbose,
 				bindAddr:   bindAddr,
 				bindPort:   p.config.HTTPPort,
 				redirPort:  httpRedirPort,
-				middleware: p.middlewareChain,
 				protocols:  &protocols,
+				middleware: p.middlewareChain,
 			})
 			started = append(started, httpServer)
 
@@ -731,12 +739,13 @@ func (p *Manager) startServers(protocols config.ProtocolSettings) ([]*Server, er
 
 		httpsServer := NewServer(&ServerConfig{
 			scheme:     "https",
+			altSvc:     advertiseHTTP3,
 			verbose:    p.config.Verbose,
 			bindAddr:   bindAddr,
 			bindPort:   p.config.HTTPSPort,
 			redirPort:  httpsRedirPort,
-			middleware: p.middlewareChain,
 			protocols:  &protocols,
+			middleware: p.middlewareChain,
 		})
 		started = append(started, httpsServer)
 
@@ -774,7 +783,7 @@ func (p *Manager) Start() error {
 		}
 	}()
 
-	servers, err := p.startServers(p.config.resolvedProtocols())
+	servers, err := p.startServers(p.config.resolvedProtocols(), p.config.AdvertiseHTTP3)
 	if err != nil {
 		p.stopServers(servers)
 		return err

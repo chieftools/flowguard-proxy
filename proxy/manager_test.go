@@ -36,7 +36,7 @@ func TestProtocolConfigChangeRestartsListeners(t *testing.T) {
 		manager.middlewareChain.Stop()
 	})
 
-	servers, err := manager.startServers(initialProtocols)
+	servers, err := manager.startServers(initialProtocols, false)
 	if err != nil {
 		t.Fatalf("start initial servers: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestProtocolConfigChangeRestartsListeners(t *testing.T) {
 		t.Fatalf("expected initial HTTP and HTTPS servers, got %d", len(manager.servers))
 	}
 
-	manager.handleProtocolConfigChange(&config.Config{
+	manager.handleServerConfigChange(&config.Config{
 		Server: &config.ServerConfig{
 			Protocols: &config.ProtocolsConfig{
 				HTTP1: boolPtr(false),

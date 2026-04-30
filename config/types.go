@@ -35,7 +35,8 @@ type HostConfig struct {
 }
 
 type ServerConfig struct {
-	Protocols *ProtocolsConfig `json:"protocols,omitempty"`
+	Protocols      *ProtocolsConfig `json:"protocols,omitempty"`
+	AdvertiseHTTP3 *bool            `json:"advertise_http3,omitempty"`
 }
 
 type ProtocolsConfig struct {

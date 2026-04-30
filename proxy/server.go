@@ -36,6 +36,7 @@ type Server struct {
 
 type ServerConfig struct {
 	scheme     string
+	altSvc     bool
 	verbose    bool
 	bindAddr   string
 	bindPort   string
@@ -166,6 +167,8 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 			}
 		}
 
+		s.addAltSvcHeader(resp)
+
 		// Add Via header to indicate proxying and our stream ID
 		resp.Header.Add("Via", fmt.Sprintf("%d.%d flowguard", resp.ProtoMajor, resp.ProtoMinor))
 		resp.Header.Add("FG-Stream", middleware.GetStreamID(resp.Request))
@@ -178,6 +181,26 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 	}
 
 	return proxy
+}
+
+func (s *Server) addAltSvcHeader(resp *http.Response) {
+	if !s.shouldAdvertiseHTTP3AltSvc() {
+		return
+	}
+
+	addAltSvcValue(resp.Header, fmt.Sprintf(`h3=":%s"; ma=86400`, s.config.publicHTTPSPort()))
+}
+
+func (s *Server) shouldAdvertiseHTTP3AltSvc() bool {
+	return s.config.scheme == "https" && s.config.altSvc && s.config.resolvedProtocols().HTTP3
+}
+
+func (c *ServerConfig) publicHTTPSPort() string {
+	if c.redirPort != "" {
+		return c.redirPort
+	}
+
+	return c.bindPort
 }
 
 func (s *Server) Start(tlsConfig *tls.Config, errChan chan<- error) error {
