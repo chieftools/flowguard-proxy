@@ -91,18 +91,17 @@ func (s *Server) Start(tlsConfig *tls.Config, errChan chan<- error) error {
 		go s.serveHTTP3(s.http3Server, s.udpConn, errChan)
 	}
 
-	go s.serve(tlsConfig, errChan)
+	go s.serve(s.httpServer, listener, tlsConfig, errChan)
 
 	return nil
 }
 
-func (s *Server) serve(tlsConfig *tls.Config, errChan chan<- error) {
-	listener := s.listener
+func (s *Server) serve(server *http.Server, listener net.Listener, tlsConfig *tls.Config, errChan chan<- error) {
 	if tlsConfig != nil {
 		listener = tls.NewListener(listener, tlsConfig)
 	}
 
-	if err := s.httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		errChan <- fmt.Errorf("[%s:%s] %s server failed: %w", s.config.bindAddr, s.config.bindPort, s.config.scheme, err)
 	}
 }
