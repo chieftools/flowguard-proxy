@@ -95,3 +95,23 @@ func TestLoadHydratesIDsAndSortsRules(t *testing.T) {
 		t.Fatalf("unexpected sorted rule order: %s, %s", manager.sortedRules[0].ID, manager.sortedRules[1].ID)
 	}
 }
+
+func TestLoadRejectsAllProtocolsDisabled(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "server": {
+    "protocols": {
+      "http1": false,
+      "http2": false,
+      "http3": false
+    }
+  }
+}`)
+
+	_, err := loadTestManager(configPath)
+	if err == nil {
+		t.Fatal("expected all protocols disabled to be rejected")
+	}
+	if err.Error() != "server.protocols must enable at least one protocol" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

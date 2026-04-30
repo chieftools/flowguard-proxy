@@ -17,18 +17,18 @@ type firewallRunner interface {
 	Run(name string, args ...string) error
 }
 
-type execFirewallRunner struct{}
-
-func (execFirewallRunner) Run(name string, args ...string) error {
-	return exec.Command(name, args...).Run()
-}
-
 type firewallRuleSpec struct {
 	command   string
 	table     string
 	setupVerb string
 	chain     string
 	args      []string
+}
+
+type execFirewallRunner struct{}
+
+func (execFirewallRunner) Run(name string, args ...string) error {
+	return exec.Command(name, args...).Run()
 }
 
 func (r firewallRuleSpec) commandArgs(verb string) []string {
@@ -56,8 +56,12 @@ func (s *Server) firewallRules() ([]firewallRuleSpec, string, error) {
 		iptablesCmd = "ip6tables"
 	}
 
-	protocols := []string{"tcp"}
-	if s.config.scheme == "https" {
+	settings := s.config.resolvedProtocols()
+	protocols := make([]string, 0, 2)
+	if settings.HTTP1 || (s.config.scheme == "https" && settings.HTTP2) {
+		protocols = append(protocols, "tcp")
+	}
+	if s.config.scheme == "https" && settings.HTTP3 {
 		protocols = append(protocols, "udp")
 	}
 

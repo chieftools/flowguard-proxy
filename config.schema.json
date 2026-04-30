@@ -27,6 +27,9 @@
             },
             "additionalProperties": false
         },
+        "server": {
+            "$ref": "#/definitions/server_config"
+        },
         "actions": {
             "type": "object",
             "description": "Actions that can be taken when rules match",
@@ -99,6 +102,35 @@
                 "default_hostname": {
                     "type": "string",
                     "description": "Default hostname to use when a certificate is not found"
+                }
+            },
+            "additionalProperties": false
+        },
+        "server_config": {
+            "type": "object",
+            "description": "Proxy server runtime configuration",
+            "properties": {
+                "protocols": {
+                    "$ref": "#/definitions/protocols_config"
+                }
+            },
+            "additionalProperties": false
+        },
+        "protocols_config": {
+            "type": "object",
+            "description": "HTTP protocols enabled by the proxy. Omitted values default to true.",
+            "properties": {
+                "http1": {
+                    "type": "boolean",
+                    "description": "Enable HTTP/1.0 and HTTP/1.1 over cleartext HTTP and TLS"
+                },
+                "http2": {
+                    "type": "boolean",
+                    "description": "Enable HTTP/2 over TLS"
+                },
+                "http3": {
+                    "type": "boolean",
+                    "description": "Enable HTTP/3 over QUIC/UDP"
                 }
             },
             "additionalProperties": false

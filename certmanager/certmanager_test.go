@@ -97,6 +97,20 @@ func TestGetTLSConfigAdvertisesHTTP2AndHTTP1(t *testing.T) {
 	}
 }
 
+func TestGetTLSConfigUsesConfiguredALPNProtocols(t *testing.T) {
+	manager := &Manager{
+		config: Config{
+			TLSNextProtos: []string{"http/1.1"},
+		},
+	}
+
+	tlsConfig := manager.GetTlsConfig()
+
+	if !slices.Equal(tlsConfig.NextProtos, []string{"http/1.1"}) {
+		t.Fatalf("unexpected ALPN protocols: %v", tlsConfig.NextProtos)
+	}
+}
+
 // Create a CA-signed ECDSA certificate
 func createCASignedECDSACert(t *testing.T, hostname string, notAfter time.Time) *tls.Certificate {
 	t.Helper()

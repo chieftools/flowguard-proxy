@@ -26,24 +26,28 @@ type Config struct {
 	HTTPSPort  string
 	BindAddrs  []string
 	UserAgent  string
+	Protocols  config.ProtocolSettings
 	NoRedirect bool
 }
 
 type Manager struct {
-	config              *Config
-	servers             []*Server
-	updater             *updater.Updater
-	startedAt           time.Time
-	certManager         *certmanager.Manager
+	config          *Config
+	servers         []*Server
+	updater         *updater.Updater
+	startedAt       time.Time
+	certManager     *certmanager.Manager
+	configManager   *config.Manager
+	ipListManager   *iplist.Manager
+	firewallState   api.FirewallHeartbeat
+	middlewareChain *middleware.Chain
+
 	serveErrChan        chan error
 	stopHeartbeat       chan struct{}
-	stopFirewallMonitor chan struct{}
 	forceHeartbeat      chan struct{}
-	configManager       *config.Manager
-	ipListManager       *iplist.Manager
-	middlewareChain     *middleware.Chain
-	firewallState       api.FirewallHeartbeat
-	mu                  sync.RWMutex
+	stopFirewallMonitor chan struct{}
+
+	mu       sync.RWMutex
+	serverMu sync.Mutex
 }
 
 func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
@@ -98,23 +102,27 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 	if configMgr.GetConfig().Host != nil {
 		defaultHostname = configMgr.GetConfig().Host.DefaultHostname
 	}
+	protocols := configMgr.GetConfig().ProtocolSettings()
+	cfg.Protocols = protocols
 
-	// Create the proxy manager
 	pm := &Manager{
-		config:    cfg,
-		startedAt: time.Now(),
+		config:          cfg,
+		startedAt:       time.Now(),
+		configManager:   configMgr,
+		middlewareChain: middlewareChain,
+
 		certManager: certmanager.New(certmanager.Config{
 			Verbose:         cfg.Verbose,
 			CertPath:        certPath,
+			TLSNextProtos:   tlsNextProtos(protocols),
 			NginxConfigPath: nginxConfigPath,
 			DefaultHostname: defaultHostname,
 		}),
+
 		serveErrChan:        make(chan error, max(1, len(cfg.BindAddrs)*2)),
 		stopHeartbeat:       make(chan struct{}),
-		stopFirewallMonitor: make(chan struct{}),
 		forceHeartbeat:      make(chan struct{}, 1),
-		configManager:       configMgr,
-		middlewareChain:     middlewareChain,
+		stopFirewallMonitor: make(chan struct{}),
 	}
 
 	// Initialize IP list manager with current config
@@ -123,6 +131,7 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 	// Register callback to handle IP list configuration changes
 	configMgr.OnChange(func(newConfig *config.Config) {
 		pm.handleIPListConfigChange(newConfig, rulesMiddleware)
+		pm.handleProtocolConfigChange(newConfig)
 	})
 
 	// Register callback to handle IP list update events from WebSocket
@@ -257,6 +266,74 @@ func (p *Manager) handleIPListUpdateEvent(listIDs []string) {
 	}
 }
 
+func (p *Manager) handleProtocolConfigChange(newConfig *config.Config) {
+	if newConfig == nil {
+		return
+	}
+
+	newProtocols := newConfig.ProtocolSettings()
+
+	p.serverMu.Lock()
+	defer p.serverMu.Unlock()
+
+	oldProtocols := p.config.resolvedProtocols()
+	if oldProtocols == newProtocols {
+		return
+	}
+
+	oldServers := p.servers
+	log.Printf("[protocols] Protocol configuration changed from %+v to %+v, restarting listeners", oldProtocols, newProtocols)
+
+	p.stopServers(oldServers)
+	p.servers = nil
+
+	newServers, err := p.startServers(newProtocols)
+	if err != nil {
+		log.Printf("[protocols] Failed to restart listeners with new protocol configuration: %v", err)
+		p.stopServers(newServers)
+
+		rollbackServers, rollbackErr := p.startServers(oldProtocols)
+		if rollbackErr != nil {
+			log.Printf("[protocols] Failed to roll back to previous protocol configuration: %v", rollbackErr)
+			p.config.Protocols = oldProtocols
+			p.servers = nil
+			return
+		}
+
+		p.config.Protocols = oldProtocols
+		p.servers = rollbackServers
+		if err := p.setupPortRedirectsLocked(); err != nil {
+			log.Printf("[protocols] Failed to restore port redirection after rollback: %v", err)
+		}
+		return
+	}
+
+	p.config.Protocols = newProtocols
+	p.servers = newServers
+	if err := p.setupPortRedirectsLocked(); err != nil {
+		log.Printf("[protocols] Failed to refresh port redirection after protocol change: %v", err)
+	}
+}
+
+func (p *Manager) stopServers(servers []*Server) {
+	if len(servers) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(len(servers))
+	for _, server := range servers {
+		go func(srv *Server) {
+			defer wg.Done()
+			srv.Shutdown(ctx)
+		}(server)
+	}
+	wg.Wait()
+}
+
 // handleUpgradeRequest processes an upgrade request from the WebSocket channel.
 func (p *Manager) handleUpgradeRequest(version string) {
 	p.mu.RLock()
@@ -366,10 +443,6 @@ func (p *Manager) statusMessageFromState(state api.FirewallHeartbeat) string {
 	}
 }
 
-func (p *Manager) StatusMessage() string {
-	return p.statusMessageFromState(p.getFirewallState())
-}
-
 func (p *Manager) initialFirewallState() api.FirewallHeartbeat {
 	if !p.managesRedirect() {
 		return api.FirewallHeartbeat{Status: firewallStatusDisabled}
@@ -382,6 +455,13 @@ func (p *Manager) initialFirewallState() api.FirewallHeartbeat {
 }
 
 func (p *Manager) setupPortRedirects() error {
+	p.serverMu.Lock()
+	defer p.serverMu.Unlock()
+
+	return p.setupPortRedirectsLocked()
+}
+
+func (p *Manager) setupPortRedirectsLocked() error {
 	if !p.managesRedirect() {
 		return nil
 	}
@@ -396,6 +476,9 @@ func (p *Manager) setupPortRedirects() error {
 }
 
 func (p *Manager) evaluateFirewall(autoRepair bool) api.FirewallHeartbeat {
+	p.serverMu.Lock()
+	defer p.serverMu.Unlock()
+
 	state := api.FirewallHeartbeat{
 		Status:        firewallStatusHealthy,
 		LastCheckedAt: time.Now().Unix(),
@@ -615,6 +698,58 @@ func (p *Manager) sendHeartbeat() {
 	}
 }
 
+func (p *Manager) startServers(protocols config.ProtocolSettings) ([]*Server, error) {
+	started := make([]*Server, 0, len(p.config.BindAddrs)*2)
+
+	for _, bindAddr := range p.config.BindAddrs {
+		if protocols.HTTP1 {
+			httpRedirPort := ""
+			if !p.config.NoRedirect {
+				httpRedirPort = "80"
+			}
+
+			httpServer := NewServer(&ServerConfig{
+				scheme:     "http",
+				verbose:    p.config.Verbose,
+				bindAddr:   bindAddr,
+				bindPort:   p.config.HTTPPort,
+				redirPort:  httpRedirPort,
+				middleware: p.middlewareChain,
+				protocols:  &protocols,
+			})
+			started = append(started, httpServer)
+
+			if err := httpServer.Start(nil, p.serveErrChan); err != nil {
+				return started, err
+			}
+		}
+
+		httpsRedirPort := ""
+		if !p.config.NoRedirect {
+			httpsRedirPort = "443"
+		}
+
+		httpsServer := NewServer(&ServerConfig{
+			scheme:     "https",
+			verbose:    p.config.Verbose,
+			bindAddr:   bindAddr,
+			bindPort:   p.config.HTTPSPort,
+			redirPort:  httpsRedirPort,
+			middleware: p.middlewareChain,
+			protocols:  &protocols,
+		})
+		started = append(started, httpsServer)
+
+		tlsConfig := p.certManager.GetTlsConfig()
+		tlsConfig.NextProtos = tlsNextProtos(protocols)
+		if err := httpsServer.Start(tlsConfig, p.serveErrChan); err != nil {
+			return started, err
+		}
+	}
+
+	return started, nil
+}
+
 func (p *Manager) Start() error {
 	trustedProxiesRefreshInterval := p.configManager.GetRefreshInterval()
 	log.Printf("[trusted_proxy] Starting trusted proxy refresh with interval: %v", trustedProxiesRefreshInterval)
@@ -639,45 +774,14 @@ func (p *Manager) Start() error {
 		}
 	}()
 
-	// Create servers for each bind address
-	for _, bindAddr := range p.config.BindAddrs {
-		httpRedirPort := ""
-		if !p.config.NoRedirect {
-			httpRedirPort = "80"
-		}
-
-		httpServer := NewServer(&ServerConfig{
-			scheme:     "http",
-			verbose:    p.config.Verbose,
-			bindAddr:   bindAddr,
-			bindPort:   p.config.HTTPPort,
-			redirPort:  httpRedirPort,
-			middleware: p.middlewareChain,
-		})
-		p.servers = append(p.servers, httpServer)
-
-		httpsRedirPort := ""
-		if !p.config.NoRedirect {
-			httpsRedirPort = "443"
-		}
-
-		httpsServer := NewServer(&ServerConfig{
-			scheme:     "https",
-			verbose:    p.config.Verbose,
-			bindAddr:   bindAddr,
-			bindPort:   p.config.HTTPSPort,
-			redirPort:  httpsRedirPort,
-			middleware: p.middlewareChain,
-		})
-		p.servers = append(p.servers, httpsServer)
-
-		if err := httpServer.Start(nil, p.serveErrChan); err != nil {
-			return err
-		}
-		if err := httpsServer.Start(p.certManager.GetTlsConfig(), p.serveErrChan); err != nil {
-			return err
-		}
+	servers, err := p.startServers(p.config.resolvedProtocols())
+	if err != nil {
+		p.stopServers(servers)
+		return err
 	}
+	p.serverMu.Lock()
+	p.servers = servers
+	p.serverMu.Unlock()
 
 	// Small delay before we setup port redirection rules
 	time.Sleep(100 * time.Millisecond)
@@ -713,9 +817,13 @@ func (p *Manager) Shutdown() error {
 	log.Println("Shutting down proxy server...")
 
 	// Remove the port redirection rules to stop new incoming connections
-	for _, server := range p.servers {
+	p.serverMu.Lock()
+	servers := p.servers
+	p.servers = nil
+	for _, server := range servers {
 		server.CleanupPortRedirect()
 	}
+	p.serverMu.Unlock()
 
 	// Stop the heartbeat goroutine
 	close(p.stopHeartbeat)
@@ -735,26 +843,23 @@ func (p *Manager) Shutdown() error {
 	// Small delay before we shut down the servers
 	time.Sleep(100 * time.Millisecond)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	var wg sync.WaitGroup
-	totalServers := len(p.servers)
-	wg.Add(totalServers)
-
-	// Shutdown all servers
-	for _, server := range p.servers {
-		go func(srv *Server) {
-			defer wg.Done()
-			srv.Shutdown(ctx)
-		}(server)
-	}
-
-	wg.Wait()
+	p.stopServers(servers)
 
 	// Stop the middleware chain
 	p.middlewareChain.Stop()
 
 	log.Println("FlowGuard shutdown complete")
 	return nil
+}
+
+func (p *Manager) StatusMessage() string {
+	return p.statusMessageFromState(p.getFirewallState())
+}
+
+func (c *Config) resolvedProtocols() config.ProtocolSettings {
+	if c != nil && c.Protocols.AnyEnabled() {
+		return c.Protocols
+	}
+
+	return config.DefaultProtocolSettings()
 }

@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"flowguard/config"
 )
 
 type fakeFirewallRunner struct {
@@ -227,6 +229,34 @@ func TestServerFirewallRulesIncludeUDPForHTTPS(t *testing.T) {
 			t.Fatalf("unexpected rule %d args: %#v", i, rule.commandArgs(rule.setupVerb))
 		}
 	}
+}
+
+func TestServerFirewallRulesOmitUDPWhenHTTP3Disabled(t *testing.T) {
+	server := newTestServerWithScheme("https", "203.0.113.10", "443", newFakeFirewallRunner())
+	settings := config.ProtocolSettings{HTTP1: true, HTTP2: true, HTTP3: false}
+	server.config.protocols = &settings
+
+	rules, _, err := server.firewallRules()
+	if err != nil {
+		t.Fatalf("firewallRules: %v", err)
+	}
+	if len(rules) != 2 {
+		t.Fatalf("expected only TCP rules, got %d", len(rules))
+	}
+	for _, rule := range rules {
+		if containsArgValue(rule.args, "-p", "udp") {
+			t.Fatalf("unexpected UDP rule: %#v", rule)
+		}
+	}
+}
+
+func containsArgValue(args []string, key string, value string) bool {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == key && args[i+1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestManagerSetupPortRedirectsFailsOnError(t *testing.T) {

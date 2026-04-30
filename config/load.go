@@ -66,6 +66,10 @@ func (m *Manager) Load() error {
 		}
 	}
 
+	if !config.ProtocolSettings().AnyEnabled() {
+		return fmt.Errorf("server.protocols must enable at least one protocol")
+	}
+
 	// Pre-compute sorted rules for efficient iteration during request processing
 	sortedRules := m.computeSortedRules(config.Rules)
 

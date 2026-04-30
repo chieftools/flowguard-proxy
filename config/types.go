@@ -11,6 +11,7 @@ type Config struct {
 	ID             string                 `json:"id,omitempty"`
 	Host           *HostConfig            `json:"host,omitempty"`
 	Rules          map[string]*Rule       `json:"rules"`
+	Server         *ServerConfig          `json:"server,omitempty"`
 	Actions        map[string]*RuleAction `json:"actions"`
 	Logging        *LoggingConfig         `json:"logging,omitempty"`
 	IPLists        *IPListsConfig         `json:"ip_lists,omitempty"`
@@ -31,6 +32,22 @@ type HostConfig struct {
 	CertPath        string `json:"cert_path,omitempty"`
 	NginxConfigPath string `json:"nginx_config_path,omitempty"`
 	DefaultHostname string `json:"default_hostname,omitempty"`
+}
+
+type ServerConfig struct {
+	Protocols *ProtocolsConfig `json:"protocols,omitempty"`
+}
+
+type ProtocolsConfig struct {
+	HTTP1 *bool `json:"http1,omitempty"`
+	HTTP2 *bool `json:"http2,omitempty"`
+	HTTP3 *bool `json:"http3,omitempty"`
+}
+
+type ProtocolSettings struct {
+	HTTP1 bool
+	HTTP2 bool
+	HTTP3 bool
 }
 
 type LoggingConfig struct {

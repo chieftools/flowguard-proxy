@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"flowguard/config"
 	"flowguard/middleware"
 )
 
@@ -53,6 +54,39 @@ func TestServerStartHTTPSStartsHTTP3AndShutsDown(t *testing.T) {
 	}
 	if server.udpConn == nil {
 		t.Fatal("expected UDP listener to be started for HTTP/3")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	server.Shutdown(ctx)
+
+	select {
+	case err := <-errChan:
+		t.Fatalf("unexpected serve error: %v", err)
+	default:
+	}
+}
+
+func TestServerStartHTTPSSkipsHTTP3WhenDisabled(t *testing.T) {
+	protocols := config.ProtocolSettings{HTTP1: true, HTTP2: true, HTTP3: false}
+	server := NewServer(&ServerConfig{
+		scheme:     "https",
+		bindAddr:   "127.0.0.1",
+		bindPort:   "0",
+		middleware: middleware.NewChain(),
+		protocols:  &protocols,
+	})
+
+	errChan := make(chan error, 1)
+	if err := server.Start(&tls.Config{}, errChan); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if server.http3Server != nil {
+		t.Fatal("expected HTTP/3 server not to be started")
+	}
+	if server.udpConn != nil {
+		t.Fatal("expected UDP listener not to be started")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

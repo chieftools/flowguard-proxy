@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 type Config struct {
 	Verbose         bool
 	CertPath        string
+	TLSNextProtos   []string
 	NginxConfigPath string
 	DefaultHostname string
 }
@@ -40,13 +42,13 @@ type certificateWithMetadata struct {
 // Manager handles SSL/TLS certificate loading and management
 type Manager struct {
 	config           Config
-	hostnameCache    map[string][]*certificateWithMetadata // Maps hostname to array of certificates
-	cacheMutex       sync.RWMutex
 	watcher          *fsnotify.Watcher
 	stopChan         chan struct{}
-	nginxConfigFiles []string        // List of NGINX config files to watch
-	nginxCertFiles   []string        // List of certificate files referenced in NGINX config
-	watchedDirs      map[string]bool // Track which directories we're watching
+	cacheMutex       sync.RWMutex
+	watchedDirs      map[string]bool                       // Track which directories we're watching
+	hostnameCache    map[string][]*certificateWithMetadata // Maps hostname to array of certificates
+	nginxCertFiles   []string                              // List of certificate files referenced in NGINX config
+	nginxConfigFiles []string                              // List of NGINX config files to watch
 }
 
 // New creates a new certificate manager
@@ -97,8 +99,16 @@ func (cm *Manager) GetTlsConfig() *tls.Config {
 	return &tls.Config{
 		GetCertificate: cm.getCertificate,
 		MinVersion:     tls.VersionTLS12,
-		NextProtos:     []string{"h2", "http/1.1"},
+		NextProtos:     cm.nextProtos(),
 	}
+}
+
+func (cm *Manager) nextProtos() []string {
+	if cm.config.TLSNextProtos != nil {
+		return slices.Clone(cm.config.TLSNextProtos)
+	}
+
+	return []string{"h2", "http/1.1"}
 }
 
 // GetCertificateForHostname retrieves the best matching certificate for a given hostname
