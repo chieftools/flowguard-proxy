@@ -115,3 +115,187 @@ func TestLoadRejectsAllProtocolsDisabled(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestLoadAcceptsChallengeAction(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "challenges": {
+    "cookie_name": "fg_clearance",
+    "min_page_time_ms": 1500,
+    "bind_ip": false,
+    "bind_user_agent": false,
+    "pow": {
+      "difficulty_bits": 1,
+      "challenge_ttl_seconds": 120,
+      "algorithm": "pbkdf2-sha256",
+      "pbkdf2_iterations": 1
+    }
+  },
+  "rules": {
+    "challenge-admin": {
+      "action": "pow-action",
+      "conditions": {
+        "matches": [
+          {
+            "type": "path",
+            "match": "starts-with",
+            "value": "/admin"
+          }
+        ]
+      }
+    }
+  },
+  "actions": {
+    "pow-action": {
+      "action": "challenge",
+      "challenge": {
+        "type": "pow",
+        "clearance_scope": "rule",
+        "ttl_seconds": 60,
+        "min_page_time_ms": 1500,
+        "difficulty_bits": 1,
+        "pbkdf2_iterations": 1
+      }
+    }
+  }
+}`)
+
+	manager, err := loadTestManager(configPath)
+	if err != nil {
+		t.Fatalf("load manager: %v", err)
+	}
+
+	action := manager.config.Actions["pow-action"]
+	if action == nil || action.Challenge == nil {
+		t.Fatal("expected challenge action to load")
+	}
+	if action.Challenge.ClearanceScope != "rule" {
+		t.Fatalf("expected rule clearance scope, got %q", action.Challenge.ClearanceScope)
+	}
+}
+
+func TestLoadRejectsInvalidChallengeMinPageTime(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "challenges": {
+    "min_page_time_ms": 60001
+  }
+}`)
+
+	_, err := loadTestManager(configPath)
+	if err == nil {
+		t.Fatal("expected invalid challenge minimum page time to be rejected")
+	}
+	if err.Error() != "challenges.min_page_time_ms must be between 0 and 60000" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRejectsInvalidChallengeScope(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "actions": {
+    "pow-action": {
+      "action": "challenge",
+      "challenge": {
+        "clearance_scope": "session"
+      }
+    }
+  }
+}`)
+
+	_, err := loadTestManager(configPath)
+	if err == nil {
+		t.Fatal("expected invalid challenge scope to be rejected")
+	}
+	if err.Error() != `invalid challenge.clearance_scope "session" in action "pow-action"` {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRejectsInvalidNestedPoWDifficulty(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "challenges": {
+    "pow": {
+      "difficulty_bits": 31
+    }
+  }
+}`)
+
+	_, err := loadTestManager(configPath)
+	if err == nil {
+		t.Fatal("expected invalid nested PoW difficulty to be rejected")
+	}
+	if err.Error() != "challenges.pow.difficulty_bits must be between 1 and 30" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRejectsInvalidNestedPoWAlgorithm(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "challenges": {
+    "pow": {
+      "algorithm": "md5"
+    }
+  }
+}`)
+
+	_, err := loadTestManager(configPath)
+	if err == nil {
+		t.Fatal("expected invalid nested PoW algorithm to be rejected")
+	}
+	if err.Error() != `challenges.pow.algorithm must be "pbkdf2-sha256" or "sha256"` {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRejectsInvalidNestedPoWEffortMode(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "challenges": {
+    "pow": {
+      "effort_mode": "instant"
+    }
+  }
+}`)
+
+	_, err := loadTestManager(configPath)
+	if err == nil {
+		t.Fatal("expected invalid nested PoW effort mode to be rejected")
+	}
+	if err.Error() != `challenges.pow.effort_mode must be "calibrated" or "probabilistic"` {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRejectsInvalidNestedPoWWorkUnits(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "challenges": {
+    "pow": {
+      "work_units": 100001
+    }
+  }
+}`)
+
+	_, err := loadTestManager(configPath)
+	if err == nil {
+		t.Fatal("expected invalid nested PoW work units to be rejected")
+	}
+	if err.Error() != "challenges.pow.work_units must be between 1 and 100000" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRejectsZeroChallengeTokenTTL(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "challenges": {
+    "pow": {
+      "challenge_ttl_seconds": 0
+    }
+  }
+}`)
+
+	_, err := loadTestManager(configPath)
+	if err == nil {
+		t.Fatal("expected zero challenge token TTL to be rejected")
+	}
+	if err.Error() != "challenges.pow.challenge_ttl_seconds must be greater than 0" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

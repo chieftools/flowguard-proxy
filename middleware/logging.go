@@ -26,6 +26,9 @@ const (
 	ContextKeyStreamID          contextKey = "stream_id"
 	ContextKeyStartTime         contextKey = "start_time"
 	ContextKeyRuleResult        contextKey = "rule_result"
+	ContextKeyChallengeInfo     contextKey = "challenge_info"
+	ContextKeyChallengeMatched  contextKey = "challenge_matched"
+	ContextKeyRateLimitApplied  contextKey = "rate_limit_applied"
 	ContextKeyMiddlewareEndTime contextKey = "middleware_end_time"
 )
 
@@ -53,6 +56,20 @@ type RequestLogEntryRuleInfo struct {
 }
 
 type RequestLogEntryRuleActionInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+type RequestLogEntryChallengeInfo struct {
+	Present bool                             `json:"present"`
+	Outcome string                           `json:"outcome"`
+	Reason  string                           `json:"reason,omitempty"`
+	Scope   string                           `json:"scope,omitempty"`
+	Rule    *RequestLogEntryChallengeRefInfo `json:"rule,omitempty"`
+	Action  *RequestLogEntryChallengeRefInfo `json:"action,omitempty"`
+}
+
+type RequestLogEntryChallengeRefInfo struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
 }
@@ -185,6 +202,10 @@ func (lm *LoggingMiddleware) logRequest(r *http.Request, wrapper *ResponseWriter
 		},
 	}
 
+	if challenge := GetChallengeInfo(r); challenge != nil {
+		entry.Data["challenge"] = challenge
+	}
+
 	if proxy := getProxyInfo(r); proxy != nil {
 		entry.Data["proxy"] = proxy
 	}
@@ -298,6 +319,39 @@ func GetActionMatched(r *http.Request) *config.RuleAction {
 		return action
 	}
 	return nil
+}
+
+func SetChallengeInfo(r *http.Request, info RequestLogEntryChallengeInfo) {
+	info.Present = true
+	ctx := context.WithValue(r.Context(), ContextKeyChallengeInfo, info)
+	*r = *r.WithContext(ctx)
+}
+
+func GetChallengeInfo(r *http.Request) *RequestLogEntryChallengeInfo {
+	if info, ok := r.Context().Value(ContextKeyChallengeInfo).(RequestLogEntryChallengeInfo); ok {
+		return &info
+	}
+	return nil
+}
+
+func SetChallengeMatched(r *http.Request) {
+	ctx := context.WithValue(r.Context(), ContextKeyChallengeMatched, true)
+	*r = *r.WithContext(ctx)
+}
+
+func GetChallengeMatched(r *http.Request) bool {
+	matched, _ := r.Context().Value(ContextKeyChallengeMatched).(bool)
+	return matched
+}
+
+func SetRateLimitApplied(r *http.Request) {
+	ctx := context.WithValue(r.Context(), ContextKeyRateLimitApplied, true)
+	*r = *r.WithContext(ctx)
+}
+
+func GetRateLimitApplied(r *http.Request) bool {
+	applied, _ := r.Context().Value(ContextKeyRateLimitApplied).(bool)
+	return applied
 }
 
 func generateStreamID() string {

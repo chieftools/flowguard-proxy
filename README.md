@@ -191,6 +191,8 @@ FlowGuard provides structured logging with multiple simultaneous destinations (s
 - **Loki**: Grafana Loki with JSON flattening
 - **OpenObserve**: OpenObserve with automatic field flattening
 
+Challenge activity is logged in a top-level `challenge` object. The `rule.result` field remains the final request disposition such as `proxy`, `block`, or `rate_limit`; challenge outcomes such as `issued_html`, `issued_non_html`, `passed`, `verify_success`, and `verify_failed` are recorded under `challenge.outcome`. Challenge logs include `challenge.rule.id/name` and `challenge.action.id/name`, captured from the challenge token when verification or clearance events are logged.
+
 ### Configuration
 
 ```json
@@ -248,9 +250,11 @@ FlowGuard uses a JSON configuration file for advanced filtering rules. The confi
   - `allow`: Allow request and stop rule processing
   - `block`: Block request with custom status/message
   - `rate_limit`: Rate limit requests based on defined thresholds
+  - `challenge`: Require a first-party proof-of-work browser challenge before continuing
 - **IP Database**: Configure IP geolocation database source and refresh interval
 - **Trusted Proxies**: Configure trusted proxy networks for proper client IP detection
 - **IP Lists**: Configure in-memory IP lists for high-performance matching
+- **Challenges**: Configure FlowGuard-owned challenge defaults and clearance cookies
 - **Logging**: Configure structured logging sinks (file, Loki, OpenObserve)
 
 #### JSON Schema Support
@@ -344,6 +348,74 @@ Rules support complex conditions with logical operators:
   - `iplist`: In-memory IP list matching (built-in, no dependencies)
   - `fingerprint-ja4`: JA4 TLS client fingerprint matching (HTTPS and HTTP/3 requests)
 - **Match Operations**: `equals`, `not-equals`, `contains`, `not-contains`, `starts-with`, `not-starts-with`, `ends-with`, `not-ends-with`, `regex`, `not-regex`, `in`, `not-in`, `exists`, `missing`
+
+### Bot Challenge Interstitials
+
+Rules can use the `challenge` action to require a browser to pass a same-origin proof-of-work check before reaching protected resources. FlowGuard serves its own challenge endpoints under the reserved `/fg-cgi/` prefix; requests to unknown `/fg-cgi/*` paths are handled by FlowGuard and are not proxied upstream.
+
+Successful challenges set an HTTP-only `fg_clearance` cookie. By default, clearance is scoped to the matching rule, lasts 30 minutes, and is bound to the client IP and User-Agent. Non-HTML requests fail closed with a machine-readable response and `X-FlowGuard-Challenge-URL` so API clients can be pre-cleared through a browser flow.
+
+When multiple challenge rules match the same request, the first matching challenge rule wins. Later challenge rules are skipped after the first one has either issued a challenge or accepted valid clearance, so overlapping challenge rules should be ordered intentionally. Nested or cumulative challenges are not supported.
+
+Proof-of-work defaults to calibrated PBKDF2-SHA256. Calibrated mode signs an explicit `work_units` target into the challenge and requires a sequential hash chain, which gives more predictable solve time than probabilistic leading-zero difficulty. If `work_units` is omitted, FlowGuard derives it from `difficulty_bits` so legacy difficulty tuning still changes the deterministic effort; set `work_units` directly when you want exact control. `difficulty_bits` is also used by configs that explicitly set `effort_mode` to `probabilistic`.
+
+Challenges also include a signed dwell-time gate. By default, the browser must remain on the challenge page for at least 1500ms before FlowGuard accepts verification, preventing instant 1ms interstitials even when the proof completes quickly.
+
+```json
+{
+  "challenges": {
+    "default_ttl_seconds": 1800,
+    "min_page_time_ms": 1500,
+    "pow": {
+      "algorithm": "pbkdf2-sha256",
+      "effort_mode": "calibrated",
+      "difficulty_bits": 18,
+      "challenge_ttl_seconds": 120,
+      "pbkdf2_iterations": 100
+    }
+  },
+  "rules": {
+    "challenge-admin": {
+      "action": "pow-admin",
+      "conditions": {
+        "matches": [
+          {
+            "type": "path",
+            "match": "starts-with",
+            "value": "/admin"
+          }
+        ]
+      }
+    }
+  },
+  "actions": {
+    "pow-admin": {
+      "action": "challenge",
+      "message": "Security check required",
+      "challenge": {
+        "type": "pow",
+        "clearance_scope": "rule",
+        "ttl_seconds": 1800,
+        "min_page_time_ms": 1500,
+        "algorithm": "pbkdf2-sha256",
+        "effort_mode": "calibrated",
+        "difficulty_bits": 18,
+        "pbkdf2_iterations": 100
+      }
+    }
+  }
+}
+```
+
+For local previewing, run:
+
+```bash
+./bin/dev-preview.sh
+```
+
+This builds `./flowguard` and starts a local-only preview server at `http://127.0.0.1:18080/` with links for the challenge, block, and rate-limit scenarios. The preview command does not install firewall rules and only fronts its own in-process demo backend.
+
+The preview command is behind the `devtools` Go build tag and is not included in normal or production builds.
 
 ### JA4 Fingerprints
 

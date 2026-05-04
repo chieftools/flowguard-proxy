@@ -58,6 +58,9 @@
         "heartbeat": {
             "$ref": "#/definitions/heartbeat_config"
         },
+        "challenges": {
+            "$ref": "#/definitions/challenges_config"
+        },
         "ip_database": {
             "$ref": "#/definitions/ip_database_config"
         },
@@ -318,7 +321,8 @@
                         "log",
                         "allow",
                         "block",
-                        "rate_limit"
+                        "rate_limit",
+                        "challenge"
                     ],
                     "description": "The type of action to take."
                 },
@@ -341,6 +345,9 @@
                     "type": "integer",
                     "minimum": 1,
                     "description": "Time window in seconds for rate limiting (for rate_limit actions)"
+                },
+                "challenge": {
+                    "$ref": "#/definitions/action_challenge_config"
                 }
             },
             "required": [
@@ -362,8 +369,91 @@
                             "window_seconds"
                         ]
                     }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "action": {
+                                "const": "challenge"
+                            }
+                        }
+                    },
+                    "then": {
+                        "properties": {
+                            "challenge": {
+                                "$ref": "#/definitions/action_challenge_config"
+                            }
+                        }
+                    }
                 }
             ]
+        },
+        "action_challenge_config": {
+            "type": "object",
+            "description": "Challenge behavior for challenge actions. V1 supports built-in proof-of-work only.",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": [
+                        "pow"
+                    ],
+                    "description": "Challenge type. Defaults to pow."
+                },
+                "clearance_scope": {
+                    "type": "string",
+                    "enum": [
+                        "rule",
+                        "host"
+                    ],
+                    "description": "Scope cleared by a successful challenge. Defaults to rule. Use host to clear other challenge rules on the same request host."
+                },
+                "ttl_seconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Clearance cookie lifetime for this action. Defaults to challenges.default_ttl_seconds. Set to 0 for a session clearance cookie with no signed clearance expiry."
+                },
+                "min_page_time_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 60000,
+                    "description": "Minimum time in milliseconds the challenge page must exist before verification is accepted. Defaults to challenges.min_page_time_ms. Set to 0 to disable the dwell-time gate."
+                },
+                "difficulty_bits": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 30,
+                    "description": "Leading-zero difficulty for probabilistic proof-of-work. In calibrated mode, this derives work_units when work_units is omitted. Defaults to challenges.pow.difficulty_bits."
+                },
+                "algorithm": {
+                    "type": "string",
+                    "enum": [
+                        "pbkdf2-sha256",
+                        "sha256"
+                    ],
+                    "description": "Proof-of-work algorithm for this action. Defaults to challenges.pow.algorithm."
+                },
+                "pbkdf2_iterations": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100000,
+                    "description": "PBKDF2 iteration count for this action when algorithm is pbkdf2-sha256. Defaults to challenges.pow.pbkdf2_iterations."
+                },
+                "effort_mode": {
+                    "type": "string",
+                    "enum": [
+                        "calibrated",
+                        "probabilistic"
+                    ],
+                    "description": "Proof-of-work effort mode. Calibrated uses a fixed work-unit count for predictable solve time; probabilistic uses leading-zero difficulty. Defaults to challenges.pow.effort_mode."
+                },
+                "work_units": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100000,
+                    "description": "Fixed sequential work-unit count for calibrated proof-of-work. Defaults to challenges.pow.work_units, or is derived from difficulty_bits when omitted."
+                }
+            },
+            "additionalProperties": false
         },
         "logger_config": {
             "type": "object",
@@ -636,6 +726,105 @@
                     "type": "integer",
                     "minimum": 0,
                     "description": "Random jitter applied as +/- seconds to each interval. Default: 30"
+                }
+            },
+            "additionalProperties": false
+        },
+        "challenges_config": {
+            "type": "object",
+            "description": "Global configuration for first-party FlowGuard challenge interstitials.",
+            "properties": {
+                "cookie_name": {
+                    "type": "string",
+                    "description": "Name of the HTTP-only clearance cookie. Defaults to fg_clearance."
+                },
+                "default_ttl_seconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Default clearance lifetime in seconds. Defaults to 1800. Set to 0 for session clearance cookies with no signed clearance expiry."
+                },
+                "min_page_time_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 60000,
+                    "description": "Default minimum time in milliseconds the challenge page must exist before verification is accepted. Defaults to 1500. Set to 0 to disable the dwell-time gate."
+                },
+                "bind_ip": {
+                    "type": "boolean",
+                    "description": "Bind challenge and clearance tokens to the client IP. Defaults to true."
+                },
+                "bind_user_agent": {
+                    "type": "boolean",
+                    "description": "Bind challenge and clearance tokens to the User-Agent. Defaults to true."
+                },
+                "non_html_status": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 599,
+                    "description": "Status code for matched non-HTML requests that cannot display an interstitial. Defaults to 202."
+                },
+                "max_attempts_per_window": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Maximum failed or successful verification attempts per client/window. Defaults to 20. Set to 0 to disable challenge attempt limiting."
+                },
+                "attempt_window_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Attempt limit window in seconds. Defaults to 60."
+                },
+                "secret": {
+                    "type": "string",
+                    "description": "Optional HMAC secret for challenge and clearance tokens. Defaults to host.key; otherwise a process-local key is generated."
+                },
+                "pow": {
+                    "$ref": "#/definitions/pow_challenge_config"
+                }
+            },
+            "additionalProperties": false
+        },
+        "pow_challenge_config": {
+            "type": "object",
+            "description": "Default settings for FlowGuard's built-in proof-of-work challenge.",
+            "properties": {
+                "challenge_ttl_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Signed proof-of-work challenge token lifetime in seconds. Defaults to 120."
+                },
+                "difficulty_bits": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 30,
+                    "description": "Default leading-zero difficulty for probabilistic proof-of-work. In calibrated mode, this derives work_units when work_units is omitted. Defaults to 18."
+                },
+                "algorithm": {
+                    "type": "string",
+                    "enum": [
+                        "pbkdf2-sha256",
+                        "sha256"
+                    ],
+                    "description": "Default proof-of-work algorithm. Defaults to pbkdf2-sha256."
+                },
+                "pbkdf2_iterations": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100000,
+                    "description": "Default PBKDF2 iteration count. Defaults to 100."
+                },
+                "effort_mode": {
+                    "type": "string",
+                    "enum": [
+                        "calibrated",
+                        "probabilistic"
+                    ],
+                    "description": "Default proof-of-work effort mode. Defaults to calibrated."
+                },
+                "work_units": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100000,
+                    "description": "Default fixed sequential work-unit count for calibrated proof-of-work. If omitted, FlowGuard derives it from difficulty_bits; difficulty 18 maps to 8192 and high values clamp at 100000."
                 }
             },
             "additionalProperties": false

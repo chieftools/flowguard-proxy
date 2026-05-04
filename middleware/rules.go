@@ -37,6 +37,7 @@ type IPListManager interface {
 // RulesMiddleware implements dynamic rule-based filtering
 type RulesMiddleware struct {
 	configMgr     ConfigProvider
+	challenges    *ChallengeManager
 	rateLimiter   *RateLimiter
 	keyGenerator  *RateLimitKeyGenerator
 	ipListManager IPListManager
@@ -46,6 +47,7 @@ type RulesMiddleware struct {
 func NewRulesMiddleware(configMgr ConfigProvider) *RulesMiddleware {
 	return &RulesMiddleware{
 		configMgr:    configMgr,
+		challenges:   NewChallengeManager(configMgr),
 		rateLimiter:  NewRateLimiter(time.Minute * 10), // Stop every 10 minutes
 		keyGenerator: NewRateLimitKeyGenerator(),
 	}
@@ -58,6 +60,11 @@ func (rm *RulesMiddleware) SetIPListManager(manager IPListManager) {
 
 // Handle evaluates the request against all rules using HTTP middleware pattern
 func (rm *RulesMiddleware) Handle(w http.ResponseWriter, r *http.Request, next http.Handler) {
+	if strings.HasPrefix(r.URL.Path, FlowGuardCGIPrefix) {
+		rm.challenges.HandleInternal(w, r)
+		return
+	}
+
 	// Get pre-sorted rules for efficient iteration
 	rules := rm.configMgr.GetSortedRules()
 
@@ -96,9 +103,10 @@ ruleLoop:
 
 			case "rate_limit":
 				// We only support one rate limit match per request
-				if GetRuleMatched(r) != nil {
+				if GetRateLimitApplied(r) {
 					continue
 				}
+				SetRateLimitApplied(r)
 
 				allowed, remaining, resetTime := rm.rateLimiter.IsAllowed(
 					rm.keyGenerator.GenerateKey(rule.ID, rule, r),
@@ -119,6 +127,36 @@ ruleLoop:
 				// We allow the request, but we mark it as matched but without an action taken
 				SetRuleMatch(r, rule, nil, "proxy")
 				continue
+
+			case "challenge":
+				if GetChallengeMatched(r) {
+					continue
+				}
+				SetChallengeMatched(r)
+
+				scope := effectiveClearanceScope(action)
+				if valid, reason, clearance := rm.challenges.ClearanceStatus(r, rule, action); valid {
+					SetRuleMatch(r, rule, action, "proxy")
+					SetChallengeInfo(r, RequestLogEntryChallengeInfo{
+						Outcome: "passed",
+						Rule:    challengeRuleRefFromPayload(clearance),
+						Action:  challengeActionRefFromPayload(clearance),
+						Scope:   scope,
+					})
+					continue
+				} else {
+					SetChallengeInfo(r, RequestLogEntryChallengeInfo{
+						Outcome: challengeIssuedOutcome(r),
+						Reason:  reason,
+						Rule:    challengeRuleRef(rule),
+						Action:  challengeActionRef(action),
+						Scope:   scope,
+					})
+				}
+
+				SetRuleMatch(r, rule, action, "block")
+				rm.challenges.ChallengeRequest(w, r, rule, action)
+				return
 
 			default:
 				log.Printf("[middleware:rules] Unknown action type: %s", action.Action)
@@ -486,6 +524,9 @@ func (rm *RulesMiddleware) matchesIPList(r *http.Request, match *config.MatchCon
 func (rm *RulesMiddleware) Stop() {
 	if rm.rateLimiter != nil {
 		rm.rateLimiter.Stop()
+	}
+	if rm.challenges != nil {
+		rm.challenges.Stop()
 	}
 }
 

@@ -19,6 +19,7 @@ type Config struct {
 	Firewall       *FirewallConfig        `json:"firewall,omitempty"`
 	Realtime       *pusher.Config         `json:"realtime,omitempty"`
 	Heartbeat      *HeartbeatConfig       `json:"heartbeat,omitempty"`
+	Challenges     *ChallengesConfig      `json:"challenges,omitempty"`
 	IPDatabase     *IPDatabaseConfig      `json:"ip_database,omitempty"`
 	TrustedProxies *TrustedProxiesConfig  `json:"trusted_proxies,omitempty"`
 }
@@ -72,6 +73,29 @@ type HeartbeatConfig struct {
 	IntervalSeconds int   `json:"interval_seconds,omitempty"`
 }
 
+type ChallengesConfig struct {
+	CookieName           string `json:"cookie_name,omitempty"`
+	DefaultTTLSeconds    *int   `json:"default_ttl_seconds,omitempty"`
+	MinPageTimeMs        *int   `json:"min_page_time_ms,omitempty"`
+	BindIP               *bool  `json:"bind_ip,omitempty"`
+	BindUserAgent        *bool  `json:"bind_user_agent,omitempty"`
+	NonHTMLStatus        int    `json:"non_html_status,omitempty"`
+	MaxAttemptsPerWindow *int   `json:"max_attempts_per_window,omitempty"`
+	AttemptWindowSeconds *int   `json:"attempt_window_seconds,omitempty"`
+	Secret               string `json:"secret,omitempty"`
+
+	PoW *PoWChallengeConfig `json:"pow,omitempty"`
+}
+
+type PoWChallengeConfig struct {
+	ChallengeTTLSeconds *int   `json:"challenge_ttl_seconds,omitempty"`
+	DifficultyBits      int    `json:"difficulty_bits,omitempty"`
+	Algorithm           string `json:"algorithm,omitempty"`
+	PBKDF2Iterations    int    `json:"pbkdf2_iterations,omitempty"`
+	EffortMode          string `json:"effort_mode,omitempty"`
+	WorkUnits           int    `json:"work_units,omitempty"`
+}
+
 type IPDatabaseConfig struct {
 	URL                    string `json:"url"`
 	RefreshIntervalSeconds int    `json:"refresh_interval_seconds"`
@@ -101,13 +125,14 @@ type Rule struct {
 }
 
 type RuleAction struct {
-	ID                string // Action ID from the map key
-	Name              string `json:"name"`
-	Action            string `json:"action"`                        // "block" or "rate_limit"
-	Status            int    `json:"status,omitempty"`              // HTTP status code (for block actions)
-	Message           string `json:"message,omitempty"`             // Response message (for block actions)
-	WindowSeconds     int    `json:"window_seconds,omitempty"`      // Time window in seconds (for rate_limit actions)
-	RequestsPerWindow int    `json:"requests_per_window,omitempty"` // Max requests in time window (for rate_limit actions)
+	ID                string                     // Action ID from the map key
+	Name              string                     `json:"name"`
+	Action            string                     `json:"action"`                        // "log", "allow", "block", "rate_limit", or "challenge"
+	Status            int                        `json:"status,omitempty"`              // HTTP status code (for block actions)
+	Message           string                     `json:"message,omitempty"`             // Response message (for block actions)
+	WindowSeconds     int                        `json:"window_seconds,omitempty"`      // Time window in seconds (for rate_limit actions)
+	RequestsPerWindow int                        `json:"requests_per_window,omitempty"` // Max requests in time window (for rate_limit actions)
+	Challenge         *RuleActionChallengeConfig `json:"challenge,omitempty"`
 }
 
 type RuleConditions struct {
@@ -128,6 +153,18 @@ type MatchCondition struct {
 	Family          uint     `json:"family,omitempty"`     // For ipset matches (4 or 6)
 	RawMatch        bool     `json:"raw_match,omitempty"`  // Skip normalization for path matching
 	compiledRegex   *regexp.Regexp
+}
+
+type RuleActionChallengeConfig struct {
+	Type             string `json:"type,omitempty"`
+	TTLSeconds       *int   `json:"ttl_seconds,omitempty"`
+	MinPageTimeMs    *int   `json:"min_page_time_ms,omitempty"`
+	DifficultyBits   int    `json:"difficulty_bits,omitempty"`
+	Algorithm        string `json:"algorithm,omitempty"`
+	PBKDF2Iterations int    `json:"pbkdf2_iterations,omitempty"`
+	EffortMode       string `json:"effort_mode,omitempty"`
+	WorkUnits        int    `json:"work_units,omitempty"`
+	ClearanceScope   string `json:"clearance_scope,omitempty"`
 }
 
 // GetCompiledRegex returns the compiled regex for a MatchCondition
