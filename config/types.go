@@ -118,7 +118,7 @@ type RuleConditions struct {
 }
 
 type MatchCondition struct {
-	Type            string   `json:"type"`          // path, domain, ip, agent, header, asn, ipset, iplist
+	Type            string   `json:"type"`          // path, domain, ip, agent, header, asn, ipset, iplist, fingerprint-ja4
 	Match           string   `json:"match"`         // equals, contains, regex, in, not-in, etc.
 	Key             string   `json:"key,omitempty"` // For header matches: the header name
 	Value           string   `json:"value,omitempty"`

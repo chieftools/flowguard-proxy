@@ -219,7 +219,8 @@
                         "continent",
                         "ipset",
                         "iplist",
-                        "registerable-domain"
+                        "registerable-domain",
+                        "fingerprint-ja4"
                     ],
                     "description": "The type of value to match against"
                 },

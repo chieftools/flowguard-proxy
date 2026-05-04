@@ -36,11 +36,6 @@ type RequestLogEntryIPInfo struct {
 	AS *RequestLogEntryIPASInfo `json:"as,omitempty"`
 }
 
-type RequestLogEntryTLSInfo struct {
-	Cipher  string `json:"cipher,omitempty"`
-	Version string `json:"version,omitempty"`
-}
-
 type RequestLogEntryHostInfo struct {
 	ID      string `json:"id,omitempty"`
 	Name    string `json:"name,omitempty"`
@@ -69,14 +64,14 @@ type RequestLogEntryIPASInfo struct {
 }
 
 type RequestLogEntryRequestInfo struct {
-	Method      string            `json:"method"`
-	Headers     map[string]string `json:"headers,omitempty"`
-	HeaderNames []string          `json:"header_names,omitempty"`
-	HTTPVersion string            `json:"http_version"`
-
-	TLS  *RequestLogEntryTLSInfo       `json:"tls,omitempty"`
-	URL  RequestLogEntryRequestURLInfo `json:"url"`
-	Body *RequestLogEntryBodyInfo      `json:"body,omitempty"`
+	TLS         *RequestLogEntryTLSInfo         `json:"tls,omitempty"`
+	URL         RequestLogEntryRequestURLInfo   `json:"url"`
+	Body        *RequestLogEntryBodyInfo        `json:"body,omitempty"`
+	Method      string                          `json:"method"`
+	Headers     map[string]string               `json:"headers,omitempty"`
+	HeaderNames []string                        `json:"header_names,omitempty"`
+	HTTPVersion string                          `json:"http_version"`
+	Fingerprint *RequestLogEntryFingerprintInfo `json:"fingerprint,omitempty"`
 }
 
 type RequestLogEntryResponseInfo struct {
@@ -88,8 +83,9 @@ type RequestLogEntryResponseInfo struct {
 	Body *RequestLogEntryBodyInfo `json:"body,omitempty"`
 }
 
-type RequestLogEntryBodyInfo struct {
-	Size int64 `json:"body_size,omitempty"`
+type RequestLogEntryTLSInfo struct {
+	Cipher  string `json:"cipher,omitempty"`
+	Version string `json:"version,omitempty"`
 }
 
 type RequestLogEntryRequestURLInfo struct {
@@ -100,6 +96,14 @@ type RequestLogEntryRequestURLInfo struct {
 	Domain             string `json:"domain"`
 	NormalizedPath     string `json:"normalized_path"`
 	RegisterableDomain string `json:"registerable_domain"`
+}
+
+type RequestLogEntryBodyInfo struct {
+	Size int64 `json:"body_size,omitempty"`
+}
+
+type RequestLogEntryFingerprintInfo struct {
+	JA4 string `json:"ja4,omitempty"`
 }
 
 type RequestLogEntryCloudflareInfo struct {
@@ -315,6 +319,17 @@ func getTLSInfo(r *http.Request) *RequestLogEntryTLSInfo {
 	}
 }
 
+func getFingerprintInfo(r *http.Request) *RequestLogEntryFingerprintInfo {
+	ja4 := GetJA4Fingerprint(r)
+	if ja4 == "" {
+		return nil
+	}
+
+	return &RequestLogEntryFingerprintInfo{
+		JA4: ja4,
+	}
+}
+
 func getRuleInfo(r *http.Request) RequestLogEntryRuleInfo {
 	info := RequestLogEntryRuleInfo{
 		Result: GetRuleResult(r),
@@ -398,14 +413,14 @@ func getRequestInfo(r *http.Request, whitelist []string) RequestLogEntryRequestI
 	}
 
 	return RequestLogEntryRequestInfo{
-		TLS:  getTLSInfo(r),
-		URL:  getRequestURLInfo(r),
-		Body: bodyInfo,
-
+		TLS:         getTLSInfo(r),
+		URL:         getRequestURLInfo(r),
+		Body:        bodyInfo,
 		Method:      r.Method,
 		Headers:     headers,
 		HeaderNames: headerNames,
 		HTTPVersion: r.Proto,
+		Fingerprint: getFingerprintInfo(r),
 	}
 }
 

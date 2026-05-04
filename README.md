@@ -226,7 +226,7 @@ FlowGuard provides structured logging with multiple simultaneous destinations (s
 ### Log Entry Format
 
 Each log entry includes:
-- Request details (method, URL, headers, TLS info)
+- Request details (method, URL, headers, TLS info, JA4 fingerprint when available)
 - Client information (IP, country, ASN)
 - Rule matching results (which rule matched, action taken)
 - Response details (status, timing, headers)
@@ -342,7 +342,32 @@ Rules support complex conditions with logical operators:
   - `continent`: Continent code matching (from GeoIP database)
   - `ipset`: Linux ipset membership checking (external tool required)
   - `iplist`: In-memory IP list matching (built-in, no dependencies)
+  - `fingerprint-ja4`: JA4 TLS client fingerprint matching (HTTPS and HTTP/3 requests)
 - **Match Operations**: `equals`, `not-equals`, `contains`, `not-contains`, `starts-with`, `not-starts-with`, `ends-with`, `not-ends-with`, `regex`, `not-regex`, `in`, `not-in`, `exists`, `missing`
+
+### JA4 Fingerprints
+
+FlowGuard logs JA4 TLS client fingerprints at `request.fingerprint.ja4` for HTTPS and HTTP/3 requests. Cleartext HTTP requests do not have a JA4 fingerprint.
+
+JA4 is useful as one bot signal alongside IP, ASN, user-agent, path, and rate limits. Avoid blocking on a fingerprint alone unless you have validated it against your own traffic.
+
+**Exact match:**
+```json
+{
+  "type": "fingerprint-ja4",
+  "match": "equals",
+  "value": "t13d1516h2_8daaf6152771_02713d6af862"
+}
+```
+
+**Match a JA4 prefix:**
+```json
+{
+  "type": "fingerprint-ja4",
+  "match": "starts-with",
+  "value": "t13d1516h2_"
+}
+```
 
 ## Security Configuration
 

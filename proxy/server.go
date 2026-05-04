@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"flowguard/config"
+	"flowguard/fingerprint"
 	"flowguard/middleware"
 
 	"github.com/quic-go/quic-go"
@@ -31,6 +32,7 @@ type Server struct {
 	httpServer      *http.Server
 	http3Server     *http3.Server
 	listenerOnce    sync.Once
+	fingerprints    *fingerprint.Store
 	interfaceLookup func(string) (string, error)
 }
 
@@ -49,12 +51,14 @@ func NewServer(config *ServerConfig) *Server {
 	return &Server{
 		config:          config,
 		runner:          execFirewallRunner{},
+		fingerprints:    fingerprint.NewStore(),
 		interfaceLookup: getInterfaceForIP,
 	}
 }
 
 func (s *Server) serve(server *http.Server, listener net.Listener, tlsConfig *tls.Config, errChan chan<- error) {
 	if tlsConfig != nil {
+		listener = ja4Listener{Listener: listener}
 		listener = tls.NewListener(listener, tlsConfig)
 	}
 
@@ -72,6 +76,8 @@ func (s *Server) serveHTTP3(server *http3.Server, conn net.PacketConn, errChan c
 }
 
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
+	r = s.withJA4Fingerprint(r)
+
 	// Create the proxy handler that will be called after middleware processing
 	proxyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Create target URL that points to the actual backend server
@@ -91,6 +97,29 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Let the middleware chain handle the request with the proxy as the final handler
 	s.config.middleware.ServeHTTPWithHandler(w, r, proxyHandler)
+}
+
+func (s *Server) withJA4Fingerprint(r *http.Request) *http.Request {
+	if middleware.GetJA4Fingerprint(r) != "" {
+		return r
+	}
+
+	if conn, ok := r.Context().Value(ja4ConnContextKey{}).(*ja4Conn); ok {
+		if ja4 := conn.JA4(); ja4 != "" {
+			return middleware.WithJA4Fingerprint(r, ja4)
+		}
+	}
+
+	localAddr, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	if localAddr == nil {
+		return r
+	}
+
+	if ja4 := s.fingerprints.Get(localAddr.String(), r.RemoteAddr); ja4 != "" {
+		return middleware.WithJA4Fingerprint(r, ja4)
+	}
+
+	return r
 }
 
 func (s *Server) markListenerClosed() {
@@ -208,6 +237,7 @@ func (s *Server) Start(tlsConfig *tls.Config, errChan chan<- error) error {
 	protocols := s.config.resolvedProtocols()
 	tcpEnabled := protocols.HTTP1 || (tlsConfig != nil && protocols.HTTP2)
 	udpEnabled := tlsConfig != nil && protocols.HTTP3
+	tcpTLSConfig := s.tlsConfigWithJA4(tlsConfig, "t")
 
 	if !tcpEnabled && !udpEnabled {
 		return fmt.Errorf("[%s:%s] %s server has no enabled protocols", s.config.bindAddr, s.config.bindPort, s.config.scheme)
@@ -217,8 +247,9 @@ func (s *Server) Start(tlsConfig *tls.Config, errChan chan<- error) error {
 		Addr:         addr,
 		Handler:      http.HandlerFunc(s.handleRequest),
 		ErrorLog:     newFilteredLogger(s.config.verbose),
-		TLSConfig:    tlsConfig,
-		Protocols:    httpServerProtocols(protocols, tlsConfig != nil),
+		TLSConfig:    tcpTLSConfig,
+		Protocols:    httpServerProtocols(protocols, tcpTLSConfig != nil),
+		ConnContext:  s.tcpConnContext,
 		ReadTimeout:  300 * time.Second,
 		IdleTimeout:  900 * time.Second,
 		WriteTimeout: 300 * time.Second,
@@ -234,7 +265,7 @@ func (s *Server) Start(tlsConfig *tls.Config, errChan chan<- error) error {
 
 		s.listener = listener
 
-		go s.serve(s.httpServer, listener, tlsConfig, errChan)
+		go s.serve(s.httpServer, listener, tcpTLSConfig, errChan)
 	}
 
 	if udpEnabled {
@@ -253,15 +284,84 @@ func (s *Server) Start(tlsConfig *tls.Config, errChan chan<- error) error {
 		s.http3Server = &http3.Server{
 			Addr:        addr,
 			Handler:     http.HandlerFunc(s.handleRequest),
-			TLSConfig:   http3.ConfigureTLSConfig(tlsConfig),
+			TLSConfig:   http3.ConfigureTLSConfig(s.tlsConfigWithJA4(tlsConfig, "q")),
 			QUICConfig:  &quic.Config{},
 			IdleTimeout: 900 * time.Second,
+			ConnContext: s.http3ConnContext,
 		}
 
 		go s.serveHTTP3(s.http3Server, s.udpConn, errChan)
 	}
 
 	return nil
+}
+
+func (s *Server) tlsConfigWithJA4(tlsConfig *tls.Config, transport string) *tls.Config {
+	if tlsConfig == nil {
+		return nil
+	}
+
+	cfg := tlsConfig.Clone()
+	getConfigForClient := cfg.GetConfigForClient
+	cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		s.recordJA4Fingerprint(hello, transport)
+		if getConfigForClient == nil {
+			return nil, nil
+		}
+		return getConfigForClient(hello)
+	}
+
+	return cfg
+}
+
+func (s *Server) recordJA4Fingerprint(hello *tls.ClientHelloInfo, transport string) {
+	if hello == nil || hello.Conn == nil {
+		return
+	}
+
+	ja4 := fingerprint.JA4FromClientHello(hello, transport)
+	if ja4 == "" {
+		return
+	}
+
+	if conn, ok := hello.Conn.(*ja4Conn); ok {
+		conn.SetJA4(ja4)
+		return
+	}
+
+	s.fingerprints.Set(hello.Conn.LocalAddr().String(), hello.Conn.RemoteAddr().String(), ja4)
+}
+
+func (s *Server) tcpConnContext(ctx context.Context, conn net.Conn) context.Context {
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		conn = tlsConn.NetConn()
+	}
+
+	if ja4Conn, ok := conn.(*ja4Conn); ok {
+		return context.WithValue(ctx, ja4ConnContextKey{}, ja4Conn)
+	}
+
+	return ctx
+}
+
+func (s *Server) http3ConnContext(ctx context.Context, conn *quic.Conn) context.Context {
+	if conn == nil {
+		return ctx
+	}
+
+	localAddr := conn.LocalAddr().String()
+	remoteAddr := conn.RemoteAddr().String()
+	ja4 := s.fingerprints.Get(localAddr, remoteAddr)
+	if ja4 == "" {
+		return ctx
+	}
+
+	go func() {
+		<-conn.Context().Done()
+		s.fingerprints.Delete(localAddr, remoteAddr)
+	}()
+
+	return middleware.ContextWithJA4Fingerprint(ctx, ja4)
 }
 
 func (s *Server) Shutdown(ctx context.Context) {

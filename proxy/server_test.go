@@ -125,6 +125,87 @@ func TestHTTPSReverseProxyTransportAttemptsHTTP2(t *testing.T) {
 	}
 }
 
+func TestServerRecordsAndAttachesTCPJA4Fingerprint(t *testing.T) {
+	server := NewServer(&ServerConfig{
+		scheme:     "https",
+		bindAddr:   "127.0.0.1",
+		bindPort:   "443",
+		middleware: middleware.NewChain(),
+	})
+
+	localAddr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 443}
+	remoteAddr := &net.TCPAddr{IP: net.ParseIP("192.0.2.10"), Port: 51515}
+	conn := &ja4Conn{Conn: fakeConn{localAddr: localAddr, remoteAddr: remoteAddr}}
+
+	tlsConfig := server.tlsConfigWithJA4(&tls.Config{}, "t")
+	_, err := tlsConfig.GetConfigForClient(&tls.ClientHelloInfo{
+		Conn:              conn,
+		CipherSuites:      []uint16{tls.TLS_AES_128_GCM_SHA256},
+		Extensions:        []uint16{0x002b},
+		SupportedVersions: []uint16{tls.VersionTLS13},
+		ServerName:        "example.com",
+		SupportedProtos:   []string{"h2"},
+	})
+	if err != nil {
+		t.Fatalf("GetConfigForClient: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "https://example.com/test", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.RemoteAddr = remoteAddr.String()
+	req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, localAddr))
+	req = req.WithContext(server.tcpConnContext(req.Context(), conn))
+
+	req = server.withJA4Fingerprint(req)
+	if got := middleware.GetJA4Fingerprint(req); got != "t13d0101h2_0f2cb44170f4_b9a491fefe05" {
+		t.Fatalf("unexpected JA4 fingerprint: %q", got)
+	}
+}
+
+func TestServerRecordsQUICJA4Fingerprint(t *testing.T) {
+	server := NewServer(&ServerConfig{
+		scheme:     "https",
+		bindAddr:   "127.0.0.1",
+		bindPort:   "443",
+		middleware: middleware.NewChain(),
+	})
+
+	localAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 443}
+	remoteAddr := &net.UDPAddr{IP: net.ParseIP("192.0.2.10"), Port: 51515}
+
+	tlsConfig := server.tlsConfigWithJA4(&tls.Config{}, "q")
+	_, err := tlsConfig.GetConfigForClient(&tls.ClientHelloInfo{
+		Conn:              fakeConn{localAddr: localAddr, remoteAddr: remoteAddr},
+		CipherSuites:      []uint16{tls.TLS_AES_128_GCM_SHA256},
+		Extensions:        []uint16{0x002b},
+		SupportedVersions: []uint16{tls.VersionTLS13},
+		SupportedProtos:   []string{"h3"},
+	})
+	if err != nil {
+		t.Fatalf("GetConfigForClient: %v", err)
+	}
+
+	if got := server.fingerprints.Get(localAddr.String(), remoteAddr.String()); got != "q13i0101h3_0f2cb44170f4_b9a491fefe05" {
+		t.Fatalf("unexpected JA4 fingerprint: %q", got)
+	}
+}
+
+type fakeConn struct {
+	localAddr  net.Addr
+	remoteAddr net.Addr
+}
+
+func (c fakeConn) Read([]byte) (int, error)         { return 0, nil }
+func (c fakeConn) Write([]byte) (int, error)        { return 0, nil }
+func (c fakeConn) Close() error                     { return nil }
+func (c fakeConn) LocalAddr() net.Addr              { return c.localAddr }
+func (c fakeConn) RemoteAddr() net.Addr             { return c.remoteAddr }
+func (c fakeConn) SetDeadline(time.Time) error      { return nil }
+func (c fakeConn) SetReadDeadline(time.Time) error  { return nil }
+func (c fakeConn) SetWriteDeadline(time.Time) error { return nil }
+
 func TestReverseProxyPreservesOriginAltSvc(t *testing.T) {
 	server := NewServer(&ServerConfig{
 		scheme:   "https",

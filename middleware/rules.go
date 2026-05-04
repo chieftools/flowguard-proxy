@@ -272,6 +272,11 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 		return rm.matchesStringValue(value, match)
 	case "user-agent":
 		value = r.Header.Get("User-Agent")
+	case "fingerprint-ja4":
+		value = GetJA4Fingerprint(r)
+		if value == "" {
+			return false
+		}
 	case "ip":
 		clientIP := GetClientIP(r)
 		host, _, err := net.SplitHostPort(clientIP)
@@ -748,6 +753,11 @@ func (kg *RateLimitKeyGenerator) extractKeyParts(conditions *config.RuleConditio
 			}
 		case "path":
 			*keyParts = append(*keyParts, "path:"+r.URL.Path)
+		case "fingerprint-ja4":
+			ja4 := GetJA4Fingerprint(r)
+			if ja4 != "" {
+				*keyParts = append(*keyParts, "fingerprint-ja4:"+ja4)
+			}
 		case "header":
 			headerName := match.Key
 			if headerName != "" {
