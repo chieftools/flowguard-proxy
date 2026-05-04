@@ -410,10 +410,10 @@ Challenges also include a signed dwell-time gate. By default, the browser must r
 For local previewing, run:
 
 ```bash
-./bin/dev-preview.sh
+./bin/dev.sh
 ```
 
-This builds `./flowguard` and starts a local-only preview server at `http://127.0.0.1:18080/` with links for the challenge, block, and rate-limit scenarios. The preview command does not install firewall rules and only fronts its own in-process demo backend.
+This builds `./flowguard` and runs `./flowguard dev`, starting a local-only preview server at `http://127.0.0.1:18080/` with links for the challenge, block, and rate-limit scenarios. The preview command does not install firewall rules and only fronts its own in-process demo backend.
 
 The preview command is behind the `devtools` Go build tag and is not included in normal or production builds.
 
