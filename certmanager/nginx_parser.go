@@ -49,13 +49,13 @@ func parseNginxConfig(configPath string, verbose bool) ([]Certificate, []string,
 
 	// Parse the main config and all included files
 	allConfigFiles := []string{absConfigPath}
-	if err := parser.parseFile(configPath); err != nil {
+	if err := parser.parseFile(absConfigPath, true); err != nil {
 		return nil, nil, err
 	}
 
 	// Collect all visited files for watching
 	for file := range parser.visitedFiles {
-		if file != configPath {
+		if file != absConfigPath {
 			allConfigFiles = append(allConfigFiles, file)
 		}
 	}
@@ -72,8 +72,9 @@ func parseNginxConfig(configPath string, verbose bool) ([]Certificate, []string,
 	return pairs, allConfigFiles, nil
 }
 
-// parseFile recursively parses a config file and any included files
-func (p *parser) parseFile(path string) error {
+// parseFile recursively parses a config file and any included files.
+// The main config must be readable, while missing include files are non-fatal.
+func (p *parser) parseFile(path string, required bool) error {
 	// Resolve to absolute path
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -91,6 +92,9 @@ func (p *parser) parseFile(path string) error {
 	if err != nil {
 		if p.verbose {
 			log.Printf("[nginx_parser] Warning: Failed to open %s: %v", absPath, err)
+		}
+		if required {
+			return err
 		}
 		return nil // Don't fail on missing includes
 	}
@@ -174,14 +178,14 @@ func (p *parser) parseFile(path string) error {
 					continue
 				}
 				for _, match := range matches {
-					if err := p.parseFile(match); err != nil {
+					if err := p.parseFile(match, false); err != nil {
 						if p.verbose {
 							log.Printf("[nginx_parser] Warning: Failed to parse included file %s: %v", match, err)
 						}
 					}
 				}
 			} else {
-				if err := p.parseFile(includePath); err != nil {
+				if err := p.parseFile(includePath, false); err != nil {
 					if p.verbose {
 						log.Printf("[nginx_parser] Warning: Failed to parse included file %s: %v", includePath, err)
 					}

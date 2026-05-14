@@ -159,12 +159,34 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 		})
 	}
 
-	// Verify that at least some certificates were loaded
-	if pm.certManager.HostnameCount() == 0 {
-		return nil, fmt.Errorf("no valid certificates found (checked cert_path=%q, nginx_config_path=%q)", certPath, nginxConfigPath)
+	if err := pm.validateCertificateSources(certPath, nginxConfigPath); err != nil {
+		pm.certManager.Stop()
+		pm.middlewareChain.Stop()
+		return nil, err
 	}
 
 	return pm, nil
+}
+
+func (p *Manager) validateCertificateSources(certPath, nginxConfigPath string) error {
+	if p.certManager.HostnameCount() > 0 {
+		return nil
+	}
+
+	if nginxConfigPath != "" && p.certManager.NginxConfigLoaded() {
+		log.Printf("[cert_manager] No certificates loaded, but readable NGINX config %s was found; allowing proxy startup", nginxConfigPath)
+		return nil
+	}
+
+	if certPath != "" {
+		return fmt.Errorf("no valid certificates found in cert_path=%q", certPath)
+	}
+
+	if nginxConfigPath != "" {
+		return fmt.Errorf("no valid certificates found and nginx_config_path=%q could not be read", nginxConfigPath)
+	}
+
+	return fmt.Errorf("no certificate sources configured")
 }
 
 // initializeIPListManager creates and initializes the IP list manager from config

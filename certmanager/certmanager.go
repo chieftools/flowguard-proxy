@@ -41,14 +41,15 @@ type certificateWithMetadata struct {
 
 // Manager handles SSL/TLS certificate loading and management
 type Manager struct {
-	config           Config
-	watcher          *fsnotify.Watcher
-	stopChan         chan struct{}
-	cacheMutex       sync.RWMutex
-	watchedDirs      map[string]bool                       // Track which directories we're watching
-	hostnameCache    map[string][]*certificateWithMetadata // Maps hostname to array of certificates
-	nginxCertFiles   []string                              // List of certificate files referenced in NGINX config
-	nginxConfigFiles []string                              // List of NGINX config files to watch
+	config            Config
+	watcher           *fsnotify.Watcher
+	stopChan          chan struct{}
+	cacheMutex        sync.RWMutex
+	watchedDirs       map[string]bool                       // Track which directories we're watching
+	hostnameCache     map[string][]*certificateWithMetadata // Maps hostname to array of certificates
+	nginxCertFiles    []string                              // List of certificate files referenced in NGINX config
+	nginxConfigFiles  []string                              // List of NGINX config files to watch
+	nginxConfigLoaded bool                                  // True when the configured NGINX config was read successfully
 }
 
 // New creates a new certificate manager
@@ -92,6 +93,13 @@ func (cm *Manager) HostnameCount() int {
 	cm.cacheMutex.RLock()
 	defer cm.cacheMutex.RUnlock()
 	return len(cm.hostnameCache)
+}
+
+// NginxConfigLoaded reports whether the configured NGINX config was read successfully.
+func (cm *Manager) NginxConfigLoaded() bool {
+	cm.cacheMutex.RLock()
+	defer cm.cacheMutex.RUnlock()
+	return cm.nginxConfigLoaded
 }
 
 // GetTlsConfig returns the tls configuration for use in servers
@@ -586,6 +594,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	successCount := 0
 	fromDir := 0
 	fromNginx := 0
+	nginxConfigLoaded := false
 
 	// Load from certificate directory if provided
 	if cm.config.CertPath != "" {
@@ -647,6 +656,8 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 		if err != nil {
 			log.Printf("[cert_manager] Error parsing NGINX config %s: %v", cm.config.NginxConfigPath, err)
 		} else {
+			nginxConfigLoaded = true
+
 			// Store the list of config files for watching
 			cm.nginxConfigFiles = configFiles
 
@@ -723,6 +734,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	// Atomically swap the cache
 	cm.cacheMutex.Lock()
 	cm.hostnameCache = tempHostnameCache
+	cm.nginxConfigLoaded = nginxConfigLoaded
 	cm.cacheMutex.Unlock()
 
 	// Build status message
