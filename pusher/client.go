@@ -1,6 +1,7 @@
 package pusher
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,6 +12,12 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+)
+
+const (
+	websocketHandshakeTimeout = 10 * time.Second
+	websocketWriteTimeout     = 10 * time.Second
+	websocketCloseTimeout     = 2 * time.Second
 )
 
 // Config represents Realtime WebSocket configuration
@@ -64,11 +71,15 @@ type Client struct {
 	socketID       string
 	isConnected    bool
 	isConnecting   bool
+	connectCancel  context.CancelFunc
+	generation     uint64
 	reconnectTimer *time.Timer
 	stopChan       chan struct{}
 	eventHandlers  map[string]MessageHandler
 	mu             sync.RWMutex
+	writeMu        sync.Mutex
 	pingTicker     *time.Ticker
+	pingStop       chan struct{}
 }
 
 // NewClient creates a new Realtime client
@@ -90,37 +101,73 @@ func NewClient(cfg *Config, userAgent, hostKey string, verbose bool) *Client {
 // Connect establishes a connection to Realtime
 func (c *Client) Connect() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
-	if c.isConnected || c.isConnecting {
+	if c.isStoppedLocked() {
+		c.mu.Unlock()
+		return fmt.Errorf("realtime client is disconnected")
+	}
+
+	if c.config == nil {
+		c.mu.Unlock()
+		return fmt.Errorf("realtime configuration is missing")
+	}
+
+	if c.conn != nil || c.isConnecting {
+		c.mu.Unlock()
 		return nil
 	}
 
+	config := *c.config
+	userAgent := c.userAgent
+	generation := c.generation
+	ctx, cancel := context.WithTimeout(context.Background(), websocketHandshakeTimeout)
 	c.isConnecting = true
+	c.connectCancel = cancel
+	c.mu.Unlock()
+	defer cancel()
 
 	// Build WebSocket URL
-	wsURL := c.buildWebSocketURL()
+	wsURL := buildWebSocketURLFromConfig(&config)
 
 	// Set up WebSocket dialer
-	dialer := websocket.DefaultDialer
-	dialer.HandshakeTimeout = 10 * time.Second
+	dialer := *websocket.DefaultDialer
+	dialer.HandshakeTimeout = websocketHandshakeTimeout
 
 	// Connect to WebSocket
-	conn, _, err := dialer.Dial(wsURL, map[string][]string{
-		"User-Agent": {c.userAgent},
+	conn, _, err := dialer.DialContext(ctx, wsURL, map[string][]string{
+		"User-Agent": {userAgent},
 	})
-	if err != nil {
+
+	c.mu.Lock()
+	activeAttempt := c.generation == generation
+	if activeAttempt {
 		c.isConnecting = false
+		c.connectCancel = nil
+	}
+	if err != nil {
+		c.mu.Unlock()
 		return fmt.Errorf("failed to connect to WebSocket: %w", err)
 	}
 
-	c.conn = conn
-	c.isConnecting = false
+	if !activeAttempt || c.isStoppedLocked() || c.config == nil || !sameConfig(c.config, &config) || c.conn != nil {
+		c.mu.Unlock()
+		c.closeWebSocket(conn, websocket.CloseNormalClosure, "connection superseded")
+		return nil
+	}
 
-	log.Printf("[realtime] Connected to %s", c.config.Host)
+	c.conn = conn
+	c.socketID = ""
+	c.isConnected = false
+	if c.reconnectTimer != nil {
+		c.reconnectTimer.Stop()
+		c.reconnectTimer = nil
+	}
+	c.mu.Unlock()
+
+	log.Printf("[realtime] Connected to %s", config.Host)
 
 	// Start message handling
-	go c.handleMessages()
+	go c.handleMessages(conn)
 
 	return nil
 }
@@ -135,18 +182,17 @@ func (c *Client) IsConnected() bool {
 // UpdateConfig updates the Realtime configuration and reconnects if necessary
 func (c *Client) UpdateConfig(newConfig *Config) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	// If no config provided, disconnect
 	if newConfig == nil {
-		if c.conn != nil {
-			c.conn.Close()
-			c.conn = nil
-		}
-		c.config = nil
-		c.isConnected = false
-		c.isConnecting = false
+		c.mu.Unlock()
+		c.disconnect("configuration removed")
 		return nil
+	}
+
+	if c.isStoppedLocked() {
+		c.mu.Unlock()
+		return fmt.Errorf("realtime client is disconnected")
 	}
 
 	// Check if config has changed
@@ -160,19 +206,46 @@ func (c *Client) UpdateConfig(newConfig *Config) error {
 
 	c.config = newConfig
 
-	// If config changed and we're connected, reconnect
-	if configChanged && c.conn != nil {
+	// If config changed, replace any current connection or in-flight connection attempt.
+	var connToClose *websocket.Conn
+	var cancelConnect context.CancelFunc
+	shouldReconnect := false
+
+	if configChanged {
 		log.Printf("[realtime] Configuration changed, reconnecting...")
 
-		c.conn.Close()
+		c.generation++
+		cancelConnect = c.connectCancel
+		c.connectCancel = nil
+		connToClose = c.conn
 		c.conn = nil
+		c.socketID = ""
 		c.isConnected = false
 		c.isConnecting = false
+		c.stopPingTickerLocked()
 
-		// Reconnect with new config
+		if c.reconnectTimer != nil {
+			c.reconnectTimer.Stop()
+			c.reconnectTimer = nil
+		}
+
+		shouldReconnect = true
+	}
+
+	c.mu.Unlock()
+
+	if cancelConnect != nil {
+		cancelConnect()
+	}
+	if connToClose != nil {
+		c.closeWebSocket(connToClose, websocket.CloseNormalClosure, "configuration changed")
+	}
+
+	if shouldReconnect {
 		go func() {
 			if err := c.Connect(); err != nil {
 				log.Printf("[realtime] Failed to reconnect with new config: %v", err)
+				c.scheduleReconnect()
 			}
 		}()
 	}
@@ -189,8 +262,11 @@ func (c *Client) OnEvent(eventType string, handler MessageHandler) {
 
 // Disconnect closes the Realtime connection
 func (c *Client) Disconnect() {
+	c.disconnect("client disconnecting")
+}
+
+func (c *Client) disconnect(reason string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	// Signal stop to prevent reconnections
 	select {
@@ -200,11 +276,15 @@ func (c *Client) Disconnect() {
 		close(c.stopChan)
 	}
 
+	c.generation++
+	cancelConnect := c.connectCancel
+	c.connectCancel = nil
+	connToClose := c.conn
+	c.conn = nil
+	c.socketID = ""
+
 	// Stop ping ticker
-	if c.pingTicker != nil {
-		c.pingTicker.Stop()
-		c.pingTicker = nil
-	}
+	c.stopPingTickerLocked()
 
 	// Stop reconnect timer
 	if c.reconnectTimer != nil {
@@ -212,53 +292,71 @@ func (c *Client) Disconnect() {
 		c.reconnectTimer = nil
 	}
 
-	// Close connection
-	if c.conn != nil {
-		c.conn.Close()
-		c.conn = nil
-	}
-
 	c.isConnected = false
 	c.isConnecting = false
+	c.config = nil
+	c.mu.Unlock()
+
+	if cancelConnect != nil {
+		cancelConnect()
+	}
+	if connToClose != nil {
+		c.closeWebSocket(connToClose, websocket.CloseNormalClosure, reason)
+	}
 
 	log.Printf("[realtime] Disconnected")
 }
 
 // buildWebSocketURL constructs the WebSocket URL based on configuration
 func (c *Client) buildWebSocketURL() string {
+	return buildWebSocketURLFromConfig(c.config)
+}
+
+func buildWebSocketURLFromConfig(config *Config) string {
+	if config == nil {
+		return ""
+	}
+
 	var host string
 	var port int
 	var scheme string
 
 	// Use custom host and port
-	host = c.config.Host
-	port = c.config.Port
+	host = config.Host
+	port = config.Port
 
-	if c.config.Encrypted {
+	if config.Encrypted {
 		scheme = "wss"
 	} else {
 		scheme = "ws"
 	}
 
-	return fmt.Sprintf("%s://%s:%d/app/%s?protocol=7&client=flowguard&version=1.0.0", scheme, host, port, c.config.Key)
+	return fmt.Sprintf("%s://%s:%d/app/%s?protocol=7&client=flowguard&version=1.0.0", scheme, host, port, config.Key)
 }
 
 // handleMessages handles incoming WebSocket messages
-func (c *Client) handleMessages() {
+func (c *Client) handleMessages(conn *websocket.Conn) {
 	defer func() {
+		shouldReconnect := false
+		wasActive := false
+
 		c.mu.Lock()
-		c.isConnected = false
-		if c.conn != nil {
-			c.conn.Close()
+		if c.conn == conn {
+			wasActive = true
 			c.conn = nil
+			c.socketID = ""
+			c.isConnected = false
+			c.stopPingTickerLocked()
+			shouldReconnect = !c.isStoppedLocked() && c.config != nil
 		}
 		c.mu.Unlock()
 
+		if wasActive {
+			conn.Close()
+		}
+
 		// Schedule reconnect if not stopped
-		select {
-		case <-c.stopChan:
-			return
-		default:
+		if shouldReconnect {
 			if c.verbose {
 				log.Printf("[realtime] Connection lost, scheduling reconnect...")
 			}
@@ -275,19 +373,25 @@ func (c *Client) handleMessages() {
 		}
 
 		var msg Message
-		err := c.conn.ReadJSON(&msg)
+		err := conn.ReadJSON(&msg)
 
 		if err != nil {
-			log.Printf("[realtime] Failed to read message: %v", err)
+			if c.isConnectionActive(conn) {
+				log.Printf("[realtime] Failed to read message: %v", err)
+			}
 			return
 		}
 
-		c.handlePusherMessage(msg)
+		c.handlePusherMessage(conn, msg)
 	}
 }
 
 // handlePusherMessage processes individual Realtime protocol messages
-func (c *Client) handlePusherMessage(msg Message) {
+func (c *Client) handlePusherMessage(conn *websocket.Conn, msg Message) {
+	if !c.isConnectionActive(conn) {
+		return
+	}
+
 	if c.verbose {
 		log.Printf("[realtime] %s => %s", msg.Event, msg.Data)
 	}
@@ -297,6 +401,10 @@ func (c *Client) handlePusherMessage(msg Message) {
 		var data ConnectionEstablishedMessageData
 		if err := msg.UnmarshalData(&data); err == nil {
 			c.mu.Lock()
+			if c.conn != conn || c.isStoppedLocked() {
+				c.mu.Unlock()
+				return
+			}
 			c.socketID = data.SocketID
 			c.isConnected = true
 			c.mu.Unlock()
@@ -306,11 +414,11 @@ func (c *Client) handlePusherMessage(msg Message) {
 			}
 
 			// Start ping ticker for keepalive
-			c.startPingTicker(data.ActivityTimeout)
+			c.startPingTicker(conn, data.ActivityTimeout)
 
 			// Subscribe to the configured channel
 			go func() {
-				if err := c.subscribeToChannel(); err != nil {
+				if err := c.subscribeToChannel(conn, data.SocketID); err != nil {
 					log.Printf("[realtime] Failed to subscribe to channel: %v", err)
 				}
 			}()
@@ -320,7 +428,9 @@ func (c *Client) handlePusherMessage(msg Message) {
 
 	case "pusher:ping":
 		// Respond to ping with pong
-		c.sendMessage(Message{Event: "pusher:pong"})
+		if err := c.sendMessageOnConn(conn, Message{Event: "pusher:pong"}); err != nil {
+			log.Printf("[realtime] Failed to send pong message: %v", err)
+		}
 
 	case "pusher:pong":
 		// Received pong response, nothing to do
@@ -341,23 +451,34 @@ func (c *Client) handlePusherMessage(msg Message) {
 }
 
 // startPingTicker starts the ping ticker for keepalive
-func (c *Client) startPingTicker(activityTimeout int) {
+func (c *Client) startPingTicker(conn *websocket.Conn, activityTimeout int) {
 	if activityTimeout <= 0 {
 		activityTimeout = 60 // Default 1 minute
 	}
 
+	ticker := time.NewTicker(time.Duration(activityTimeout) * time.Second)
+	stop := make(chan struct{})
+
 	c.mu.Lock()
-	if c.pingTicker != nil {
-		c.pingTicker.Stop()
+	if c.conn != conn || c.isStoppedLocked() {
+		c.mu.Unlock()
+		ticker.Stop()
+		return
 	}
-	c.pingTicker = time.NewTicker(time.Duration(activityTimeout) * time.Second)
+	c.stopPingTickerLocked()
+	c.pingTicker = ticker
+	c.pingStop = stop
 	c.mu.Unlock()
 
 	go func() {
 		for {
 			select {
-			case <-c.pingTicker.C:
-				c.sendMessage(Message{Event: "pusher:ping"})
+			case <-ticker.C:
+				if err := c.sendMessageOnConn(conn, Message{Event: "pusher:ping"}); err != nil && c.verbose {
+					log.Printf("[realtime] Failed to send ping message: %v", err)
+				}
+			case <-stop:
+				return
 			case <-c.stopChan:
 				return
 			}
@@ -370,30 +491,61 @@ func (c *Client) sendMessage(msg Message) error {
 	conn := c.conn
 	c.mu.RUnlock()
 
-	if conn != nil {
-		if msg.Data == nil {
-			msg.Data = json.RawMessage(`{}`)
-		}
-		encoded, err := json.Marshal(msg)
-		if err != nil {
-			log.Printf("[realtime] Failed to encode ping message: %v", err)
-		}
-		conn.WriteMessage(1, encoded)
+	return c.sendMessageOnConn(conn, msg)
+}
+
+func (c *Client) sendMessageOnConn(conn *websocket.Conn, msg Message) error {
+	if conn == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	if msg.Data == nil {
+		msg.Data = json.RawMessage(`{}`)
+	}
+
+	encoded, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to encode message: %w", err)
+	}
+
+	if !c.isConnectionActive(conn) {
+		return fmt.Errorf("connection no longer active")
+	}
+
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	if !c.isConnectionActive(conn) {
+		return fmt.Errorf("connection no longer active")
+	}
+
+	if err := conn.SetWriteDeadline(time.Now().Add(websocketWriteTimeout)); err != nil {
+		return fmt.Errorf("failed to set write deadline: %w", err)
+	}
+
+	if err := conn.WriteMessage(websocket.TextMessage, encoded); err != nil {
+		return fmt.Errorf("failed to write message: %w", err)
 	}
 
 	return nil
 }
 
 // subscribeToChannel subscribes to the configured channel
-func (c *Client) subscribeToChannel() error {
-	if c.config.Channel == "" {
+func (c *Client) subscribeToChannel(conn *websocket.Conn, socketID string) error {
+	c.mu.RLock()
+	if c.conn != conn || c.config == nil || c.isStoppedLocked() {
+		c.mu.RUnlock()
+		return fmt.Errorf("not connected")
+	}
+	config := *c.config
+	hostKey := c.hostKey
+	userAgent := c.userAgent
+	verbose := c.verbose
+	c.mu.RUnlock()
+
+	if config.Channel == "" {
 		return fmt.Errorf("no channel configured")
 	}
-
-	c.mu.RLock()
-	conn := c.conn
-	socketID := c.socketID
-	c.mu.RUnlock()
 
 	if conn == nil {
 		return fmt.Errorf("not connected")
@@ -402,21 +554,21 @@ func (c *Client) subscribeToChannel() error {
 	var subscribeData map[string]interface{}
 
 	// Check if it's a private channel
-	if strings.HasPrefix(c.config.Channel, "private-") {
+	if strings.HasPrefix(config.Channel, "private-") {
 		// Generate auth signature for private channel
-		auth, err := c.generateChannelAuth(socketID, c.config.Channel)
+		auth, err := c.generateChannelAuth(socketID, config.Channel, config.AuthURL, hostKey, userAgent)
 		if err != nil {
 			return fmt.Errorf("failed to generate auth: %w", err)
 		}
 
 		subscribeData = map[string]interface{}{
-			"channel": c.config.Channel,
+			"channel": config.Channel,
 			"auth":    auth,
 		}
 	} else {
 		// Public channel
 		subscribeData = map[string]interface{}{
-			"channel": c.config.Channel,
+			"channel": config.Channel,
 		}
 	}
 
@@ -426,20 +578,20 @@ func (c *Client) subscribeToChannel() error {
 		Data:  dataBytes,
 	}
 
-	if err := c.sendMessage(msg); err != nil {
+	if err := c.sendMessageOnConn(conn, msg); err != nil {
 		return fmt.Errorf("failed to send subscribe message: %w", err)
 	}
 
-	if c.verbose {
-		log.Printf("[realtime] Subscribing to channel: %s", c.config.Channel)
+	if verbose {
+		log.Printf("[realtime] Subscribing to channel: %s", config.Channel)
 	}
 
 	return nil
 }
 
 // generateChannelAuth generates the auth signature for private channels
-func (c *Client) generateChannelAuth(socketID, channel string) (string, error) {
-	if c.config.AuthURL == "" {
+func (c *Client) generateChannelAuth(socketID, channel, authURL, hostKey, userAgent string) (string, error) {
+	if authURL == "" {
 		// If no auth URL, try to generate local auth (requires app secret)
 		return "", fmt.Errorf("auth URL required for private channels")
 	}
@@ -450,19 +602,19 @@ func (c *Client) generateChannelAuth(socketID, channel string) (string, error) {
 	authData.Set("channel_name", channel)
 
 	// Create HTTP client and request
-	client := &http.Client{}
-	req, err := http.NewRequest("POST", c.config.AuthURL, strings.NewReader(authData.Encode()))
+	client := &http.Client{Timeout: websocketWriteTimeout}
+	req, err := http.NewRequest("POST", authURL, strings.NewReader(authData.Encode()))
 	if err != nil {
 		return "", fmt.Errorf("failed to create auth request: %w", err)
 	}
 
 	// Set content type header
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("User-Agent", userAgent)
 
 	// Add Bearer token if hostKey is provided
-	if c.hostKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.hostKey)
+	if hostKey != "" {
+		req.Header.Set("Authorization", "Bearer "+hostKey)
 	}
 
 	// Execute the request
@@ -509,10 +661,8 @@ func (c *Client) scheduleReconnect() {
 	defer c.mu.Unlock()
 
 	// Don't schedule if we're already trying to reconnect or if stopped
-	select {
-	case <-c.stopChan:
+	if c.isStoppedLocked() || c.config == nil || c.conn != nil || c.isConnecting {
 		return
-	default:
 	}
 
 	if c.reconnectTimer != nil {
@@ -521,20 +671,72 @@ func (c *Client) scheduleReconnect() {
 
 	// Use exponential backoff: start with 5 seconds
 	delay := 5 * time.Second
+	generation := c.generation
 
 	c.reconnectTimer = time.AfterFunc(delay, func() {
-		select {
-		case <-c.stopChan:
+		c.mu.RLock()
+		stopped := c.isStoppedLocked() || c.generation != generation
+		c.mu.RUnlock()
+		if stopped {
 			return
-		default:
-			if c.verbose {
-				log.Printf("[realtime] Attempting to reconnect...")
-			}
+		}
 
-			if err := c.Connect(); err != nil {
-				log.Printf("[realtime] Reconnection failed: %v", err)
-				c.scheduleReconnect()
-			}
+		if c.verbose {
+			log.Printf("[realtime] Attempting to reconnect...")
+		}
+
+		if err := c.Connect(); err != nil {
+			log.Printf("[realtime] Reconnection failed: %v", err)
+			c.scheduleReconnect()
 		}
 	})
+}
+
+func (c *Client) closeWebSocket(conn *websocket.Conn, code int, reason string) {
+	if conn == nil {
+		return
+	}
+
+	deadline := time.Now().Add(websocketCloseTimeout)
+	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), deadline)
+	_ = conn.Close()
+}
+
+func (c *Client) stopPingTickerLocked() {
+	if c.pingTicker != nil {
+		c.pingTicker.Stop()
+		c.pingTicker = nil
+	}
+	if c.pingStop != nil {
+		close(c.pingStop)
+		c.pingStop = nil
+	}
+}
+
+func (c *Client) isStoppedLocked() bool {
+	select {
+	case <-c.stopChan:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Client) isConnectionActive(conn *websocket.Conn) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.conn == conn && !c.isStoppedLocked()
+}
+
+func sameConfig(a, b *Config) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+
+	return a.Key == b.Key &&
+		a.Host == b.Host &&
+		a.Port == b.Port &&
+		a.Channel == b.Channel &&
+		a.AuthURL == b.AuthURL &&
+		a.Encrypted == b.Encrypted
 }
