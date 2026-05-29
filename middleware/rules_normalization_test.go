@@ -29,11 +29,7 @@ func (m *mockConfigManager) GetSortedRules() []*config.Rule {
 		return nil
 	}
 
-	ruleList := make([]*config.Rule, 0, len(m.rules))
-	for _, rule := range m.rules {
-		ruleList = append(ruleList, rule)
-	}
-	return ruleList
+	return sortedTestRules(m.rules)
 }
 
 func (m *mockConfigManager) GetActions() map[string]*config.RuleAction {

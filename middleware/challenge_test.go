@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -28,29 +27,7 @@ func (m *challengeMockConfigProvider) GetRules() map[string]*config.Rule {
 }
 
 func (m *challengeMockConfigProvider) GetSortedRules() []*config.Rule {
-	if len(m.rules) == 0 {
-		return nil
-	}
-
-	rules := make([]*config.Rule, 0, len(m.rules))
-	for _, rule := range m.rules {
-		rules = append(rules, rule)
-	}
-	sort.Slice(rules, func(i, j int) bool {
-		iHasOrder := rules[i].SortOrder != 0
-		jHasOrder := rules[j].SortOrder != 0
-		switch {
-		case iHasOrder && !jHasOrder:
-			return true
-		case !iHasOrder && jHasOrder:
-			return false
-		case iHasOrder && jHasOrder && rules[i].SortOrder != rules[j].SortOrder:
-			return rules[i].SortOrder < rules[j].SortOrder
-		default:
-			return rules[i].ID < rules[j].ID
-		}
-	})
-	return rules
+	return sortedTestRules(m.rules)
 }
 
 func (m *challengeMockConfigProvider) GetActions() map[string]*config.RuleAction {
@@ -557,7 +534,7 @@ func TestChallengePassedCanStillBeBlockedByLaterRule(t *testing.T) {
 		"challenge-admin": {
 			ID:        "challenge-admin",
 			Action:    "challenge-action",
-			SortOrder: 1,
+			SortOrder: testIntPtr(1),
 			Conditions: &config.RuleConditions{
 				Matches: []config.MatchCondition{{Type: "path", Match: "starts-with", Value: "/admin"}},
 			},
@@ -565,7 +542,7 @@ func TestChallengePassedCanStillBeBlockedByLaterRule(t *testing.T) {
 		"block-admin": {
 			ID:        "block-admin",
 			Action:    "block-action",
-			SortOrder: 2,
+			SortOrder: testIntPtr(2),
 			Conditions: &config.RuleConditions{
 				Matches: []config.MatchCondition{{Type: "path", Match: "starts-with", Value: "/admin"}},
 			},
@@ -619,7 +596,7 @@ func TestChallengePassedCanStillBeRateLimitedByLaterRule(t *testing.T) {
 		"challenge-admin": {
 			ID:        "challenge-admin",
 			Action:    "challenge-action",
-			SortOrder: 1,
+			SortOrder: testIntPtr(1),
 			Conditions: &config.RuleConditions{
 				Matches: []config.MatchCondition{{Type: "path", Match: "starts-with", Value: "/admin"}},
 			},
@@ -627,7 +604,7 @@ func TestChallengePassedCanStillBeRateLimitedByLaterRule(t *testing.T) {
 		"rate-limit-admin": {
 			ID:        "rate-limit-admin",
 			Action:    "rate-limit-action",
-			SortOrder: 2,
+			SortOrder: testIntPtr(2),
 			Conditions: &config.RuleConditions{
 				Matches: []config.MatchCondition{{Type: "path", Match: "starts-with", Value: "/admin"}},
 			},
@@ -691,7 +668,7 @@ func TestFirstMatchingChallengeRuleWins(t *testing.T) {
 		"challenge-first": {
 			ID:        "challenge-first",
 			Action:    "challenge-first-action",
-			SortOrder: 1,
+			SortOrder: testIntPtr(1),
 			Conditions: &config.RuleConditions{
 				Matches: []config.MatchCondition{{Type: "path", Match: "starts-with", Value: "/admin"}},
 			},
@@ -699,7 +676,7 @@ func TestFirstMatchingChallengeRuleWins(t *testing.T) {
 		"challenge-second": {
 			ID:        "challenge-second",
 			Action:    "challenge-second-action",
-			SortOrder: 2,
+			SortOrder: testIntPtr(2),
 			Conditions: &config.RuleConditions{
 				Matches: []config.MatchCondition{{Type: "path", Match: "starts-with", Value: "/admin"}},
 			},
@@ -898,8 +875,4 @@ func assertChallengeInfoNames(t *testing.T, r *http.Request, ruleName string, ac
 	if info.Action == nil || info.Action.Name != actionName {
 		t.Fatalf("expected challenge action name %q, got %#v", actionName, info.Action)
 	}
-}
-
-func testIntPtr(v int) *int {
-	return &v
 }

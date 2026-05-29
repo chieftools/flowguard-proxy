@@ -6,18 +6,19 @@ func TestComputeSortedRules(t *testing.T) {
 	manager := &Manager{}
 
 	sorted := manager.computeSortedRules(map[string]*Rule{
-		"z-last":  {ID: "z-last"},
-		"a-first": {ID: "a-first", SortOrder: 1},
-		"b-next":  {ID: "b-next", SortOrder: 1},
-		"c-mid":   {ID: "c-mid", SortOrder: 2},
+		"z-last":     {ID: "z-last"},
+		"zero-first": {ID: "zero-first", SortOrder: sortOrderPtr(0)},
+		"a-next":     {ID: "a-next", SortOrder: sortOrderPtr(1)},
+		"b-next":     {ID: "b-next", SortOrder: sortOrderPtr(1)},
+		"c-mid":      {ID: "c-mid", SortOrder: sortOrderPtr(2)},
 	})
 
-	if len(sorted) != 4 {
-		t.Fatalf("expected 4 sorted rules, got %d", len(sorted))
+	if len(sorted) != 5 {
+		t.Fatalf("expected 5 sorted rules, got %d", len(sorted))
 	}
 
-	got := []string{sorted[0].ID, sorted[1].ID, sorted[2].ID, sorted[3].ID}
-	want := []string{"a-first", "b-next", "c-mid", "z-last"}
+	got := []string{sorted[0].ID, sorted[1].ID, sorted[2].ID, sorted[3].ID, sorted[4].ID}
+	want := []string{"zero-first", "a-next", "b-next", "c-mid", "z-last"}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("expected order %v, got %v", want, got)
@@ -32,7 +33,20 @@ func TestComputeSortedRules(t *testing.T) {
 func TestLoadHydratesIDsAndSortsRules(t *testing.T) {
 	configPath := writeTestConfig(t, `{
   "id": "cfg-123",
-  "rules": {
+	"rules": {
+    "zero-rule": {
+      "action": "action-zero",
+      "sort_order": 0,
+      "conditions": {
+        "matches": [
+          {
+            "type": "path",
+            "match": "starts-with",
+            "value": "/zero"
+          }
+        ]
+      }
+    },
     "z-rule": {
       "action": "action-z",
       "conditions": {
@@ -60,6 +74,10 @@ func TestLoadHydratesIDsAndSortsRules(t *testing.T) {
     }
   },
   "actions": {
+    "action-zero": {
+      "action": "block",
+      "status": 401
+    },
     "action-z": {
       "action": "block",
       "status": 403
@@ -88,12 +106,16 @@ func TestLoadHydratesIDsAndSortsRules(t *testing.T) {
 		t.Fatal("expected action IDs to be hydrated from map keys")
 	}
 
-	if len(manager.sortedRules) != 2 {
-		t.Fatalf("expected 2 sorted rules, got %d", len(manager.sortedRules))
+	if len(manager.sortedRules) != 3 {
+		t.Fatalf("expected 3 sorted rules, got %d", len(manager.sortedRules))
 	}
-	if manager.sortedRules[0].ID != "a-rule" || manager.sortedRules[1].ID != "z-rule" {
-		t.Fatalf("unexpected sorted rule order: %s, %s", manager.sortedRules[0].ID, manager.sortedRules[1].ID)
+	if manager.sortedRules[0].ID != "zero-rule" || manager.sortedRules[1].ID != "a-rule" || manager.sortedRules[2].ID != "z-rule" {
+		t.Fatalf("unexpected sorted rule order: %s, %s, %s", manager.sortedRules[0].ID, manager.sortedRules[1].ID, manager.sortedRules[2].ID)
 	}
+}
+
+func sortOrderPtr(v int) *int {
+	return &v
 }
 
 func TestLoadRejectsAllProtocolsDisabled(t *testing.T) {

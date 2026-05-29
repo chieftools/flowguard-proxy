@@ -156,7 +156,7 @@
                 },
                 "sort_order": {
                     "type": "integer",
-                    "description": "Optional explicit ordering for rule processing. Lower values are processed first. Rules without sort_order are processed after ordered rules, sorted by rule ID."
+                    "description": "Optional explicit ordering for rule processing. Lower values are processed first, including 0. Rules without sort_order are processed after ordered rules, sorted by rule ID."
                 },
                 "conditions": {
                     "$ref": "#/definitions/conditions"

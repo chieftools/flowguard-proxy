@@ -29,30 +29,45 @@ func (m *MockConfigProvider) GetRules() map[string]*config.Rule {
 }
 
 func (m *MockConfigProvider) GetSortedRules() []*config.Rule {
-	if m.rules == nil || len(m.rules) == 0 {
+	return sortedTestRules(m.rules)
+}
+
+func (m *MockConfigProvider) GetActions() map[string]*config.RuleAction {
+	return m.actions
+}
+
+func sortedTestRules(rules map[string]*config.Rule) []*config.Rule {
+	if rules == nil || len(rules) == 0 {
 		return nil
 	}
 
-	ruleList := make([]*config.Rule, 0, len(m.rules))
-	for _, rule := range m.rules {
+	ruleList := make([]*config.Rule, 0, len(rules))
+	for _, rule := range rules {
 		ruleList = append(ruleList, rule)
 	}
 
-	// Sort by sort_order (primary), then by ID (secondary) - matching real implementation
+	// Match config.Manager.computeSortedRules.
 	sort.Slice(ruleList, func(i, j int) bool {
-		if ruleList[i].SortOrder != 0 || ruleList[j].SortOrder != 0 {
-			if ruleList[i].SortOrder != ruleList[j].SortOrder {
-				return ruleList[i].SortOrder < ruleList[j].SortOrder
-			}
+		iHasOrder := ruleList[i].SortOrder != nil
+		jHasOrder := ruleList[j].SortOrder != nil
+
+		switch {
+		case iHasOrder && !jHasOrder:
+			return true
+		case !iHasOrder && jHasOrder:
+			return false
+		case iHasOrder && jHasOrder && *ruleList[i].SortOrder != *ruleList[j].SortOrder:
+			return *ruleList[i].SortOrder < *ruleList[j].SortOrder
+		default:
+			return ruleList[i].ID < ruleList[j].ID
 		}
-		return ruleList[i].ID < ruleList[j].ID
 	})
 
 	return ruleList
 }
 
-func (m *MockConfigProvider) GetActions() map[string]*config.RuleAction {
-	return m.actions
+func testIntPtr(v int) *int {
+	return &v
 }
 
 func TestRateLimiter_IsAllowed(t *testing.T) {

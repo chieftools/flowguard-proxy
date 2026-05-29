@@ -125,16 +125,16 @@ func (m *Manager) computeSortedRules(rules map[string]*Rule) []*Rule {
 
 	// Sort by sort_order (primary), then by ID (secondary)
 	sort.Slice(ruleList, func(i, j int) bool {
-		iHasOrder := ruleList[i].SortOrder != 0
-		jHasOrder := ruleList[j].SortOrder != 0
+		iHasOrder := ruleList[i].SortOrder != nil
+		jHasOrder := ruleList[j].SortOrder != nil
 
 		switch {
 		case iHasOrder && !jHasOrder:
 			return true
 		case !iHasOrder && jHasOrder:
 			return false
-		case iHasOrder && jHasOrder && ruleList[i].SortOrder != ruleList[j].SortOrder:
-			return ruleList[i].SortOrder < ruleList[j].SortOrder
+		case iHasOrder && jHasOrder && *ruleList[i].SortOrder != *ruleList[j].SortOrder:
+			return *ruleList[i].SortOrder < *ruleList[j].SortOrder
 		}
 
 		// Fall back to ID comparison for deterministic ordering

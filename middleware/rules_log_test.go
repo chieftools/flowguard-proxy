@@ -13,8 +13,9 @@ func TestRulesMiddleware_LogAction_Basic(t *testing.T) {
 	configProvider := &MockConfigProvider{
 		rules: map[string]*config.Rule{
 			"log_rule": {
-				ID:     "log_rule",
-				Action: "log_action",
+				ID:        "log_rule",
+				Action:    "log_action",
+				SortOrder: testIntPtr(0),
 				Conditions: &config.RuleConditions{
 					Matches: []config.MatchCondition{
 						{
@@ -158,8 +159,9 @@ func TestRulesMiddleware_LogAction_OverriddenByBlock(t *testing.T) {
 	configProvider := &MockConfigProvider{
 		rules: map[string]*config.Rule{
 			"log_rule": {
-				ID:     "log_rule",
-				Action: "log_action",
+				ID:        "log_rule",
+				Action:    "log_action",
+				SortOrder: testIntPtr(0),
 				Conditions: &config.RuleConditions{
 					Matches: []config.MatchCondition{
 						{
@@ -242,8 +244,9 @@ func TestRulesMiddleware_LogAction_OverriddenByAllow(t *testing.T) {
 				},
 			},
 			"allow_rule": {
-				ID:     "allow_rule",
-				Action: "allow_action",
+				ID:        "allow_rule",
+				Action:    "allow_action",
+				SortOrder: testIntPtr(1),
 				Conditions: &config.RuleConditions{
 					Matches: []config.MatchCondition{
 						{
@@ -255,8 +258,9 @@ func TestRulesMiddleware_LogAction_OverriddenByAllow(t *testing.T) {
 				},
 			},
 			"block_rule": {
-				ID:     "block_rule",
-				Action: "block_action",
+				ID:        "block_rule",
+				Action:    "block_action",
+				SortOrder: testIntPtr(2),
 				Conditions: &config.RuleConditions{
 					Matches: []config.MatchCondition{
 						{
@@ -319,6 +323,108 @@ func TestRulesMiddleware_LogAction_OverriddenByAllow(t *testing.T) {
 	}
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected 200 OK, got %d", w.Code)
+	}
+}
+
+func TestRulesMiddleware_AllowAction_ExplicitZeroStopsLaterBlock(t *testing.T) {
+	configProvider := &MockConfigProvider{
+		rules: map[string]*config.Rule{
+			"allow_rule": {
+				ID:        "allow_rule",
+				Action:    "allow_action",
+				SortOrder: testIntPtr(0),
+				Conditions: &config.RuleConditions{
+					Matches: []config.MatchCondition{
+						{Type: "path", Match: "starts-with", Value: "/api"},
+					},
+				},
+			},
+			"block_rule": {
+				ID:        "block_rule",
+				Action:    "block_action",
+				SortOrder: testIntPtr(1),
+				Conditions: &config.RuleConditions{
+					Matches: []config.MatchCondition{
+						{Type: "path", Match: "starts-with", Value: "/api"},
+					},
+				},
+			},
+		},
+		actions: map[string]*config.RuleAction{
+			"allow_action": {Action: "allow"},
+			"block_action": {Action: "block", Status: http.StatusBadRequest, Message: "Bad Request"},
+		},
+	}
+
+	rm := NewRulesMiddleware(configProvider)
+	defer rm.Stop()
+
+	handlerCalled := false
+	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerCalled = true
+		if matchedRule := GetRuleMatched(r); matchedRule == nil || matchedRule.ID != "allow_rule" {
+			t.Fatalf("expected allow rule context, got %#v", matchedRule)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/api/health", nil)
+	w := httptest.NewRecorder()
+
+	rm.Handle(w, req, nextHandler)
+
+	if !handlerCalled {
+		t.Fatal("handler should be called when explicit zero allow rule matches")
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", w.Code)
+	}
+}
+
+func TestRulesMiddleware_AllowAction_UnorderedRunsAfterOrderedBlock(t *testing.T) {
+	configProvider := &MockConfigProvider{
+		rules: map[string]*config.Rule{
+			"allow_rule": {
+				ID:     "allow_rule",
+				Action: "allow_action",
+				Conditions: &config.RuleConditions{
+					Matches: []config.MatchCondition{
+						{Type: "path", Match: "starts-with", Value: "/api"},
+					},
+				},
+			},
+			"block_rule": {
+				ID:        "block_rule",
+				Action:    "block_action",
+				SortOrder: testIntPtr(1),
+				Conditions: &config.RuleConditions{
+					Matches: []config.MatchCondition{
+						{Type: "path", Match: "starts-with", Value: "/api"},
+					},
+				},
+			},
+		},
+		actions: map[string]*config.RuleAction{
+			"allow_action": {Action: "allow"},
+			"block_action": {Action: "block", Status: http.StatusForbidden, Message: "Forbidden"},
+		},
+	}
+
+	rm := NewRulesMiddleware(configProvider)
+	defer rm.Stop()
+
+	req := httptest.NewRequest("GET", "/api/health", nil)
+	w := httptest.NewRecorder()
+
+	rm.Handle(w, req, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler should not be called when ordered block runs before unordered allow")
+	}))
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden, got %d", w.Code)
+	}
+	if matchedRule := GetRuleMatched(req); matchedRule == nil || matchedRule.ID != "block_rule" {
+		t.Fatalf("expected block rule context, got %#v", matchedRule)
 	}
 }
 

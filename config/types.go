@@ -120,7 +120,7 @@ type Rule struct {
 	ID         string          // Rule ID from the map key
 	Name       string          `json:"name"`
 	Action     string          `json:"action"`
-	SortOrder  int             `json:"sort_order,omitempty"` // Optional: explicit ordering (lower = processed first)
+	SortOrder  *int            `json:"sort_order,omitempty"` // Optional: explicit ordering (lower = processed first)
 	Conditions *RuleConditions `json:"conditions"`
 }
 

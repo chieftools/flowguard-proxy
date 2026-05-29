@@ -162,7 +162,7 @@ func writeDevPreviewConfig(path string, difficulty int) error {
 		Rules: map[string]*config.Rule{
 			"challenge-page": {
 				Action:    "challenge-pow",
-				SortOrder: 10,
+				SortOrder: devPreviewIntPtr(10),
 				Conditions: &config.RuleConditions{
 					Matches: []config.MatchCondition{
 						{Type: "path", Match: "starts-with", Value: "/challenge"},
@@ -171,7 +171,7 @@ func writeDevPreviewConfig(path string, difficulty int) error {
 			},
 			"block-page": {
 				Action:    "block-403",
-				SortOrder: 20,
+				SortOrder: devPreviewIntPtr(20),
 				Conditions: &config.RuleConditions{
 					Matches: []config.MatchCondition{
 						{Type: "path", Match: "starts-with", Value: "/blocked"},
@@ -180,7 +180,7 @@ func writeDevPreviewConfig(path string, difficulty int) error {
 			},
 			"rate-limit-page": {
 				Action:    "rate-limit-preview",
-				SortOrder: 30,
+				SortOrder: devPreviewIntPtr(30),
 				Conditions: &config.RuleConditions{
 					Matches: []config.MatchCondition{
 						{Type: "path", Match: "starts-with", Value: "/rate-limit"},
