@@ -6,7 +6,7 @@ toolchain go1.26.2
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/gaissmai/bart v0.26.1
+	github.com/gaissmai/bart v0.28.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/oschwald/maxminddb-golang v1.13.1
