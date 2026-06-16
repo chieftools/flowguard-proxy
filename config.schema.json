@@ -856,6 +856,7 @@
                 "ipnets": {
                     "type": "array",
                     "description": "List of trusted proxy networks (CIDR notation or URLs)",
+                    "minItems": 1,
                     "items": {
                         "type": "string",
                         "oneOf": [
@@ -874,14 +875,52 @@
                         ]
                     }
                 },
+                "header_auth": {
+                    "$ref": "#/definitions/trusted_proxy_header_auth_config"
+                },
                 "refresh_interval_seconds": {
                     "type": "integer",
                     "minimum": 60,
                     "description": "How often to refresh IP lists from URLs in seconds"
                 }
             },
+            "anyOf": [
+                {
+                    "required": [
+                        "ipnets"
+                    ]
+                },
+                {
+                    "required": [
+                        "header_auth"
+                    ]
+                }
+            ],
+            "additionalProperties": false
+        },
+        "trusted_proxy_header_auth_config": {
+            "type": "object",
+            "description": "Shared-secret header that can authorize trusting forwarded client IP headers",
+            "properties": {
+                "header": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+                    "default": "FG-Trusted-Proxy-Secret",
+                    "description": "HTTP header name carrying the trusted proxy shared secret"
+                },
+                "values": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": "Allowed shared-secret header values",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                }
+            },
             "required": [
-                "ipnets"
+                "values"
             ],
             "additionalProperties": false
         }

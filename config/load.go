@@ -41,6 +41,10 @@ func (m *Manager) Load() error {
 	// Parse trusted proxy IPs and fetch from URLs
 	var trustedProxyIPs []net.IPNet
 	if config.TrustedProxies != nil {
+		if err := validateTrustedProxiesConfig(config.TrustedProxies); err != nil {
+			return err
+		}
+
 		trustedProxyIPs, err = m.parseTrustedProxies(config.TrustedProxies.IPNets)
 		if err != nil {
 			return fmt.Errorf("failed to parse trusted proxies: %w", err)

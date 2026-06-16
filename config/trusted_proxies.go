@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const DefaultTrustedProxyHeaderAuthHeader = "FG-Trusted-Proxy-Secret"
+
 // GetRefreshInterval returns the configured refresh interval for trusted proxies
 func (m *Manager) GetRefreshInterval() time.Duration {
 	m.mu.RLock()
@@ -40,6 +42,21 @@ func (m *Manager) IsTrustedProxy(ip string) bool {
 	return false
 }
 
+// GetTrustedProxyHeaderAuth returns the configured trusted proxy header auth values.
+func (m *Manager) GetTrustedProxyHeaderAuth() (header string, values []string, ok bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.config == nil || m.config.TrustedProxies == nil || m.config.TrustedProxies.HeaderAuth == nil {
+		return "", nil, false
+	}
+
+	auth := m.config.TrustedProxies.HeaderAuth
+	values = make([]string, len(auth.Values))
+	copy(values, auth.Values)
+	return trustedProxyHeaderAuthHeader(auth), values, true
+}
+
 // RefreshTrustedProxies refreshes trusted proxy lists from URLs
 func (m *Manager) RefreshTrustedProxies() error {
 	m.mu.RLock()
@@ -48,6 +65,10 @@ func (m *Manager) RefreshTrustedProxies() error {
 
 	if config == nil || config.TrustedProxies == nil {
 		return nil
+	}
+
+	if err := validateTrustedProxiesConfig(config.TrustedProxies); err != nil {
+		return err
 	}
 
 	// Get cache TTL from config
@@ -141,6 +162,63 @@ func (m *Manager) parseTrustedProxies(proxies []string) ([]net.IPNet, error) {
 	}
 
 	return result, nil
+}
+
+func validateTrustedProxiesConfig(config *TrustedProxiesConfig) error {
+	if config == nil {
+		return nil
+	}
+
+	if len(config.IPNets) == 0 && config.HeaderAuth == nil {
+		return fmt.Errorf("trusted_proxies must configure ipnets or header_auth")
+	}
+
+	if config.HeaderAuth == nil {
+		return nil
+	}
+
+	if config.HeaderAuth.Header != nil && *config.HeaderAuth.Header == "" {
+		return fmt.Errorf("trusted_proxies.header_auth.header must not be empty")
+	}
+	if config.HeaderAuth.Header != nil && !isHTTPHeaderFieldName(*config.HeaderAuth.Header) {
+		return fmt.Errorf("trusted_proxies.header_auth.header must be a valid HTTP header field name")
+	}
+
+	if len(config.HeaderAuth.Values) == 0 {
+		return fmt.Errorf("trusted_proxies.header_auth.values must contain at least one value")
+	}
+	for i, value := range config.HeaderAuth.Values {
+		if value == "" {
+			return fmt.Errorf("trusted_proxies.header_auth.values[%d] must not be empty", i)
+		}
+	}
+
+	return nil
+}
+
+func trustedProxyHeaderAuthHeader(config *TrustedProxyHeaderAuthConfig) string {
+	if config == nil || config.Header == nil {
+		return DefaultTrustedProxyHeaderAuthHeader
+	}
+
+	return *config.Header
+}
+
+func isHTTPHeaderFieldName(name string) bool {
+	for i := 0; i < len(name); i++ {
+		switch c := name[i]; {
+		case c >= 'a' && c <= 'z':
+		case c >= 'A' && c <= 'Z':
+		case c >= '0' && c <= '9':
+		case c == '!' || c == '#' || c == '$' || c == '%' || c == '&' || c == '\'':
+		case c == '*' || c == '+' || c == '-' || c == '.' || c == '^' || c == '_':
+		case c == '`' || c == '|' || c == '~':
+		default:
+			return false
+		}
+	}
+
+	return name != ""
 }
 
 // fetchIPRangesFromURL fetches IP ranges from a URL with caching

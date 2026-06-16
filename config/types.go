@@ -102,8 +102,14 @@ type IPDatabaseConfig struct {
 }
 
 type TrustedProxiesConfig struct {
-	IPNets                 []string `json:"ipnets"`
-	RefreshIntervalSeconds int      `json:"refresh_interval_seconds"`
+	IPNets                 []string                      `json:"ipnets,omitempty"`
+	HeaderAuth             *TrustedProxyHeaderAuthConfig `json:"header_auth,omitempty"`
+	RefreshIntervalSeconds int                           `json:"refresh_interval_seconds"`
+}
+
+type TrustedProxyHeaderAuthConfig struct {
+	Header *string  `json:"header,omitempty"`
+	Values []string `json:"values"`
 }
 
 type IPListsConfig map[string]*IPListConfig

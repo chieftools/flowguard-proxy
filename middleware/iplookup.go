@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log"
 	"net"
@@ -148,8 +149,15 @@ func (m *IPLookupMiddleware) extractIPs(r *http.Request) (clientIP string, proxy
 		remoteIP = r.RemoteAddr
 	}
 
+	trustedProxy := false
+	if m.configMgr != nil {
+		trustedByIP := m.configMgr.IsTrustedProxy(remoteIP)
+		trustedByHeader := m.isTrustedByHeaderAuth(r)
+		trustedProxy = trustedByIP || trustedByHeader
+	}
+
 	// Check if the request came through a trusted proxy
-	if m.configMgr != nil && m.configMgr.IsTrustedProxy(remoteIP) {
+	if trustedProxy {
 		proxyIP = remoteIP
 
 		// Check X-Forwarded-For header
@@ -191,6 +199,30 @@ func (m *IPLookupMiddleware) extractIPs(r *http.Request) (clientIP string, proxy
 	}
 
 	return clientIP, proxyIP
+}
+
+func (m *IPLookupMiddleware) isTrustedByHeaderAuth(r *http.Request) bool {
+	if m.configMgr == nil {
+		return false
+	}
+
+	headerName, allowedValues, ok := m.configMgr.GetTrustedProxyHeaderAuth()
+	if !ok {
+		return false
+	}
+
+	presentedValues := r.Header.Values(headerName)
+	r.Header.Del(headerName)
+
+	for _, presentedValue := range presentedValues {
+		for _, allowedValue := range allowedValues {
+			if subtle.ConstantTimeCompare([]byte(presentedValue), []byte(allowedValue)) == 1 {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // lookupASN looks up ASN information for an IP address

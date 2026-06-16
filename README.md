@@ -322,10 +322,15 @@ Example configuration structure:
       "https://www.cloudflare.com/ips-v6",
       "192.168.1.0/24"
     ],
+    "header_auth": {
+      "values": ["high-entropy-shared-secret"]
+    },
     "refresh_interval_seconds": 43200
   }
 }
 ```
+
+When using `trusted_proxies.header_auth`, FlowGuard defaults to the `FG-Trusted-Proxy-Secret` header. Configure the upstream proxy to strip any client-supplied copy of that header and set its own high-entropy value. Set `header_auth.header` only when you need a custom header name.
 
 ### Rule Conditions
 

@@ -124,3 +124,97 @@ func TestRefreshTrustedProxiesRejectsInvalidEntry(t *testing.T) {
 		t.Fatalf("expected invalid IP error, got %v", err)
 	}
 }
+
+func TestLoadAcceptsTrustedProxyHeaderAuthOnly(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "trusted_proxies": {
+    "header_auth": {
+      "values": ["secret-one", "secret-two"]
+    }
+  }
+}`)
+
+	manager, err := loadTestManager(configPath)
+	if err != nil {
+		t.Fatalf("load manager: %v", err)
+	}
+
+	header, values, ok := manager.GetTrustedProxyHeaderAuth()
+	if !ok {
+		t.Fatal("expected trusted proxy header auth to be configured")
+	}
+	if header != DefaultTrustedProxyHeaderAuthHeader {
+		t.Fatalf("expected configured header, got %q", header)
+	}
+	if len(values) != 2 || values[0] != "secret-one" || values[1] != "secret-two" {
+		t.Fatalf("unexpected header auth values: %v", values)
+	}
+}
+
+func TestLoadAcceptsCustomTrustedProxyHeaderAuthHeader(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "trusted_proxies": {
+    "header_auth": {
+      "header": "Custom-Trusted-Proxy-Secret",
+      "values": ["secret"]
+    }
+  }
+}`)
+
+	manager, err := loadTestManager(configPath)
+	if err != nil {
+		t.Fatalf("load manager: %v", err)
+	}
+
+	header, _, ok := manager.GetTrustedProxyHeaderAuth()
+	if !ok {
+		t.Fatal("expected trusted proxy header auth to be configured")
+	}
+	if header != "Custom-Trusted-Proxy-Secret" {
+		t.Fatalf("expected configured header, got %q", header)
+	}
+}
+
+func TestLoadRejectsTrustedProxiesWithoutTrustSource(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "trusted_proxies": {
+    "refresh_interval_seconds": 120
+  }
+}`)
+
+	_, err := loadTestManager(configPath)
+	if err == nil || err.Error() != "trusted_proxies must configure ipnets or header_auth" {
+		t.Fatalf("expected missing trust source error, got %v", err)
+	}
+}
+
+func TestLoadRejectsEmptyTrustedProxyHeaderAuthHeader(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "trusted_proxies": {
+    "header_auth": {
+      "header": "",
+      "values": ["secret"]
+    }
+  }
+}`)
+
+	_, err := loadTestManager(configPath)
+	if err == nil || err.Error() != "trusted_proxies.header_auth.header must not be empty" {
+		t.Fatalf("expected empty header error, got %v", err)
+	}
+}
+
+func TestLoadRejectsEmptyTrustedProxyHeaderAuthValue(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "trusted_proxies": {
+    "header_auth": {
+      "values": ["secret", ""]
+    }
+  }
+}`)
+
+	_, err := loadTestManager(configPath)
+	if err == nil || err.Error() != "trusted_proxies.header_auth.values[1] must not be empty" {
+		t.Fatalf("expected empty value error, got %v", err)
+	}
+}
