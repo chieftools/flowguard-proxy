@@ -92,10 +92,11 @@ type RequestLogEntryRequestInfo struct {
 }
 
 type RequestLogEntryResponseInfo struct {
-	Status      int               `json:"status"`
-	TimeMS      int64             `json:"time_ms,omitempty"`
-	Headers     map[string]string `json:"headers,omitempty"`
-	HeaderNames []string          `json:"header_names,omitempty"`
+	Status      int                                 `json:"status"`
+	TimeMS      int64                               `json:"time_ms,omitempty"`
+	Headers     map[string]string                   `json:"headers,omitempty"`
+	HeaderNames []string                            `json:"header_names,omitempty"`
+	Resource    RequestLogEntryResponseResourceInfo `json:"resource"`
 
 	Body *RequestLogEntryBodyInfo `json:"body,omitempty"`
 }
@@ -485,6 +486,7 @@ func getResponseInfo(r *http.Request, wrapper *ResponseWriterWrapper, whitelist 
 		Status:      wrapper.StatusCode,
 		Headers:     headers,
 		HeaderNames: headerNames,
+		Resource:    classifyResponseResource(r, wrapper.Headers),
 	}
 
 	startTime := GetStartTime(r)
