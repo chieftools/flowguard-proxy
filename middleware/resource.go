@@ -97,7 +97,13 @@ func requestPathExtension(r *http.Request) string {
 		return ""
 	}
 
-	extension := strings.TrimPrefix(strings.ToLower(path.Ext(r.URL.Path)), ".")
+	base := path.Base(r.URL.Path)
+	rawExtension := path.Ext(base)
+	if rawExtension == base {
+		return ""
+	}
+
+	extension := strings.TrimPrefix(strings.ToLower(rawExtension), ".")
 	if extension == "" || strings.Contains(extension, "/") {
 		return ""
 	}

@@ -136,6 +136,24 @@ func TestClassifyResponseResource(t *testing.T) {
 			wantMIME:      "",
 			wantExtension: "",
 		},
+		{
+			name:          "dotfile has no extension",
+			path:          "/.env",
+			wantType:      "unknown",
+			wantStatic:    false,
+			wantSource:    "none",
+			wantMIME:      "",
+			wantExtension: "",
+		},
+		{
+			name:          "file under hidden directory keeps extension",
+			path:          "/.well-known/security.txt",
+			wantType:      "text",
+			wantStatic:    false,
+			wantSource:    "path-extension",
+			wantMIME:      "",
+			wantExtension: "txt",
+		},
 	}
 
 	for _, tt := range tests {
