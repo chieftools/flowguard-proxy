@@ -159,6 +159,8 @@ func TestSetupHostDiscoverFlagRunsDespiteExistingPaths(t *testing.T) {
 	setupPsaConfPath = psaConfPath
 	setupDiscover = true
 	setupInput = strings.NewReader("\n")
+	var output bytes.Buffer
+	setupOutput = &output
 	certPath := filepath.Join(root, "var", "certificates")
 	updatedConfig := `{"host":{"cert_path":"` + certPath + `"}}`
 
@@ -191,6 +193,20 @@ func TestSetupHostDiscoverFlagRunsDespiteExistingPaths(t *testing.T) {
 	}
 	if !strings.Contains(string(body), certPath) {
 		t.Fatalf("expected re-fetched config to be saved, got %s", string(body))
+	}
+
+	out := output.String()
+	for _, want := range []string{
+		"Looking for server configuration",
+		"Discovered Plesk certificate directory",
+		"Found 1 usable certificate covering 1 hostname.",
+		"  Use this server configuration? [Y/n]:",
+		"Updated FlowGuard control plane",
+		"Stored configuration at",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, out)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"flowguard/api"
 	"flowguard/certmanager"
@@ -38,6 +39,12 @@ type setupAPIClient interface {
 	GetBaseURL() string
 }
 
+type setupDiscoveryCandidate struct {
+	kind    string
+	path    string
+	summary certmanager.ProbeSummary
+}
+
 var setupCmd = &cobra.Command{
 	Use:   "setup <host-key>",
 	Short: "Configure FlowGuard with a host key",
@@ -60,8 +67,6 @@ The host key is provided by the FlowGuard control panel and looks like: fgsvr_..
 			log.Printf("[ERROR] Failed to setup host: %v", err)
 			os.Exit(1)
 		}
-
-		log.Printf("[SUCCESS] Host configured successfully. Configuration saved to %s", configFile)
 	},
 }
 
@@ -84,8 +89,12 @@ func setupHost(hostKey string) error {
 }
 
 func setupHostWithClient(client setupAPIClient) error {
-	body, err := client.GetConfig("")
-	if err != nil {
+	var body []byte
+	if err := runSetupStep("Fetching host configuration", "Host configuration received", func() error {
+		var err error
+		body, err = client.GetConfig("")
+		return err
+	}); err != nil {
 		return err
 	}
 
@@ -102,7 +111,9 @@ func setupHostWithClient(client setupAPIClient) error {
 		}
 	}
 
-	return writeSetupConfig(finalBody)
+	return runSetupStep("Storing configuration", fmt.Sprintf("Stored configuration at %s", configFile), func() error {
+		return writeSetupConfig(finalBody)
+	})
 }
 
 func parseSetupConfig(body []byte) (*config.Config, error) {
@@ -134,27 +145,39 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config) (
 
 	reader := bufio.NewReader(setupInput)
 
+	var certCandidate setupDiscoveryCandidate
+	var hasCertCandidate bool
+	var nginxCandidate setupDiscoveryCandidate
+	var hasNginxCandidate bool
+	if err := runSetupStep("Looking for server configuration", "Server configuration discovery complete", func() error {
+		certCandidate, hasCertCandidate = discoverPleskCertificatePath()
+		nginxCandidate, hasNginxCandidate = discoverNginxConfigPath()
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
 	discoveredCertPath := ""
-	if path, ok := discoverPleskCertificatePath(); ok {
-		accepted, err := promptYesNo(reader, setupOutput, fmt.Sprintf("Use discovered Plesk certificate directory %s?", path), true)
+	if hasCertCandidate {
+		printSetupDiscoveryCandidate(certCandidate)
+		accepted, err := promptYesNo(reader, setupOutput, "Use this server configuration?", true)
 		if err != nil {
 			return nil, err
 		}
 		if accepted {
-			discoveredCertPath = path
+			discoveredCertPath = certCandidate.path
 		}
 	}
 
 	discoveredNginxConfigPath := ""
-	if discoveredCertPath == "" {
-		if path, ok := discoverNginxConfigPath(); ok {
-			accepted, err := promptYesNo(reader, setupOutput, fmt.Sprintf("Use discovered nginx config %s?", path), true)
-			if err != nil {
-				return nil, err
-			}
-			if accepted {
-				discoveredNginxConfigPath = path
-			}
+	if discoveredCertPath == "" && hasNginxCandidate {
+		printSetupDiscoveryCandidate(nginxCandidate)
+		accepted, err := promptYesNo(reader, setupOutput, "Use this server configuration?", true)
+		if err != nil {
+			return nil, err
+		}
+		if accepted {
+			discoveredNginxConfigPath = nginxCandidate.path
 		}
 	}
 
@@ -165,12 +188,18 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config) (
 		return body, nil
 	}
 
-	if err := client.PatchConfigPaths(discoveredCertPath, discoveredNginxConfigPath); err != nil {
+	if err := runSetupStep("Updating FlowGuard control plane", "Updated FlowGuard control plane", func() error {
+		return client.PatchConfigPaths(discoveredCertPath, discoveredNginxConfigPath)
+	}); err != nil {
 		return nil, fmt.Errorf("failed to update configuration paths: %w", err)
 	}
 
-	updatedBody, err := client.GetConfig("")
-	if err != nil {
+	var updatedBody []byte
+	if err := runSetupStep("Downloading updated configuration", "Downloaded updated configuration", func() error {
+		var err error
+		updatedBody, err = client.GetConfig("")
+		return err
+	}); err != nil {
 		return nil, fmt.Errorf("failed to re-fetch configuration after path update: %w", err)
 	}
 
@@ -195,15 +224,20 @@ func configuredSetupPaths(cfg *config.Config) (string, string) {
 	return cfg.Host.CertPath, cfg.Host.NginxConfigPath
 }
 
-func discoverPleskCertificatePath() (string, bool) {
+func discoverPleskCertificatePath() (setupDiscoveryCandidate, bool) {
 	for _, root := range setupPleskRoots() {
 		path := filepath.Join(root, "var", "certificates")
-		if err := certmanager.ProbeCertificateDirectory(path); err == nil {
-			return path, true
+		summary, err := certmanager.ProbeCertificateDirectorySummary(path)
+		if err == nil {
+			return setupDiscoveryCandidate{
+				kind:    "certificate",
+				path:    path,
+				summary: summary,
+			}, true
 		}
 	}
 
-	return "", false
+	return setupDiscoveryCandidate{}, false
 }
 
 func setupPleskRoots() []string {
@@ -251,12 +285,35 @@ func readPleskProductRoot(path string) (string, error) {
 	return "", fmt.Errorf("PRODUCT_ROOT_D not found in %s", path)
 }
 
-func discoverNginxConfigPath() (string, bool) {
-	if err := certmanager.ProbeNginxConfig(setupNginxConfigPath); err == nil {
-		return setupNginxConfigPath, true
+func discoverNginxConfigPath() (setupDiscoveryCandidate, bool) {
+	summary, err := certmanager.ProbeNginxConfigSummary(setupNginxConfigPath)
+	if err == nil {
+		return setupDiscoveryCandidate{
+			kind:    "nginx",
+			path:    setupNginxConfigPath,
+			summary: summary,
+		}, true
 	}
 
-	return "", false
+	return setupDiscoveryCandidate{}, false
+}
+
+func printSetupDiscoveryCandidate(candidate setupDiscoveryCandidate) {
+	switch candidate.kind {
+	case "certificate":
+		fmt.Fprintf(setupOutput, "✓ Discovered Plesk certificate directory: %s\n", candidate.path)
+	case "nginx":
+		fmt.Fprintf(setupOutput, "✓ Discovered nginx config: %s\n", candidate.path)
+	default:
+		fmt.Fprintf(setupOutput, "✓ Discovered server configuration: %s\n", candidate.path)
+	}
+
+	fmt.Fprintf(
+		setupOutput,
+		"  Found %s covering %s.\n",
+		plural(candidate.summary.CertificateCount, "usable certificate", "usable certificates"),
+		plural(candidate.summary.HostnameCount, "hostname", "hostnames"),
+	)
 }
 
 func promptYesNo(reader *bufio.Reader, output io.Writer, question string, defaultYes bool) (bool, error) {
@@ -266,7 +323,7 @@ func promptYesNo(reader *bufio.Reader, output io.Writer, question string, defaul
 	}
 
 	for {
-		fmt.Fprintf(output, "%s [%s]: ", question, defaultLabel)
+		fmt.Fprintf(output, "\n  %s [%s]: ", question, defaultLabel)
 
 		line, err := reader.ReadString('\n')
 		if err != nil && len(line) == 0 {
@@ -276,19 +333,110 @@ func promptYesNo(reader *bufio.Reader, output io.Writer, question string, defaul
 		answer := strings.ToLower(strings.TrimSpace(line))
 		switch answer {
 		case "":
+			fmt.Fprintln(output)
 			return defaultYes, nil
 		case "y", "yes":
+			fmt.Fprintln(output)
 			return true, nil
 		case "n", "no":
+			fmt.Fprintln(output)
 			return false, nil
 		default:
-			fmt.Fprintln(output, "Please answer yes or no.")
+			fmt.Fprintln(output)
+			fmt.Fprintln(output, "  Please answer yes or no.")
 		}
 	}
 }
 
 func warnMissingSetupPaths() {
-	log.Printf("[WARNING] FlowGuard is probably unable to start without a valid host.cert_path or host.nginx_config_path")
+	fmt.Fprintln(setupOutput, "⚠ FlowGuard is probably unable to start without a valid host.cert_path or host.nginx_config_path")
+}
+
+func runSetupStep(activeMessage, successMessage string, action func() error) error {
+	spinner := startSetupSpinner(activeMessage)
+	if spinner == nil {
+		fmt.Fprintf(setupOutput, "%s...\n", activeMessage)
+	}
+
+	err := action()
+	if spinner != nil {
+		spinner.stop(successMessage, err)
+		return err
+	}
+
+	if err != nil {
+		fmt.Fprintf(setupOutput, "✗ %s failed\n", activeMessage)
+		return err
+	}
+
+	fmt.Fprintf(setupOutput, "✓ %s\n", successMessage)
+	return nil
+}
+
+type setupSpinner struct {
+	activeMessage string
+	done          chan struct{}
+	stopCh        chan struct{}
+}
+
+func startSetupSpinner(activeMessage string) *setupSpinner {
+	if !setupOutputSupportsSpinner() {
+		return nil
+	}
+
+	spinner := &setupSpinner{
+		activeMessage: activeMessage,
+		done:          make(chan struct{}),
+		stopCh:        make(chan struct{}),
+	}
+
+	go func() {
+		defer close(spinner.done)
+
+		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+
+		index := 0
+		for {
+			fmt.Fprintf(setupOutput, "\r\033[2K%s %s...", frames[index%len(frames)], activeMessage)
+			index++
+
+			select {
+			case <-ticker.C:
+			case <-spinner.stopCh:
+				return
+			}
+		}
+	}()
+
+	return spinner
+}
+
+func (s *setupSpinner) stop(successMessage string, err error) {
+	close(s.stopCh)
+	<-s.done
+
+	if err != nil {
+		fmt.Fprintf(setupOutput, "\r\033[2K✗ %s failed\n", s.activeMessage)
+		return
+	}
+
+	fmt.Fprintf(setupOutput, "\r\033[2K✓ %s\n", successMessage)
+}
+
+func setupOutputSupportsSpinner() bool {
+	file, ok := setupOutput.(*os.File)
+	return ok && isTerminal(file)
+}
+
+func plural(count int, singular, plural string) string {
+	word := plural
+	if count == 1 {
+		word = singular
+	}
+
+	return fmt.Sprintf("%d %s", count, word)
 }
 
 func writeSetupConfig(body []byte) error {

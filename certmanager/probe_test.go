@@ -52,8 +52,15 @@ func TestProbeCertificateDirectoryAcceptsValidCombinedPEM(t *testing.T) {
 	cert := createSelfSignedRSACert(t, "example.com", time.Now().Add(24*time.Hour))
 	writeCombinedPEM(t, filepath.Join(dir, "example.pem"), cert)
 
-	if err := ProbeCertificateDirectory(dir); err != nil {
-		t.Fatalf("ProbeCertificateDirectory: %v", err)
+	summary, err := ProbeCertificateDirectorySummary(dir)
+	if err != nil {
+		t.Fatalf("ProbeCertificateDirectorySummary: %v", err)
+	}
+	if summary.CertificateCount != 1 {
+		t.Fatalf("expected 1 certificate, got %d", summary.CertificateCount)
+	}
+	if summary.HostnameCount != 1 {
+		t.Fatalf("expected 1 hostname, got %d", summary.HostnameCount)
 	}
 }
 
@@ -87,8 +94,18 @@ func TestProbeNginxConfigAcceptsConfigWithoutCertificates(t *testing.T) {
 		t.Fatalf("write nginx config: %v", err)
 	}
 
-	if err := ProbeNginxConfig(configPath); err != nil {
-		t.Fatalf("ProbeNginxConfig: %v", err)
+	summary, err := ProbeNginxConfigSummary(configPath)
+	if err != nil {
+		t.Fatalf("ProbeNginxConfigSummary: %v", err)
+	}
+	if summary.CertificateCount != 0 {
+		t.Fatalf("expected 0 certificates, got %d", summary.CertificateCount)
+	}
+	if summary.HostnameCount != 0 {
+		t.Fatalf("expected 0 hostnames, got %d", summary.HostnameCount)
+	}
+	if summary.ConfigFileCount != 1 {
+		t.Fatalf("expected 1 config file, got %d", summary.ConfigFileCount)
 	}
 }
 
