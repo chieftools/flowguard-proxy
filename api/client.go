@@ -56,6 +56,15 @@ func (c *Client) buildURL(path string) string {
 // ErrNotModified is returned when the API returns 304 Not Modified
 var ErrNotModified = fmt.Errorf("configuration not modified")
 
+type configPathsPatch struct {
+	Host configPathsPatchHost `json:"host"`
+}
+
+type configPathsPatchHost struct {
+	CertPath        string `json:"cert_path,omitempty"`
+	NginxConfigPath string `json:"nginx_config_path,omitempty"`
+}
+
 // GetConfig fetches the configuration from the API
 // If etag is provided, it will be sent in the If-None-Match header
 // Returns ErrNotModified if the server returns 304 Not Modified
@@ -109,6 +118,61 @@ func (c *Client) GetConfig(etag string) ([]byte, error) {
 	}
 
 	return body, nil
+}
+
+// PatchConfigPaths updates certificate source paths in the host configuration.
+func (c *Client) PatchConfigPaths(certPath, nginxConfigPath string) error {
+	if c.hostKey == "" {
+		return fmt.Errorf("host key is required")
+	}
+	if certPath == "" && nginxConfigPath == "" {
+		return fmt.Errorf("at least one configuration path is required")
+	}
+
+	payload := configPathsPatch{
+		Host: configPathsPatchHost{
+			CertPath:        certPath,
+			NginxConfigPath: nginxConfigPath,
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config patch payload: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, c.buildURL("config"), bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create config patch request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.hostKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", c.userAgent)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to patch configuration: %w", err)
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read config patch response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var errorResponse struct {
+			Message string `json:"message,omitempty"`
+		}
+		if err := json.Unmarshal(responseBody, &errorResponse); err != nil {
+			return fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(responseBody))
+		}
+
+		return fmt.Errorf("API returned status %d: %s", resp.StatusCode, errorResponse.Message)
+	}
+
+	return nil
 }
 
 // HeartbeatPayload is the data sent in each heartbeat POST
