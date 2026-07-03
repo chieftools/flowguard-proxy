@@ -19,7 +19,7 @@ It features an (optional) [control panel](https://flowguard.network/) for easy m
 - **Graceful Shutdown**: Automatically removes iptables rules on shutdown to restore original traffic flow
 
 ### Security Middleware
-- **Dynamic Rule-Based Filtering**: Flexible rule engine with conditions for path, domain, IP, ASN, user-agent, headers, and iplist matching
+- **Dynamic Rule-Based Filtering**: Flexible rule engine with conditions for path, method, domain, IP/CIDR, ASN, user-agent, headers, query parameters, cookies, and iplist matching
 - **IP Database Integration**: ASN and geolocation lookups using configurable IP databases (MaxMind format)
 - **IP List System**: Built-in high-performance in-memory IP lists with automatic URL refresh (10M+ lookups/sec)
 - **Trusted Proxy Support**: Properly handles X-Forwarded-For headers from configurable trusted proxies
@@ -338,10 +338,13 @@ Rules support complex conditions with logical operators:
 - Unsupported operator values are rejected when the configuration is loaded.
 - **Match Types**:
   - `path`: URL path matching
+  - `method`: HTTP method matching
   - `domain`: Host header matching
   - `user-agent`: User-Agent header matching
   - `header`: Arbitrary header matching
-  - `ip`: Client IP matching
+  - `query-param`: Query parameter matching
+  - `cookie`: Request cookie matching
+  - `ip`: Client IP matching, including optional inline CIDR ranges
   - `asn`: Autonomous System Number matching
   - `as-name`: ASN organization name matching
   - `as-domain`: ASN domain matching

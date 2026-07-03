@@ -292,6 +292,8 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 			// Normalize the path for consistent matching (Cloudflare-style normalization)
 			value = normalization.NormalizePath(r.URL.Path)
 		}
+	case "method":
+		value = r.Method
 	case "header":
 		// For header type, the Key field contains the header name
 		headerName := match.Key
@@ -307,6 +309,20 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 			return value == ""
 		}
 		return rm.matchesStringValue(value, match)
+	case "query-param":
+		if match.Key == "" {
+			log.Printf("[middleware:rules] Query parameter match missing 'key' field")
+			return false
+		}
+		values, present := r.URL.Query()[match.Key]
+		return rm.matchesKeyedValues(match, values, present)
+	case "cookie":
+		if match.Key == "" {
+			log.Printf("[middleware:rules] Cookie match missing 'key' field")
+			return false
+		}
+		values := cookieValues(r, match.Key)
+		return rm.matchesKeyedValues(match, values, len(values) > 0)
 	case "user-agent":
 		value = r.Header.Get("User-Agent")
 	case "fingerprint-ja4":
@@ -321,6 +337,9 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 			host = clientIP
 		}
 		value = host
+		if isIPTargetMatch(match.Match) {
+			return rm.matchesIPValue(value, match)
+		}
 	case "asn":
 		clientASNInfo := GetClientASN(r)
 		if clientASNInfo == nil {
@@ -363,6 +382,91 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 	}
 
 	return rm.matchesStringValue(value, match)
+}
+
+func cookieValues(r *http.Request, name string) []string {
+	var values []string
+	for _, cookie := range r.Cookies() {
+		if cookie.Name == name {
+			values = append(values, cookie.Value)
+		}
+	}
+	return values
+}
+
+func (rm *RulesMiddleware) matchesKeyedValues(match *config.MatchCondition, values []string, present bool) bool {
+	switch match.Match {
+	case "exists":
+		return present
+	case "missing":
+		return !present
+	}
+
+	if !present || len(values) == 0 {
+		return false
+	}
+
+	for _, value := range values {
+		if rm.matchesStringValue(value, match) {
+			return true
+		}
+	}
+	return false
+}
+
+func isIPTargetMatch(operator string) bool {
+	return operator == "equals" || operator == "not-equals" || operator == "in" || operator == "not-in"
+}
+
+func (rm *RulesMiddleware) matchesIPValue(value string, match *config.MatchCondition) bool {
+	ip := net.ParseIP(value)
+	if ip == nil {
+		return false
+	}
+
+	targets := ipMatchTargets(match)
+	if len(targets) == 0 {
+		return false
+	}
+
+	matched := ipMatchesAnyTarget(ip, targets)
+	if match.Match == "not-equals" || match.Match == "not-in" {
+		return !matched
+	}
+	return matched
+}
+
+func ipMatchTargets(match *config.MatchCondition) []string {
+	targets := make([]string, 0, len(match.Values)+1)
+	if match.Value != "" {
+		targets = append(targets, match.Value)
+	}
+	targets = append(targets, match.Values...)
+	return targets
+}
+
+func ipMatchesAnyTarget(ip net.IP, targets []string) bool {
+	for _, target := range targets {
+		if ipMatchesTarget(ip, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func ipMatchesTarget(ip net.IP, target string) bool {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return false
+	}
+
+	if strings.Contains(target, "/") {
+		_, network, err := net.ParseCIDR(target)
+		return err == nil && network.Contains(ip)
+	}
+
+	targetIP := net.ParseIP(target)
+	return targetIP != nil && targetIP.Equal(ip)
 }
 
 // matchesStringValue checks if a string value matches the given criteria
@@ -758,6 +862,8 @@ func (kg *RateLimitKeyGenerator) extractKeyParts(conditions *config.RuleConditio
 			}
 		case "path":
 			*keyParts = append(*keyParts, "path:"+r.URL.Path)
+		case "method":
+			*keyParts = append(*keyParts, "method:"+r.Method)
 		case "fingerprint-ja4":
 			ja4 := GetJA4Fingerprint(r)
 			if ja4 != "" {
@@ -769,6 +875,18 @@ func (kg *RateLimitKeyGenerator) extractKeyParts(conditions *config.RuleConditio
 				headerValue := r.Header.Get(headerName)
 				if headerValue != "" {
 					*keyParts = append(*keyParts, "header:"+headerName+":"+headerValue)
+				}
+			}
+		case "query-param":
+			if match.Key != "" {
+				for _, value := range r.URL.Query()[match.Key] {
+					*keyParts = append(*keyParts, "query-param:"+match.Key+":"+value)
+				}
+			}
+		case "cookie":
+			if match.Key != "" {
+				for _, value := range cookieValues(r, match.Key) {
+					*keyParts = append(*keyParts, "cookie:"+match.Key+":"+value)
 				}
 			}
 		case "asn":

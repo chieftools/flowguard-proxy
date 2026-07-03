@@ -212,7 +212,10 @@
                     "enum": [
                         "domain",
                         "path",
+                        "method",
                         "header",
+                        "query-param",
+                        "cookie",
                         "user-agent",
                         "ip",
                         "asn",
@@ -248,7 +251,7 @@
                 },
                 "key": {
                     "type": "string",
-                    "description": "The header name to match against. Required for 'header' type matches."
+                    "description": "The key/name to match against. Required for 'header', 'query-param', and 'cookie' type matches."
                 },
                 "value": {
                     "type": "string",
@@ -286,7 +289,11 @@
                     "if": {
                         "properties": {
                             "type": {
-                                "const": "header"
+                                "enum": [
+                                    "header",
+                                    "query-param",
+                                    "cookie"
+                                ]
                             }
                         }
                     },
