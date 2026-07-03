@@ -11,7 +11,7 @@ import (
 func (m *Manager) compileConditionRegex(cond *RuleConditions) {
 	// Compile regex in matches
 	for i := range cond.Matches {
-		if cond.Matches[i].Match == "regex" {
+		if cond.Matches[i].Match == "regex" || cond.Matches[i].Match == "not-regex" {
 			pattern := cond.Matches[i].Value
 			if cond.Matches[i].CaseInsensitive {
 				pattern = "(?i)" + pattern

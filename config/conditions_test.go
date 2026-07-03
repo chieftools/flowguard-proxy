@@ -58,6 +58,10 @@ func TestCompileConditionRegexCompilesNestedConditions(t *testing.T) {
 				Match: "regex",
 				Value: "^/admin",
 			},
+			{
+				Match: "not-regex",
+				Value: "^/internal",
+			},
 		},
 		Groups: []RuleConditions{
 			{
@@ -65,6 +69,11 @@ func TestCompileConditionRegexCompilesNestedConditions(t *testing.T) {
 					{
 						Match:           "regex",
 						Value:           "bot",
+						CaseInsensitive: true,
+					},
+					{
+						Match:           "not-regex",
+						Value:           "crawler",
 						CaseInsensitive: true,
 					},
 				},
@@ -81,11 +90,27 @@ func TestCompileConditionRegexCompilesNestedConditions(t *testing.T) {
 		t.Fatal("expected top-level regex to match compiled pattern")
 	}
 
-	nested := conditions.Groups[0].Matches[0].GetCompiledRegex()
-	if nested == nil {
+	topLevelNotRegex := conditions.Matches[1].GetCompiledRegex()
+	if topLevelNotRegex == nil {
+		t.Fatal("expected top-level not-regex to compile")
+	}
+	if !topLevelNotRegex.MatchString("/internal/health") {
+		t.Fatal("expected top-level not-regex pattern to compile as regex")
+	}
+
+	nestedRegex := conditions.Groups[0].Matches[0].GetCompiledRegex()
+	if nestedRegex == nil {
 		t.Fatal("expected nested regex to compile")
 	}
-	if !nested.MatchString("TestBot/1.0") {
+	if !nestedRegex.MatchString("TestBot/1.0") {
 		t.Fatal("expected nested case-insensitive regex to match")
+	}
+
+	nestedNotRegex := conditions.Groups[0].Matches[1].GetCompiledRegex()
+	if nestedNotRegex == nil {
+		t.Fatal("expected nested not-regex to compile")
+	}
+	if !nestedNotRegex.MatchString("GoogleCrawler/1.0") {
+		t.Fatal("expected nested case-insensitive not-regex pattern to compile as regex")
 	}
 }
