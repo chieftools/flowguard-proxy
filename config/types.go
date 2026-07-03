@@ -149,14 +149,13 @@ type RuleConditions struct {
 }
 
 type MatchCondition struct {
-	Type            string   `json:"type"`          // path, domain, ip, agent, header, asn, ipset, iplist, fingerprint-ja4
+	Type            string   `json:"type"`          // path, domain, ip, agent, header, asn, iplist, fingerprint-ja4
 	Match           string   `json:"match"`         // equals, contains, regex, in, not-in, etc.
 	Key             string   `json:"key,omitempty"` // For header matches: the header name
 	Value           string   `json:"value,omitempty"`
 	Values          []string `json:"values,omitempty"`
 	CaseInsensitive bool     `json:"case_insensitive,omitempty"`
 	Confidence      int      `json:"confidence,omitempty"` // Minimum confidence level (0-100) for IP list matches
-	Family          uint     `json:"family,omitempty"`     // For ipset matches (4 or 6)
 	RawMatch        bool     `json:"raw_match,omitempty"`  // Skip normalization for path matching
 	compiledRegex   *regexp.Regexp
 }

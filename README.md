@@ -19,10 +19,9 @@ It features an (optional) [control panel](https://flowguard.network/) for easy m
 - **Graceful Shutdown**: Automatically removes iptables rules on shutdown to restore original traffic flow
 
 ### Security Middleware
-- **Dynamic Rule-Based Filtering**: Flexible rule engine with conditions for path, domain, IP, ASN, user-agent, headers, ipset, and iplist matching
+- **Dynamic Rule-Based Filtering**: Flexible rule engine with conditions for path, domain, IP, ASN, user-agent, headers, and iplist matching
 - **IP Database Integration**: ASN and geolocation lookups using configurable IP databases (MaxMind format)
 - **IP List System**: Built-in high-performance in-memory IP lists with automatic URL refresh (10M+ lookups/sec)
-- **IPSet Integration**: Direct integration with Linux ipset for kernel-level IP blocking
 - **Trusted Proxy Support**: Properly handles X-Forwarded-For headers from configurable trusted proxies
 - **Real Client IP Detection**: Extracts actual client IPs through proxy chains for accurate filtering
 - **Hot Configuration Reload**: Automatic configuration file monitoring and reloading without restart
@@ -42,7 +41,6 @@ It features an (optional) [control panel](https://flowguard.network/) for easy m
 - Go 1.25 or later
 - Linux system with iptables support
 - Root/sudo access for port redirection
-- ipset installed for IP filtering (optional)
 
 ### Building from Source
 
@@ -349,7 +347,6 @@ Rules support complex conditions with logical operators:
   - `as-domain`: ASN domain matching
   - `country`: Country code matching (from GeoIP database)
   - `continent`: Continent code matching (from GeoIP database)
-  - `ipset`: Linux ipset membership checking (external tool required)
   - `iplist`: In-memory IP list matching (built-in, no dependencies)
   - `fingerprint-ja4`: JA4 TLS client fingerprint matching (HTTPS and HTTP/3 requests)
 - **Match Operations**: `equals`, `not-equals`, `contains`, `not-contains`, `starts-with`, `not-starts-with`, `ends-with`, `not-ends-with`, `regex`, `not-regex`, `in`, `not-in`, `exists`, `missing`
@@ -491,24 +488,6 @@ flowguard iplist blocklist
 # Check if IP is in list
 flowguard iplist blocklist contains 192.168.1.1
 ```
-
-### IPSet Integration (Legacy)
-
-For existing IPSet infrastructure, create and populate lists before starting:
-
-```bash
-# Create IPv4 blocklist
-sudo ipset create abuseipdb_v4 hash:net
-
-# Create IPv6 blocklist
-sudo ipset create abuseipdb_v6 hash:net family inet6
-
-# Add IPs to blocklist
-sudo ipset add abuseipdb_v4 192.168.1.100
-sudo ipset add abuseipdb_v6 2001:db8::1
-```
-
-**Note:** IP Lists (`iplist` type) are recommended for new deployments due to easier management, automatic updates, and unified IPv4/IPv6 support. Use IPSet (`ipset` type) only if you have existing IPSet infrastructure.
 
 ### Dynamic Security Rules
 

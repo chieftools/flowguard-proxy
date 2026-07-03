@@ -102,7 +102,6 @@ Description: ${DESCRIPTION}
  dynamic rule-based security filtering designed for transparent
  HTTP/HTTPS traffic interception.
 Depends: iptables
-Suggests: ipset
 EOF
 
 # Create postinst script

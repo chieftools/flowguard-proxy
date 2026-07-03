@@ -220,7 +220,6 @@
                         "as-domain",
                         "country",
                         "continent",
-                        "ipset",
                         "iplist",
                         "registerable-domain",
                         "fingerprint-ja4"
@@ -275,14 +274,6 @@
                     "minimum": 0,
                     "maximum": 100,
                     "description": "Minimum confidence level (0-100) required for a match to be considered valid (only applies to IP list matches)"
-                },
-                "family": {
-                    "type": "integer",
-                    "enum": [
-                        4,
-                        6
-                    ],
-                    "description": "IP family for ipset matches (4 for IPv4, 6 for IPv6)"
                 }
             },
             "required": [

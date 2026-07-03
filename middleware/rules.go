@@ -8,7 +8,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -356,8 +355,6 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 			return false
 		}
 		value = clientASNInfo.ContinentCode
-	case "ipset":
-		return rm.matchesIPSet(r, match)
 	case "iplist":
 		return rm.matchesIPList(r, match)
 	default:
@@ -445,39 +442,6 @@ func (rm *RulesMiddleware) matchesStringValue(value string, match *config.MatchC
 		log.Printf("[middleware:rules] Unknown match type: %s", match.Match)
 		return false
 	}
-}
-
-// matchesIPSet checks if the client IP is in the specified ipset
-func (rm *RulesMiddleware) matchesIPSet(r *http.Request, match *config.MatchCondition) bool {
-	clientIP := GetClientIP(r)
-	host, _, err := net.SplitHostPort(clientIP)
-	if err != nil {
-		host = clientIP
-	}
-
-	parsedIP := net.ParseIP(host)
-	if parsedIP == nil {
-		return false
-	}
-
-	isIPv4 := parsedIP.To4() != nil
-
-	// Check if IP family matches
-	if match.Family != 0 {
-		if (match.Family == 4 && !isIPv4) || (match.Family == 6 && isIPv4) {
-			return false
-		}
-	}
-
-	// Test if IP is in the ipset
-	cmd := exec.Command("ipset", "test", match.Value, host)
-	err = cmd.Run()
-
-	// Handle "in" vs "not-in"
-	if match.Match == "not-in" {
-		return err != nil // IP is NOT in the set
-	}
-	return err == nil // IP IS in the set
 }
 
 // matchesIPList checks if the client IP is in the specified in-memory IP list
