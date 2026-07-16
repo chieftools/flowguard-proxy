@@ -1,11 +1,19 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
+	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -101,7 +109,7 @@ func TestServerStartHTTPSSkipsHTTP3WhenDisabled(t *testing.T) {
 	}
 }
 
-func TestHTTPSReverseProxyTransportAttemptsHTTP2(t *testing.T) {
+func TestHTTPSReverseProxyTransportUsesHTTP1UpstreamByDefault(t *testing.T) {
 	server := NewServer(&ServerConfig{
 		scheme:   "https",
 		bindAddr: "127.0.0.1",
@@ -113,15 +121,86 @@ func TestHTTPSReverseProxyTransportAttemptsHTTP2(t *testing.T) {
 	}
 
 	proxy := server.createReverseProxyWithHost(target, "example.com")
-	transport, ok := proxy.Transport.(*http.Transport)
+	retryTransport, ok := proxy.Transport.(*upstreamRetryTransport)
 	if !ok {
-		t.Fatalf("expected *http.Transport, got %T", proxy.Transport)
+		t.Fatalf("expected *upstreamRetryTransport, got %T", proxy.Transport)
 	}
-	if !transport.ForceAttemptHTTP2 {
-		t.Fatal("expected HTTPS upstream transport to attempt HTTP/2")
+	transport, ok := retryTransport.next.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", retryTransport.next)
 	}
-	if transport.TLSClientConfig == nil || transport.TLSClientConfig.ServerName != "example.com" {
+	if transport.ForceAttemptHTTP2 {
+		t.Fatal("expected HTTPS upstream transport to stay on HTTP/1.1 by default")
+	}
+	if transport.TLSNextProto == nil {
+		t.Fatal("expected TLSNextProto to be set so upstream HTTP/2 stays disabled")
+	}
+	if len(transport.TLSNextProto) != 0 {
+		t.Fatalf("expected no alternate upstream TLS protocols, got %d", len(transport.TLSNextProto))
+	}
+	if transport.TLSClientConfig == nil || !transport.TLSClientConfig.InsecureSkipVerify {
 		t.Fatalf("unexpected TLS server name: %#v", transport.TLSClientConfig)
+	}
+	if transport.TLSClientConfig.ServerName != "" {
+		t.Fatalf("expected upstream SNI to come from request URL host, got %q", transport.TLSClientConfig.ServerName)
+	}
+}
+
+func TestReverseProxyUsesRequestedHostAndDialsBindAddress(t *testing.T) {
+	server := NewServer(&ServerConfig{
+		scheme:   "https",
+		bindAddr: "185.208.210.7",
+		bindPort: "11443",
+	})
+	target, err := url.Parse("https://185.208.210.7")
+	if err != nil {
+		t.Fatalf("parse target: %v", err)
+	}
+
+	proxy := server.createReverseProxyWithHost(target, "example.com")
+	req, err := http.NewRequest(http.MethodGet, "https://example.com/test", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	proxy.Director(req)
+
+	if req.URL.Host != "example.com" {
+		t.Fatalf("expected upstream URL host to stay on requested host for SNI/pooling, got %q", req.URL.Host)
+	}
+	if req.Host != "example.com" {
+		t.Fatalf("expected Host header to be preserved, got %q", req.Host)
+	}
+	if got := server.upstreamAddress(); got != "185.208.210.7:443" {
+		t.Fatalf("expected dial address to target bind IP on default HTTPS port, got %q", got)
+	}
+}
+
+func TestReverseProxyClientAbortRecords499InsteadOfSynthetic502(t *testing.T) {
+	server := NewServer(&ServerConfig{
+		scheme:   "https",
+		bindAddr: "127.0.0.1",
+		bindPort: "11443",
+	})
+	target, err := url.Parse("https://example.com")
+	if err != nil {
+		t.Fatalf("parse target: %v", err)
+	}
+
+	proxy := server.createReverseProxyWithHost(target, "example.com")
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/static/app.js", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	cancel()
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	proxy.ErrorHandler(w, req, context.Canceled)
+
+	if w.Code != statusClientClosedRequest {
+		t.Fatalf("expected client abort to record 499, got %d", w.Code)
+	}
+	if w.Body.Len() != 0 {
+		t.Fatalf("expected no synthetic error body for client abort, got %q", w.Body.String())
 	}
 }
 
@@ -370,4 +449,354 @@ func TestServerStartServesAndShutsDown(t *testing.T) {
 		t.Fatalf("unexpected serve error: %v", err)
 	default:
 	}
+}
+
+func TestFilteredLoggerSuppressesH3RequestCancelledOnlyWhenNotVerbose(t *testing.T) {
+	var buf bytes.Buffer
+	originalOutput := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(originalOutput)
+
+	newFilteredLogger(false).Print("suppressing panic for copyResponse error in test; copy error: H3_REQUEST_CANCELLED")
+	if buf.Len() != 0 {
+		t.Fatalf("expected H3_REQUEST_CANCELLED to be filtered when not verbose, got %q", buf.String())
+	}
+
+	newFilteredLogger(false).Print("suppressing panic for copyResponse error in test; copy error: H3 error (0x0)")
+	if buf.Len() != 0 {
+		t.Fatalf("expected H3 error (0x0) to be filtered when not verbose, got %q", buf.String())
+	}
+
+	newFilteredLogger(false).Print("suppressing panic for copyResponse error in test; copy error: NO_ERROR (remote): 85:Network blackhole detected")
+	if buf.Len() != 0 {
+		t.Fatalf("expected network blackhole copy error to be filtered when not verbose, got %q", buf.String())
+	}
+
+	newFilteredLogger(false).Print("suppressing panic for copyResponse error in test; copy error: unexpected backend read failure")
+	if !strings.Contains(buf.String(), "unexpected backend read failure") {
+		t.Fatalf("expected unrelated copy error to be logged, got %q", buf.String())
+	}
+
+	buf.Reset()
+	newFilteredLogger(true).Print("suppressing panic for copyResponse error in test; copy error: H3_REQUEST_CANCELLED")
+	if !strings.Contains(buf.String(), "H3_REQUEST_CANCELLED") {
+		t.Fatalf("expected H3_REQUEST_CANCELLED to be logged when verbose, got %q", buf.String())
+	}
+}
+
+func TestProxyErrorLogLimiterRateLimitsRecoveryLogs(t *testing.T) {
+	var buf bytes.Buffer
+	originalOutput := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(originalOutput)
+
+	limiter := newProxyErrorLogLimiter(time.Second)
+	err := retryableDialError(syscall.ECONNREFUSED)
+
+	limiter.logRecovery("127.0.0.1", "11443", "example.com", 2, err)
+	limiter.logRecovery("127.0.0.1", "11443", "example.com", 1, err)
+
+	got := buf.String()
+	if strings.Count(got, "upstream recovered for example.com") != 1 {
+		t.Fatalf("expected only first recovery log before flush, got %q", got)
+	}
+
+	limiter.flushRecovery("127.0.0.1|11443|example.com|recovered|connection-refused", "127.0.0.1", "11443", "example.com", err)
+	if !strings.Contains(buf.String(), "suppressed 1 similar transient recovery logs") {
+		t.Fatalf("expected suppressed recovery summary, got %q", buf.String())
+	}
+}
+
+func TestUpstreamRetryTransportRetriesSafeBodylessRequests(t *testing.T) {
+	attempts := 0
+	var recoveredFailures int
+	var recoveredErr error
+	transport := &upstreamRetryTransport{
+		next: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			if attempts == 1 {
+				return nil, retryableDialError(syscall.ECONNREFUSED)
+			}
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Header:     http.Header{},
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		}),
+		breaker:    newUpstreamCircuitBreaker(3, time.Second),
+		retryDelay: func() time.Duration { return 0 },
+		sleep:      func(context.Context, time.Duration) error { return nil },
+		onRecovered: func(req *http.Request, failures int, err error) {
+			recoveredFailures = failures
+			recoveredErr = err
+		},
+	}
+	req, err := http.NewRequest(http.MethodGet, "https://example.com/", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected retry response status 204, got %d", resp.StatusCode)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts)
+	}
+	if recoveredFailures != 1 {
+		t.Fatalf("expected one recovered transient failure, got %d", recoveredFailures)
+	}
+	if !errors.Is(recoveredErr, syscall.ECONNREFUSED) {
+		t.Fatalf("expected recovered error to be ECONNREFUSED, got %v", recoveredErr)
+	}
+}
+
+func TestUpstreamRetryTransportDoesNotRetryUnsafeOrBodyRequests(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *http.Request
+		err  error
+	}{
+		{
+			name: "post connection reset",
+			req:  mustNewRequest(t, http.MethodPost, "https://example.com/", nil),
+			err:  retryableDialError(syscall.ECONNRESET),
+		},
+		{
+			name: "get with non-replayable body",
+			req:  mustNewRequest(t, http.MethodGet, "https://example.com/", io.NopCloser(strings.NewReader("body"))),
+			err:  retryableDialError(syscall.ECONNREFUSED),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attempts := 0
+			transport := &upstreamRetryTransport{
+				next: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					attempts++
+					return nil, tt.err
+				}),
+				breaker:    newUpstreamCircuitBreaker(3, time.Second),
+				retryDelay: func() time.Duration { return 0 },
+				sleep:      func(context.Context, time.Duration) error { return nil },
+			}
+
+			_, err := transport.RoundTrip(tt.req)
+			if !errors.Is(err, tt.err) {
+				t.Fatalf("expected %v, got %v", tt.err, err)
+			}
+			if attempts != 1 {
+				t.Fatalf("expected 1 attempt, got %d", attempts)
+			}
+		})
+	}
+}
+
+func TestUpstreamRetryTransportKeepsUnsafeBodylessRequestAliveAfterDialFailures(t *testing.T) {
+	now := time.Unix(100, 0)
+	breaker := newUpstreamCircuitBreaker(2, time.Second)
+	breaker.now = func() time.Time { return now }
+
+	attempts := 0
+	var slept time.Duration
+	transport := &upstreamRetryTransport{
+		next: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			if attempts <= 2 {
+				return nil, retryableDialError(syscall.ECONNREFUSED)
+			}
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Header:     http.Header{},
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		}),
+		breaker:      breaker,
+		recoveryWait: 5 * time.Second,
+		retryDelay:   func() time.Duration { return 0 },
+		sleep: func(ctx context.Context, delay time.Duration) error {
+			slept += delay
+			now = now.Add(delay)
+			return nil
+		},
+	}
+
+	resp, err := transport.RoundTrip(mustNewRequest(t, http.MethodPost, "https://example.com/", nil))
+	if err != nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected recovery response status 204, got %d", resp.StatusCode)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected two failed dial attempts and one recovery attempt, got %d", attempts)
+	}
+	if slept != time.Second {
+		t.Fatalf("expected to wait for breaker cooldown after failures, slept %v", slept)
+	}
+}
+
+func TestUpstreamCircuitBreakerOpensAfterConsecutiveTransientFailures(t *testing.T) {
+	now := time.Unix(100, 0)
+	breaker := newUpstreamCircuitBreaker(3, time.Second)
+	breaker.now = func() time.Time { return now }
+
+	attempts := 0
+	transport := &upstreamRetryTransport{
+		next: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			return nil, retryableDialError(syscall.ECONNRESET)
+		}),
+		breaker:    breaker,
+		retryDelay: func() time.Duration { return 0 },
+		sleep:      func(context.Context, time.Duration) error { return nil },
+	}
+
+	for i := 0; i < 3; i++ {
+		_, err := transport.RoundTrip(mustNewRequest(t, http.MethodPost, "https://example.com/", nil))
+		if !errors.Is(err, syscall.ECONNRESET) {
+			t.Fatalf("failure %d: expected ECONNRESET, got %v", i+1, err)
+		}
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 upstream attempts before opening, got %d", attempts)
+	}
+
+	_, err := transport.RoundTrip(mustNewRequest(t, http.MethodPost, "https://example.com/", nil))
+	if !errors.Is(err, errUpstreamCircuitOpen) {
+		t.Fatalf("expected open circuit error, got %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected open circuit to avoid an upstream attempt, got %d attempts", attempts)
+	}
+
+	now = now.Add(time.Second + time.Nanosecond)
+	_, err = transport.RoundTrip(mustNewRequest(t, http.MethodPost, "https://example.com/", nil))
+	if !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("expected half-open probe failure, got %v", err)
+	}
+	if attempts != 4 {
+		t.Fatalf("expected one half-open upstream probe, got %d attempts", attempts)
+	}
+
+	_, err = transport.RoundTrip(mustNewRequest(t, http.MethodPost, "https://example.com/", nil))
+	if !errors.Is(err, errUpstreamCircuitOpen) {
+		t.Fatalf("expected reopened circuit error, got %v", err)
+	}
+	if attempts != 4 {
+		t.Fatalf("expected reopened circuit to avoid an upstream attempt, got %d attempts", attempts)
+	}
+}
+
+func TestUpstreamRetryTransportWaitsForOpenBreakerRecovery(t *testing.T) {
+	now := time.Unix(100, 0)
+	breaker := newUpstreamCircuitBreaker(1, time.Second)
+	breaker.now = func() time.Time { return now }
+	breaker.recordFailure()
+
+	attempts := 0
+	var slept time.Duration
+	transport := &upstreamRetryTransport{
+		next: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Header:     http.Header{},
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		}),
+		breaker:      breaker,
+		recoveryWait: 5 * time.Second,
+		sleep: func(ctx context.Context, delay time.Duration) error {
+			slept += delay
+			now = now.Add(delay)
+			return nil
+		},
+	}
+
+	resp, err := transport.RoundTrip(mustNewRequest(t, http.MethodGet, "https://example.com/", nil))
+	if err != nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected recovery response status 204, got %d", resp.StatusCode)
+	}
+	if attempts != 1 {
+		t.Fatalf("expected one half-open probe attempt, got %d", attempts)
+	}
+	if slept != time.Second {
+		t.Fatalf("expected to wait for breaker cooldown, slept %v", slept)
+	}
+}
+
+func TestUpstreamRetryTransportKeepsSafeRequestAliveUntilRecovery(t *testing.T) {
+	now := time.Unix(100, 0)
+	breaker := newUpstreamCircuitBreaker(2, time.Second)
+	breaker.now = func() time.Time { return now }
+
+	attempts := 0
+	var slept time.Duration
+	transport := &upstreamRetryTransport{
+		next: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			if attempts <= 2 {
+				return nil, retryableDialError(syscall.ECONNREFUSED)
+			}
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Header:     http.Header{},
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		}),
+		breaker:      breaker,
+		recoveryWait: 5 * time.Second,
+		retryDelay:   func() time.Duration { return 0 },
+		sleep: func(ctx context.Context, delay time.Duration) error {
+			slept += delay
+			now = now.Add(delay)
+			return nil
+		},
+	}
+
+	resp, err := transport.RoundTrip(mustNewRequest(t, http.MethodGet, "https://example.com/", nil))
+	if err != nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected recovery response status 204, got %d", resp.StatusCode)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected two failed attempts and one recovery attempt, got %d", attempts)
+	}
+	if slept != time.Second {
+		t.Fatalf("expected to wait for breaker cooldown after failures, slept %v", slept)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func mustNewRequest(t *testing.T, method, url string, body io.Reader) *http.Request {
+	t.Helper()
+
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	return req
+}
+
+func retryableDialError(errno syscall.Errno) error {
+	return fmt.Errorf("dial tcp: connect: %w", errno)
 }

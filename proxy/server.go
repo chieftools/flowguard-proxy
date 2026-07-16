@@ -23,17 +23,22 @@ import (
 	"github.com/quic-go/quic-go/http3"
 )
 
+const statusClientClosedRequest = 499
+
 type Server struct {
-	config          *ServerConfig
-	runner          firewallRunner
-	udpConn         net.PacketConn
-	udpOnce         sync.Once
-	listener        net.Listener
-	httpServer      *http.Server
-	http3Server     *http3.Server
-	listenerOnce    sync.Once
-	fingerprints    *fingerprint.Store
-	interfaceLookup func(string) (string, error)
+	config               *ServerConfig
+	runner               firewallRunner
+	udpConn              net.PacketConn
+	udpOnce              sync.Once
+	listener             net.Listener
+	httpServer           *http.Server
+	http3Server          *http3.Server
+	fingerprints         *fingerprint.Store
+	listenerOnce         sync.Once
+	interfaceLookup      func(string) (string, error)
+	upstreamBreaker      *upstreamCircuitBreaker
+	upstreamTransport    http.RoundTripper
+	proxyErrorLogLimiter *proxyErrorLogLimiter
 }
 
 type ServerConfig struct {
@@ -48,12 +53,16 @@ type ServerConfig struct {
 }
 
 func NewServer(config *ServerConfig) *Server {
-	return &Server{
-		config:          config,
-		runner:          execFirewallRunner{},
-		fingerprints:    fingerprint.NewStore(),
-		interfaceLookup: getInterfaceForIP,
+	server := &Server{
+		config:               config,
+		runner:               execFirewallRunner{},
+		fingerprints:         fingerprint.NewStore(),
+		interfaceLookup:      getInterfaceForIP,
+		upstreamBreaker:      newUpstreamCircuitBreaker(2, time.Second),
+		proxyErrorLogLimiter: newProxyErrorLogLimiter(2 * time.Second),
 	}
+	server.upstreamTransport = server.newUpstreamTransport()
+	return server
 }
 
 func (s *Server) serve(server *http.Server, listener net.Listener, tlsConfig *tls.Config, errChan chan<- error) {
@@ -80,15 +89,16 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Create the proxy handler that will be called after middleware processing
 	proxyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Create target URL that points to the actual backend server
-		proxyTarget := &url.URL{
-			Scheme: s.config.scheme,
-			Host:   maybeFormatV6Addr(s.config.bindAddr),
-		}
-
 		proxyHost := r.Host
 		if host, _, err := net.SplitHostPort(r.Host); err == nil {
 			proxyHost = host
+		}
+
+		// Keep the requested host in the upstream URL for Host/SNI while
+		// the transport dials the configured local upstream address.
+		proxyTarget := &url.URL{
+			Scheme: s.config.scheme,
+			Host:   maybeFormatV6Addr(proxyHost),
 		}
 
 		proxy := s.createReverseProxyWithHost(proxyTarget, proxyHost)
@@ -137,16 +147,8 @@ func (s *Server) resetListenerState() {
 
 func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *httputil.ReverseProxy {
 	proxy := httputil.NewSingleHostReverseProxy(target)
-
-	if target.Scheme == "https" {
-		proxy.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{
-				ServerName:         proxyHost, // Use the original hostname for the TLS handshake
-				InsecureSkipVerify: true,      // Skip verification as we're proxying to the same server
-			},
-			ForceAttemptHTTP2: true,
-		}
-	}
+	proxy.ErrorLog = newFilteredLogger(s.config.verbose)
+	proxy.Transport = s.ensureUpstreamTransport()
 
 	// Customize the director to preserve the original Host header
 	originalDirector := proxy.Director
@@ -156,15 +158,25 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 		// Override the Host header to preserve the original one
 		req.Host = proxyHost
 		// Ensure URL points to the actual backend
-		req.URL.Host = target.Host
+		req.URL.Host = maybeFormatV6Addr(proxyHost)
 		req.URL.Scheme = target.Scheme
 
 		req.Header.Set("FG-Stream", middleware.GetStreamID(req))
 	}
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		if s.config.verbose || !strings.Contains(err.Error(), "context canceled") {
+		if isClientAbortedProxyError(r, err) {
+			if s.config.verbose {
+				log.Printf("[%s:%s] client aborted proxy request for %s: %v", s.config.bindAddr, s.config.bindPort, proxyHost, err)
+			}
+			w.WriteHeader(statusClientClosedRequest)
+			return
+		}
+
+		if s.config.verbose {
 			log.Printf("[%s:%s] proxy error for %s: %v", s.config.bindAddr, s.config.bindPort, proxyHost, err)
+		} else if !strings.Contains(err.Error(), "context canceled") {
+			s.logProxyError(proxyHost, err)
 		}
 
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
@@ -368,6 +380,7 @@ func (s *Server) Shutdown(ctx context.Context) {
 	log.Printf("[%s:%s] Request received to shutdown server", s.config.bindAddr, s.config.bindPort)
 
 	s.CleanupPortRedirect()
+	s.closeUpstreamIdleConnections()
 
 	if s.http3Server != nil {
 		if err := s.http3Server.Shutdown(ctx); err != nil {
@@ -448,6 +461,9 @@ func newFilteredLogger(verbose bool) *log.Logger {
 }
 
 var filteredMessageParts = []string{
+	"H3_REQUEST_CANCELLED",
+	"H3 error (0x0)",
+	"Network blackhole detected",
 	"received GOAWAY",
 	"TLS handshake error",
 	"error reading preface from client",
