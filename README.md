@@ -345,12 +345,15 @@ Rules support complex conditions with logical operators:
   - `query-param`: Query parameter matching
   - `cookie`: Request cookie matching
   - `ip`: Client IP matching, including optional inline CIDR ranges
+  - `proxy-ip`: Immediate trusted proxy IP matching, including optional inline CIDR ranges
   - `asn`: Autonomous System Number matching
+  - `proxy-asn`: Immediate trusted proxy Autonomous System Number matching
   - `as-name`: ASN organization name matching
   - `as-domain`: ASN domain matching
   - `country`: Country code matching (from GeoIP database)
   - `continent`: Continent code matching (from GeoIP database)
   - `iplist`: In-memory IP list matching (built-in, no dependencies)
+  - `proxy-iplist`: Immediate trusted proxy IP-list matching
   - `fingerprint-ja4`: JA4 TLS client fingerprint matching (HTTPS and HTTP/3 requests)
 - **Match Operations**: `equals`, `not-equals`, `contains`, `not-contains`, `starts-with`, `not-starts-with`, `ends-with`, `not-ends-with`, `regex`, `not-regex`, `in`, `not-in`, `exists`, `missing`
 
@@ -448,7 +451,7 @@ JA4 is useful as one bot signal alongside IP, ASN, user-agent, path, and rate li
 
 ## Security Configuration
 
-### IP List System (Recommended)
+### IP List System
 
 FlowGuard includes a built-in high-performance IP list system using radix trees for 10M+ lookups/second. Lists are loaded from URLs or files and automatically refreshed.
 
@@ -480,6 +483,25 @@ FlowGuard includes a built-in high-performance IP list system using radix trees 
   "type": "iplist",
   "match": "in",
   "value": "blocklist"
+}
+```
+
+Use `proxy-iplist` to match the immediate trusted proxy against the same lists. For a fail-closed proxy allowlist, block when the proxy IP is absent or is not in the list:
+
+```json
+{
+  "operator": "OR",
+  "matches": [
+    {
+      "type": "proxy-ip",
+      "match": "missing"
+    },
+    {
+      "type": "proxy-iplist",
+      "match": "not-in",
+      "value": "local_allowlist"
+    }
+  ]
 }
 ```
 

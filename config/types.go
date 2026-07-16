@@ -149,7 +149,7 @@ type RuleConditions struct {
 }
 
 type MatchCondition struct {
-	Type            string   `json:"type"`          // path, method, domain, ip, agent, header, query-param, cookie, asn, iplist, fingerprint-ja4
+	Type            string   `json:"type"`          // path, method, domain, ip, proxy-ip, agent, header, query-param, cookie, asn, proxy-asn, iplist, proxy-iplist, fingerprint-ja4
 	Match           string   `json:"match"`         // equals, contains, regex, in, not-in, etc.
 	Key             string   `json:"key,omitempty"` // For keyed matches: header name, query parameter, or cookie name
 	Value           string   `json:"value,omitempty"`

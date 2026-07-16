@@ -340,6 +340,26 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 		if isIPTargetMatch(match.Match) {
 			return rm.matchesIPValue(value, match)
 		}
+	case "proxy-ip":
+		proxyIP := GetProxyIP(r)
+		switch match.Match {
+		case "exists":
+			return proxyIP != ""
+		case "missing":
+			return proxyIP == ""
+		}
+		if proxyIP == "" {
+			return false
+		}
+
+		host, _, err := net.SplitHostPort(proxyIP)
+		if err != nil {
+			host = proxyIP
+		}
+		value = host
+		if isIPTargetMatch(match.Match) {
+			return rm.matchesIPValue(value, match)
+		}
 	case "asn":
 		clientASNInfo := GetClientASN(r)
 		if clientASNInfo == nil {
@@ -350,6 +370,24 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 			return false
 		}
 		value = fmt.Sprintf("%d", clientASN)
+	case "proxy-asn":
+		proxyASNInfo := GetProxyASN(r)
+		proxyASN := uint(0)
+		if proxyASNInfo != nil {
+			proxyASN = proxyASNInfo.GetASN()
+		}
+
+		switch match.Match {
+		case "exists":
+			return proxyASN != 0
+		case "missing":
+			return proxyASN == 0
+		}
+		if proxyASN == 0 {
+			return false
+		}
+
+		value = fmt.Sprintf("%d", proxyASN)
 	case "as-name":
 		clientASNInfo := GetClientASN(r)
 		if clientASNInfo == nil {
@@ -375,7 +413,9 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 		}
 		value = clientASNInfo.ContinentCode
 	case "iplist":
-		return rm.matchesIPList(r, match)
+		return rm.matchesIPListValue(GetClientIP(r), match)
+	case "proxy-iplist":
+		return rm.matchesIPListValue(GetProxyIP(r), match)
 	default:
 		log.Printf("[middleware:rules] Unknown match type: %s", match.Type)
 		return false
@@ -548,18 +588,17 @@ func (rm *RulesMiddleware) matchesStringValue(value string, match *config.MatchC
 	}
 }
 
-// matchesIPList checks if the client IP is in the specified in-memory IP list
-func (rm *RulesMiddleware) matchesIPList(r *http.Request, match *config.MatchCondition) bool {
+// matchesIPListValue checks if an IP is in the specified in-memory IP list.
+func (rm *RulesMiddleware) matchesIPListValue(ipValue string, match *config.MatchCondition) bool {
 	// Check if IP list manager is available
 	if rm.ipListManager == nil {
 		log.Printf("[middleware:rules] IPList manager not initialized, cannot check list %s", match.Value)
 		return false
 	}
 
-	clientIP := GetClientIP(r)
-	host, _, err := net.SplitHostPort(clientIP)
+	host, _, err := net.SplitHostPort(ipValue)
 	if err != nil {
-		host = clientIP
+		host = ipValue
 	}
 
 	// Parse IP to validate it
@@ -897,10 +936,23 @@ func (kg *RateLimitKeyGenerator) extractKeyParts(conditions *config.RuleConditio
 					*keyParts = append(*keyParts, fmt.Sprintf("asn:%d", asn))
 				}
 			}
+		case "proxy-asn":
+			proxyASNInfo := GetProxyASN(r)
+			if proxyASNInfo != nil {
+				asn := proxyASNInfo.GetASN()
+				if asn != 0 {
+					*keyParts = append(*keyParts, fmt.Sprintf("proxy-asn:%d", asn))
+				}
+			}
 		case "ip":
 			clientIP := GetClientIP(r)
 			if clientIP != "" {
 				*keyParts = append(*keyParts, "ip:"+clientIP)
+			}
+		case "proxy-ip":
+			proxyIP := GetProxyIP(r)
+			if proxyIP != "" {
+				*keyParts = append(*keyParts, "proxy-ip:"+proxyIP)
 			}
 		}
 	}
