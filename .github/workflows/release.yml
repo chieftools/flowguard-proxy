@@ -43,6 +43,13 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
           echo "Building version: ${VERSION}"
 
+      - name: Prepare release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          ./bin/changelog-section.sh "${{ steps.version.outputs.VERSION }}" > "${{ runner.temp }}/release-notes.md"
+          printf '\n\n- Installation instructions: https://github.com/chieftools/flowguard-proxy#quick-install\n' >> "${{ runner.temp }}/release-notes.md"
+          printf '%s\n' '- Upgrade instructions: https://github.com/chieftools/flowguard-proxy#upgrading' >> "${{ runner.temp }}/release-notes.md"
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -374,9 +381,7 @@ jobs:
             flowguard_${{ steps.version.outputs.VERSION }}_arm64.deb
             flowguard-${{ steps.version.outputs.VERSION }}-1.x86_64.rpm
             flowguard-${{ steps.version.outputs.VERSION }}-1.aarch64.rpm
-          body: |
-            - Installation instructions: https://github.com/chieftools/flowguard-proxy#quick-install
-            - Upgrade instructions: https://github.com/chieftools/flowguard-proxy#upgrading
+          body_path: ${{ runner.temp }}/release-notes.md
           draft: false
           prerelease: false
         env:
