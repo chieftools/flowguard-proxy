@@ -152,6 +152,13 @@ func getPublicIPAddresses() ([]string, error) {
 	return publicIPs, nil
 }
 
+// DetectPublicIPAddresses returns the public addresses FlowGuard would bind by
+// default. The returned slice is safe for callers to modify.
+func DetectPublicIPAddresses() ([]string, error) {
+	addresses, err := getPublicIPAddresses()
+	return append([]string(nil), addresses...), err
+}
+
 // maybeFormatV6Addr formats an IPv6 address by enclosing it in square brackets if necessary
 func maybeFormatV6Addr(addr string) string {
 	if strings.Contains(addr, ":") && !strings.HasPrefix(addr, "[") {

@@ -119,8 +119,89 @@
                 "advertise_http3": {
                     "type": "boolean",
                     "description": "Advertise HTTP/3 availability on HTTPS responses by adding an Alt-Svc header when HTTP/3 is enabled"
+                },
+                "upstream": {
+                    "$ref": "#/definitions/upstream_config"
                 }
             },
+            "additionalProperties": false
+        },
+        "upstream_config": {
+            "type": "object",
+            "description": "Backend connection and client IP propagation settings",
+            "properties": {
+                "client_ip_mode": {
+                    "type": "string",
+                    "enum": [
+                        "headers",
+                        "transparent"
+                    ],
+                    "default": "headers",
+                    "description": "Use forwarding headers or Linux transparent source sockets to expose the validated client IP to backends"
+                },
+                "transparent": {
+                    "$ref": "#/definitions/transparent_upstream_config"
+                }
+            },
+            "additionalProperties": false
+        },
+        "transparent_upstream_config": {
+            "type": "object",
+            "description": "Linux transparent upstream networking settings",
+            "properties": {
+                "fwmark": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4294967295,
+                    "default": 17991
+                },
+                "route_table": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4294967295,
+                    "default": 17991
+                },
+                "rule_priority": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4294967295,
+                    "default": 17991
+                },
+                "max_client_pools": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 4096
+                },
+                "pool_idle_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 90
+                },
+                "address_pairs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/upstream_address_pair"
+                    }
+                }
+            },
+            "additionalProperties": false
+        },
+        "upstream_address_pair": {
+            "type": "object",
+            "properties": {
+                "ipv4": {
+                    "type": "string",
+                    "format": "ipv4"
+                },
+                "ipv6": {
+                    "type": "string",
+                    "format": "ipv6"
+                }
+            },
+            "required": [
+                "ipv4",
+                "ipv6"
+            ],
             "additionalProperties": false
         },
         "protocols_config": {

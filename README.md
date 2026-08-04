@@ -169,6 +169,73 @@ service nginx configtest
 # service nginx reload
 ```
 
+#### Transparent upstream client IP
+
+On a same-host Linux deployment, the opt-in `transparent` mode makes the validated client IP the TCP source address seen by the backend. NGINX, Apache, and other HTTP servers can then use their ordinary remote address without real-IP header configuration.
+
+For a quick test, override the configured mode for this process only. Transparent settings still come from the configuration, with the defaults below used when they are omitted:
+
+```bash
+sudo flowguard run --upstream-client-ip-mode transparent --bind 192.0.2.10
+```
+
+```json
+{
+  "server": {
+    "upstream": {
+      "client_ip_mode": "transparent",
+      "transparent": {
+        "fwmark": 17991,
+        "route_table": 17991,
+        "rule_priority": 17991,
+        "max_client_pools": 4096,
+        "pool_idle_seconds": 90
+      }
+    }
+  }
+}
+```
+
+Before restarting FlowGuard, inspect the selected addresses, pairing, commands, sysctl access, and routing identifiers:
+
+```bash
+sudo flowguard network inspect
+# Or inspect the same explicit bind set used by `flowguard run --bind`:
+sudo flowguard network inspect --bind 192.0.2.10,2001:db8::10
+```
+
+The report always includes both header-mode and transparent-mode readiness, regardless of the configured mode. The configured mode is marked in the report and determines the command's exit status.
+
+Transparent mode:
+
+- Requires Linux, root privileges, `ip`, `iptables`, and `ip6tables` when IPv6 is active.
+- Supports same-host HTTP and HTTPS backends. It is not a remote-backend routing feature.
+- Creates a dedicated `FLOWGUARD_UPSTREAM` mangle chain and dedicated policy rule/table, adopts exact stale FlowGuard-owned resources after a crash, and removes them on clean shutdown.
+- Temporarily enables `net.ipv4.conf.all.src_valid_mark` when needed and restores the previous value on shutdown.
+- Performs a real source-address round trip before opening public listeners. Startup fails if interception cannot be proven.
+- Bounds per-client connection pools with an LRU limit; overflow requests use non-persistent connections rather than growing the pool without limit.
+- Treats all upstream mode, mark, table, pool, and address-pair settings as startup-only. Restart FlowGuard after changing them.
+
+For dual-stack servers, FlowGuard must know which IPv4 and IPv6 addresses represent the same backend. Resolution is deliberately conservative: explicit `address_pairs` win, then one IPv4 and one IPv6 co-listed in a single NGINX `server` block, then a single unambiguous remaining pair. FlowGuard refuses to start transparent mode if multiple addresses remain ambiguous:
+
+```json
+{
+  "server": {
+    "upstream": {
+      "client_ip_mode": "transparent",
+      "transparent": {
+        "address_pairs": [
+          {
+            "ipv4": "192.0.2.10",
+            "ipv6": "2001:db8::10"
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
 ## Certificate Management
 
 The proxy expects combined certificate files (cert + key) in the specified certificate path. Files should be named by hostname and contain both the certificate chain and private key.
@@ -251,6 +318,7 @@ FlowGuard uses a JSON configuration file for advanced filtering rules. The confi
   - `challenge`: Require a first-party proof-of-work browser challenge before continuing
 - **IP Database**: Configure IP geolocation database source and refresh interval
 - **Trusted Proxies**: Configure trusted proxy networks for proper client IP detection
+- **Upstream Client IP**: Choose canonical forwarding headers or same-host Linux transparent source sockets
 - **IP Lists**: Configure in-memory IP lists for high-performance matching
 - **Challenges**: Configure FlowGuard-owned challenge defaults and clearance cookies
 - **Logging**: Configure structured logging sinks (file, Loki, OpenObserve)
@@ -523,7 +591,7 @@ The proxy uses a flexible rule engine defined in the configuration file. Rules c
 ### Components
 
 - **Main**: Entry point, command-line parsing, signal handling
-- **Proxy Manager**: Coordinates proxy servers, iptables/TPROXY rules, and graceful shutdown
+- **Proxy Manager**: Coordinates proxy servers, interception rules, transparent upstream policy routing, and graceful shutdown
 - **HTTP/HTTPS Servers**: Handle incoming requests and forward to backends
 - **Certificate Manager**: Dynamic SSL certificate loading and management
 - **Configuration Manager**: Hot-reload configuration with rule management
@@ -542,7 +610,7 @@ The proxy uses a flexible rule engine defined in the configuration file. Rules c
 3. For HTTPS, appropriate certificate is loaded/retrieved from cache
 4. Rules engine evaluates all configured rules against the request
 5. Request is either logged, blocked, or allowed based on rule evaluation
-6. Valid requests are forwarded to original destination
+6. Valid requests are forwarded to the same-host backend using canonical headers or the validated client IP as the transparent TCP source
 7. Response is returned to client through proxy with appropriate headers
 
 ## Development
@@ -551,6 +619,12 @@ The proxy uses a flexible rule engine defined in the configuration file. Rules c
 
 ```bash
 go test ./...
+```
+
+On Linux, run the privileged transparent-source round-trip in an isolated network namespace:
+
+```bash
+./bin/test-transparent-upstream.sh
 ```
 
 ## Security Vulnerabilities

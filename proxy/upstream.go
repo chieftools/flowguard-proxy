@@ -375,6 +375,15 @@ func (s *Server) ensureUpstreamTransport() http.RoundTripper {
 }
 
 func (s *Server) newUpstreamTransport() http.RoundTripper {
+	if s.config.transparentPool != nil {
+		return &upstreamRetryTransport{
+			next:         &transparentRoundTripper{server: s, pool: s.config.transparentPool},
+			breaker:      s.upstreamBreaker,
+			recoveryWait: upstreamRecoveryWait,
+			onRecovered:  s.logUpstreamRecovery,
+		}
+	}
+
 	dialer := &net.Dialer{
 		Timeout:   upstreamDialTimeout,
 		KeepAlive: upstreamKeepAlive,

@@ -48,5 +48,8 @@ jobs:
       - name: Run tests
         run: go test -race -count=1 ./...
 
+      - name: Test transparent upstream networking
+        run: ./bin/test-transparent-upstream.sh
+
       - name: Build
         run: go build -trimpath ./...

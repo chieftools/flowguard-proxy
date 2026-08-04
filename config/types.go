@@ -38,12 +38,32 @@ type HostConfig struct {
 type ServerConfig struct {
 	Protocols      *ProtocolsConfig `json:"protocols,omitempty"`
 	AdvertiseHTTP3 *bool            `json:"advertise_http3,omitempty"`
+	Upstream       *UpstreamConfig  `json:"upstream,omitempty"`
 }
 
 type ProtocolsConfig struct {
 	HTTP1 *bool `json:"http1,omitempty"`
 	HTTP2 *bool `json:"http2,omitempty"`
 	HTTP3 *bool `json:"http3,omitempty"`
+}
+
+type UpstreamConfig struct {
+	ClientIPMode string                     `json:"client_ip_mode,omitempty"`
+	Transparent  *TransparentUpstreamConfig `json:"transparent,omitempty"`
+}
+
+type TransparentUpstreamConfig struct {
+	FWMark          uint32        `json:"fwmark,omitempty"`
+	RouteTable      uint32        `json:"route_table,omitempty"`
+	RulePriority    uint32        `json:"rule_priority,omitempty"`
+	MaxClientPools  int           `json:"max_client_pools,omitempty"`
+	PoolIdleSeconds int           `json:"pool_idle_seconds,omitempty"`
+	AddressPairs    []AddressPair `json:"address_pairs,omitempty"`
+}
+
+type AddressPair struct {
+	IPv4 string `json:"ipv4"`
+	IPv6 string `json:"ipv6"`
 }
 
 type ProtocolSettings struct {

@@ -6,7 +6,9 @@ import (
 	"log"
 	"math/rand/v2"
 	"os"
+	"reflect"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,27 +22,34 @@ import (
 )
 
 type Config struct {
-	Verbose        bool
-	Version        string
-	HTTPPort       string
-	HTTPSPort      string
-	BindAddrs      []string
-	UserAgent      string
-	Protocols      config.ProtocolSettings
-	NoRedirect     bool
-	AdvertiseHTTP3 bool
+	Verbose              bool
+	Version              string
+	HTTPPort             string
+	HTTPSPort            string
+	BindAddrs            []string
+	UserAgent            string
+	Protocols            config.ProtocolSettings
+	NoRedirect           bool
+	AdvertiseHTTP3       bool
+	UpstreamClientIPMode string
 }
 
 type Manager struct {
-	config          *Config
-	servers         []*Server
-	updater         *updater.Updater
-	startedAt       time.Time
-	certManager     *certmanager.Manager
-	configManager   *config.Manager
-	ipListManager   *iplist.Manager
-	firewallState   api.FirewallHeartbeat
-	middlewareChain *middleware.Chain
+	config               *Config
+	servers              []*Server
+	updater              *updater.Updater
+	startedAt            time.Time
+	certManager          *certmanager.Manager
+	configManager        *config.Manager
+	ipListManager        *iplist.Manager
+	firewallState        api.FirewallHeartbeat
+	middlewareChain      *middleware.Chain
+	upstreamMode         string
+	upstreamModeOverride string
+	upstreamSettings     config.TransparentUpstreamSettings
+	addressPairs         AddressPairResolution
+	transparentPool      *transparentTransportPool
+	transparentNet       *transparentNetworkManager
 
 	serveErrChan        chan error
 	stopHeartbeat       chan struct{}
@@ -106,12 +115,48 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 	protocols := configMgr.GetConfig().ProtocolSettings()
 	cfg.Protocols = protocols
 	cfg.AdvertiseHTTP3 = configMgr.GetConfig().AdvertiseHTTP3()
+	upstreamMode, err := resolveUpstreamClientIPMode(
+		configMgr.GetConfig().UpstreamClientIPMode(),
+		cfg.UpstreamClientIPMode,
+	)
+	if err != nil {
+		return nil, err
+	}
+	upstreamSettings := configMgr.GetConfig().TransparentUpstreamSettings()
+	var addressPairs AddressPairResolution
+	var transparentPool *transparentTransportPool
+	var transparentNet *transparentNetworkManager
+	if upstreamMode == config.UpstreamClientIPModeTransparent {
+		if runtime.GOOS != "linux" {
+			return nil, fmt.Errorf("server.upstream.client_ip_mode=%q is supported only on Linux", upstreamMode)
+		}
+		resolvedPairs, resolveErr := ResolveAddressPairs(configMgr.GetConfig(), cfg.BindAddrs)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolve transparent upstream address pairs: %w", resolveErr)
+		}
+		addressPairs = resolvedPairs
+		if !addressPairs.Complete() {
+			return nil, fmt.Errorf("transparent upstream address pairing is ambiguous for: %s", strings.Join(addressPairs.Unresolved, ", "))
+		}
+		transparentPool = newTransparentTransportPool(
+			upstreamSettings.MaxClientPools,
+			time.Duration(upstreamSettings.PoolIdleSeconds)*time.Second,
+			upstreamSettings.FWMark,
+		)
+		transparentNet = newTransparentNetworkManager(upstreamSettings, cfg.BindAddrs)
+	}
 
 	pm := &Manager{
-		config:          cfg,
-		startedAt:       time.Now(),
-		configManager:   configMgr,
-		middlewareChain: middlewareChain,
+		config:               cfg,
+		startedAt:            time.Now(),
+		configManager:        configMgr,
+		middlewareChain:      middlewareChain,
+		upstreamMode:         upstreamMode,
+		upstreamModeOverride: cfg.UpstreamClientIPMode,
+		upstreamSettings:     upstreamSettings,
+		addressPairs:         addressPairs,
+		transparentPool:      transparentPool,
+		transparentNet:       transparentNet,
 
 		certManager: certmanager.New(certmanager.Config{
 			Verbose:         cfg.Verbose,
@@ -297,6 +342,15 @@ func (p *Manager) handleServerConfigChange(newConfig *config.Config) {
 
 	newProtocols := newConfig.ProtocolSettings()
 	newAdvertiseHTTP3 := newConfig.AdvertiseHTTP3()
+	newUpstreamMode, err := resolveUpstreamClientIPMode(newConfig.UpstreamClientIPMode(), p.upstreamModeOverride)
+	if err != nil {
+		log.Printf("[server] Invalid upstream client IP mode override: %v", err)
+		return
+	}
+	newUpstreamSettings := newConfig.TransparentUpstreamSettings()
+	if newUpstreamMode != p.upstreamMode || !reflect.DeepEqual(newUpstreamSettings, p.upstreamSettings) {
+		log.Printf("[server] Upstream client IP settings changed; restart FlowGuard to apply them")
+	}
 
 	p.serverMu.Lock()
 	defer p.serverMu.Unlock()
@@ -344,6 +398,17 @@ func (p *Manager) handleServerConfigChange(newConfig *config.Config) {
 	}
 }
 
+func resolveUpstreamClientIPMode(configured, override string) (string, error) {
+	mode := configured
+	if override != "" {
+		mode = override
+	}
+	if mode != config.UpstreamClientIPModeHeaders && mode != config.UpstreamClientIPModeTransparent {
+		return "", fmt.Errorf("upstream client IP mode must be %q or %q", config.UpstreamClientIPModeHeaders, config.UpstreamClientIPModeTransparent)
+	}
+	return mode, nil
+}
+
 func (p *Manager) stopServers(servers []*Server) {
 	if len(servers) == 0 {
 		return
@@ -385,10 +450,14 @@ func (p *Manager) managesRedirect() bool {
 	return !p.config.NoRedirect
 }
 
+func (p *Manager) managesFirewall() bool {
+	return p.managesRedirect() || p.transparentNet != nil
+}
+
 func (p *Manager) firewallMonitorSettings() (enabled bool, autoRepair bool, interval time.Duration) {
 	const defaultInterval = 30 * time.Second
 
-	if !p.managesRedirect() {
+	if !p.managesFirewall() {
 		return false, false, defaultInterval
 	}
 
@@ -473,7 +542,7 @@ func (p *Manager) statusMessageFromState(state api.FirewallHeartbeat) string {
 }
 
 func (p *Manager) initialFirewallState() api.FirewallHeartbeat {
-	if !p.managesRedirect() {
+	if !p.managesFirewall() {
 		return api.FirewallHeartbeat{Status: firewallStatusDisabled}
 	}
 
@@ -513,7 +582,7 @@ func (p *Manager) evaluateFirewall(autoRepair bool) api.FirewallHeartbeat {
 		LastCheckedAt: time.Now().Unix(),
 	}
 
-	if !p.managesRedirect() {
+	if !p.managesFirewall() {
 		state.Status = firewallStatusDisabled
 		return state
 	}
@@ -524,29 +593,52 @@ func (p *Manager) evaluateFirewall(autoRepair bool) api.FirewallHeartbeat {
 	repairedAt := int64(0)
 
 	checkServers := func(repair bool) {
-		for _, server := range p.servers {
-			missing, err := server.CheckPortRedirect()
+		if p.managesRedirect() {
+			for _, server := range p.servers {
+				missing, err := server.CheckPortRedirect()
+				if err != nil {
+					lastError = err.Error()
+					if totalMissing == 0 {
+						totalMissing = 1
+					}
+					continue
+				}
+
+				totalMissing += len(missing)
+				if len(missing) == 0 || !repair {
+					continue
+				}
+
+				log.Printf("[firewall] Detected %d missing redirect rule(s) for %s:%s, attempting repair", len(missing), server.config.bindAddr, server.config.bindPort)
+				if err := server.RepairPortRedirect(missing); err != nil {
+					lastError = err.Error()
+					repairError = lastError
+					continue
+				}
+
+				repairedAt = time.Now().Unix()
+			}
+		}
+
+		if p.transparentNet != nil {
+			missing, err := p.transparentNet.Check()
 			if err != nil {
 				lastError = err.Error()
 				if totalMissing == 0 {
 					totalMissing = 1
 				}
-				continue
+				return
 			}
-
 			totalMissing += len(missing)
-			if len(missing) == 0 || !repair {
-				continue
+			if len(missing) > 0 && repair {
+				log.Printf("[firewall] Detected %d missing transparent upstream resource(s), attempting repair", len(missing))
+				if err := p.transparentNet.Repair(); err != nil {
+					lastError = err.Error()
+					repairError = lastError
+					return
+				}
+				repairedAt = time.Now().Unix()
 			}
-
-			log.Printf("[firewall] Detected %d missing redirect rule(s) for %s:%s, attempting repair", len(missing), server.config.bindAddr, server.config.bindPort)
-			if err := server.RepairPortRedirect(missing); err != nil {
-				lastError = err.Error()
-				repairError = lastError
-				continue
-			}
-
-			repairedAt = time.Now().Unix()
 		}
 	}
 
@@ -738,14 +830,16 @@ func (p *Manager) startServers(protocols config.ProtocolSettings, advertiseHTTP3
 			}
 
 			httpServer := NewServer(&ServerConfig{
-				scheme:     "http",
-				altSvc:     advertiseHTTP3,
-				verbose:    p.config.Verbose,
-				bindAddr:   bindAddr,
-				bindPort:   p.config.HTTPPort,
-				redirPort:  httpRedirPort,
-				protocols:  &protocols,
-				middleware: p.middlewareChain,
+				scheme:          "http",
+				altSvc:          advertiseHTTP3,
+				verbose:         p.config.Verbose,
+				bindAddr:        bindAddr,
+				bindPort:        p.config.HTTPPort,
+				redirPort:       httpRedirPort,
+				protocols:       &protocols,
+				middleware:      p.middlewareChain,
+				transparentPool: p.transparentPool,
+				addressPairs:    p.addressPairs,
 			})
 			started = append(started, httpServer)
 
@@ -760,14 +854,16 @@ func (p *Manager) startServers(protocols config.ProtocolSettings, advertiseHTTP3
 		}
 
 		httpsServer := NewServer(&ServerConfig{
-			scheme:     "https",
-			altSvc:     advertiseHTTP3,
-			verbose:    p.config.Verbose,
-			bindAddr:   bindAddr,
-			bindPort:   p.config.HTTPSPort,
-			redirPort:  httpsRedirPort,
-			protocols:  &protocols,
-			middleware: p.middlewareChain,
+			scheme:          "https",
+			altSvc:          advertiseHTTP3,
+			verbose:         p.config.Verbose,
+			bindAddr:        bindAddr,
+			bindPort:        p.config.HTTPSPort,
+			redirPort:       httpsRedirPort,
+			protocols:       &protocols,
+			middleware:      p.middlewareChain,
+			transparentPool: p.transparentPool,
+			addressPairs:    p.addressPairs,
 		})
 		started = append(started, httpsServer)
 
@@ -805,6 +901,12 @@ func (p *Manager) Start() error {
 		}
 	}()
 
+	if p.transparentNet != nil {
+		if err := p.transparentNet.Setup(); err != nil {
+			return fmt.Errorf("setup transparent upstream networking: %w", err)
+		}
+	}
+
 	servers, err := p.startServers(p.config.resolvedProtocols(), p.config.AdvertiseHTTP3)
 	if err != nil {
 		p.stopServers(servers)
@@ -828,7 +930,7 @@ func (p *Manager) Start() error {
 		go p.runHeartbeat()
 	}
 
-	if p.managesRedirect() {
+	if p.managesFirewall() {
 		go p.runFirewallMonitor()
 	}
 
@@ -875,6 +977,12 @@ func (p *Manager) Shutdown() error {
 	time.Sleep(100 * time.Millisecond)
 
 	p.stopServers(servers)
+	if p.transparentPool != nil {
+		p.transparentPool.Close()
+	}
+	if p.transparentNet != nil {
+		p.transparentNet.Cleanup()
+	}
 
 	// Stop the middleware chain
 	p.middlewareChain.Stop()

@@ -73,6 +73,9 @@ func (m *Manager) Load() error {
 	if err := validateChallengesConfig(&config); err != nil {
 		return err
 	}
+	if err := validateUpstreamConfig(&config); err != nil {
+		return err
+	}
 
 	if !config.ProtocolSettings().AnyEnabled() {
 		return fmt.Errorf("server.protocols must enable at least one protocol")

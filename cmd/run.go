@@ -17,10 +17,11 @@ import (
 
 var (
 	// Run command specific flags
-	bindAddrs  string
-	httpPort   string
-	httpsPort  string
-	noRedirect bool
+	bindAddrs            string
+	httpPort             string
+	httpsPort            string
+	noRedirect           bool
+	upstreamClientIPMode string
 )
 
 var runCmd = &cobra.Command{
@@ -44,6 +45,7 @@ func init() {
 	runCmd.Flags().StringVar(&httpPort, "http-port", "11080", "Port for HTTP proxy server")
 	runCmd.Flags().StringVar(&httpsPort, "https-port", "11443", "Port for HTTPS proxy server")
 	runCmd.Flags().BoolVar(&noRedirect, "no-redirect", false, "Skip iptables port redirection setup")
+	runCmd.Flags().StringVar(&upstreamClientIPMode, "upstream-client-ip-mode", "", "Override upstream client IP mode (headers or transparent)")
 }
 
 func runProxy() {
@@ -75,13 +77,14 @@ func runProxy() {
 
 	// Create and start proxy manager
 	proxyManager, err := proxy.NewManager(configMgr, &proxy.Config{
-		Verbose:    verbose,
-		Version:    GetVersion(),
-		HTTPPort:   httpPort,
-		HTTPSPort:  httpsPort,
-		BindAddrs:  parseBindAddrsList(bindAddrs),
-		UserAgent:  GetUserAgent(),
-		NoRedirect: noRedirect,
+		Verbose:              verbose,
+		Version:              GetVersion(),
+		HTTPPort:             httpPort,
+		HTTPSPort:            httpsPort,
+		BindAddrs:            parseBindAddrsList(bindAddrs),
+		UserAgent:            GetUserAgent(),
+		NoRedirect:           noRedirect,
+		UpstreamClientIPMode: upstreamClientIPMode,
 	})
 	if err != nil {
 		log.Fatalf("[FATAL] Failed to initialize proxy: %v", err)

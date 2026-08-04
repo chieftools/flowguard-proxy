@@ -14,6 +14,7 @@ import (
 	"flowguard/api"
 	"flowguard/certmanager"
 	"flowguard/config"
+	"flowguard/proxy"
 
 	"github.com/spf13/cobra"
 )
@@ -111,9 +112,32 @@ func setupHostWithClient(client setupAPIClient) error {
 		}
 	}
 
+	finalConfig, err := parseSetupConfig(finalBody)
+	if err != nil {
+		return err
+	}
+	if err := validateSetupNetwork(finalConfig); err != nil {
+		return err
+	}
+
 	return runSetupStep("Storing configuration", fmt.Sprintf("Stored configuration at %s", configFile), func() error {
 		return writeSetupConfig(finalBody)
 	})
+}
+
+func validateSetupNetwork(cfg *config.Config) error {
+	if cfg == nil || cfg.UpstreamClientIPMode() != config.UpstreamClientIPModeTransparent {
+		return nil
+	}
+	inspection, err := proxy.InspectNetwork(cfg, nil)
+	if err != nil {
+		return fmt.Errorf("inspect transparent upstream networking: %w", err)
+	}
+	fmt.Fprint(setupOutput, proxy.FormatNetworkInspection(inspection))
+	if !inspection.Ready {
+		return fmt.Errorf("transparent upstream networking is not ready; run flowguard network inspect for details")
+	}
+	return nil
 }
 
 func parseSetupConfig(body []byte) (*config.Config, error) {

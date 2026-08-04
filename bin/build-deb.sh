@@ -101,7 +101,7 @@ Description: ${DESCRIPTION}
  FlowGuard is a high-performance Go-based reverse proxy with
  dynamic rule-based security filtering designed for transparent
  HTTP/HTTPS traffic interception.
-Depends: iptables
+Depends: iptables, iproute2
 EOF
 
 # Create postinst script

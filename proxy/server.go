@@ -42,14 +42,16 @@ type Server struct {
 }
 
 type ServerConfig struct {
-	scheme     string
-	altSvc     bool
-	verbose    bool
-	bindAddr   string
-	bindPort   string
-	redirPort  string
-	protocols  *config.ProtocolSettings
-	middleware *middleware.Chain
+	scheme          string
+	altSvc          bool
+	verbose         bool
+	bindAddr        string
+	bindPort        string
+	redirPort       string
+	protocols       *config.ProtocolSettings
+	middleware      *middleware.Chain
+	transparentPool *transparentTransportPool
+	addressPairs    AddressPairResolution
 }
 
 func NewServer(config *ServerConfig) *Server {
