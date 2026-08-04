@@ -9,6 +9,17 @@ release.
 
 ## [Unreleased]
 
+## [0.15.1]
+
+### Added
+
+- Added automatic transparent address-pair detection when an IPv6 address's final four hextets repeat its IPv4 counterpart's decimal octets. ([c0b89cad](https://github.com/chieftools/flowguard-proxy/commit/c0b89cad2eb9f636168ae7992b2f952fefe04e1f))
+- Added verbose setup and network-inspection diagnostics explaining server-source, NGINX listener, address-pairing, and prerequisite decisions. ([48aebcae](https://github.com/chieftools/flowguard-proxy/commit/48aebcaefa3f4923ea9630b8a69edd785413700a))
+
+### Changed
+
+- Moved upstream client-IP mode selection before manual address pairing so header-mode setups skip unnecessary pairing prompts. ([77cdc6d4](https://github.com/chieftools/flowguard-proxy/commit/77cdc6d48268a21ca7b4e571910a798d5511a409))
+
 ## [0.15.0]
 
 ### Added
