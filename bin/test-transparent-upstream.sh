@@ -28,6 +28,9 @@ go test -c -o "${TEST_BINARY}" ./proxy
 set -euo pipefail
 ip link set lo up
 ip address add 192.0.2.10/32 dev lo
+ip link add flowguard-test type dummy
+ip link set flowguard-test up
+ip route add default dev flowguard-test
 export FLOWGUARD_TRANSPARENT_INTEGRATION=1
 "$1" -test.run "^TestTransparentNetworkSourceRoundTripIntegration$" -test.count=1 -test.v
 ' _ "${TEST_BINARY}"
