@@ -71,6 +71,71 @@ http {
 	}
 }
 
+func TestResolveAddressPairsUsesDecimalIPv4Suffix(t *testing.T) {
+	bindAddrs := []string{
+		"fd12:3456:789a:1:10:20:30:18",
+		"10.20.30.15",
+		"fd12:3456:789a:1:10:20:30:14",
+		"10.20.30.18",
+		"fd12:3456:789a:1:10:20:30:16",
+		"10.20.30.14",
+		"fd12:3456:789a:1:10:20:30:15",
+		"10.20.30.17",
+		"fd12:3456:789a:1:10:20:30:17",
+		"10.20.30.16",
+	}
+
+	resolution, err := ResolveAddressPairs(&config.Config{}, bindAddrs)
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	if !resolution.Complete() {
+		t.Fatalf("expected complete pairing, unresolved: %v", resolution.Unresolved)
+	}
+	if len(resolution.Pairs) != 5 {
+		t.Fatalf("expected five inferred pairs, got %#v", resolution.Pairs)
+	}
+	for index, lastOctet := range []string{"14", "15", "16", "17", "18"} {
+		want := ResolvedAddressPair{
+			IPv4:       "10.20.30." + lastOctet,
+			IPv6:       "fd12:3456:789a:1:10:20:30:" + lastOctet,
+			Provenance: "ipv4-suffix",
+		}
+		if resolution.Pairs[index] != want {
+			t.Fatalf("pair %d = %#v, want %#v", index, resolution.Pairs[index], want)
+		}
+	}
+}
+
+func TestResolveAddressPairsLeavesAmbiguousDecimalIPv4SuffixUnresolved(t *testing.T) {
+	resolution, err := ResolveAddressPairs(&config.Config{}, []string{
+		"10.20.30.14",
+		"fd12:3456:789a:1:10:20:30:14",
+		"fd98:7654:3210:1:10:20:30:14",
+	})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	if resolution.Complete() || len(resolution.Pairs) != 0 || len(resolution.Unresolved) != 3 {
+		t.Fatalf("expected ambiguous suffixes to remain unresolved, got %#v", resolution)
+	}
+}
+
+func TestResolveAddressPairsDoesNotTreatBinaryIPv4SuffixAsDecimalPattern(t *testing.T) {
+	resolution, err := ResolveAddressPairs(&config.Config{}, []string{
+		"10.20.30.14",
+		"10.20.30.15",
+		"fd12:3456:789a:1:a:14:1e:e",
+		"fd12:3456:789a:1:a:14:1e:f",
+	})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	if resolution.Complete() || len(resolution.Pairs) != 0 || len(resolution.Unresolved) != 4 {
+		t.Fatalf("expected non-matching suffixes to remain unresolved, got %#v", resolution)
+	}
+}
+
 func TestResolveAddressPairsRejectsExplicitNonBindAddress(t *testing.T) {
 	cfg := &config.Config{Server: &config.ServerConfig{Upstream: &config.UpstreamConfig{
 		Transparent: &config.TransparentUpstreamConfig{

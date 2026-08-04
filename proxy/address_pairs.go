@@ -1,9 +1,11 @@
 package proxy
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 
 	"flowguard/certmanager"
@@ -122,6 +124,30 @@ func ResolveAddressPairs(cfg *config.Config, bindAddrs []string) (AddressPairRes
 			remainingV6 = append(remainingV6, addr)
 		}
 	}
+
+	matchedV4 := make(map[netip.Addr]bool)
+	matchedV6 := make(map[netip.Addr]bool)
+	for _, v4 := range remainingV4 {
+		var match netip.Addr
+		matches := 0
+		for _, v6 := range remainingV6 {
+			if ipv6HasDecimalIPv4Suffix(v6, v4) {
+				match = v6
+				matches++
+			}
+		}
+		if matches != 1 {
+			continue
+		}
+		if err := addPair(v4, match, "ipv4-suffix"); err != nil {
+			return resolution, err
+		}
+		matchedV4[v4] = true
+		matchedV6[match] = true
+	}
+	remainingV4 = filterUnmatchedAddresses(remainingV4, matchedV4)
+	remainingV6 = filterUnmatchedAddresses(remainingV6, matchedV6)
+
 	if len(remainingV4) == 1 && len(remainingV6) == 1 {
 		if err := addPair(remainingV4[0], remainingV6[0], "single-pair"); err != nil {
 			return resolution, err
@@ -142,6 +168,34 @@ func ResolveAddressPairs(cfg *config.Config, bindAddrs []string) (AddressPairRes
 	sort.Strings(resolution.Unresolved)
 	sort.Strings(resolution.Warnings)
 	return resolution, nil
+}
+
+func ipv6HasDecimalIPv4Suffix(ipv6, ipv4 netip.Addr) bool {
+	if !ipv4.Is4() || !ipv6.Is6() || ipv6.Is4In6() {
+		return false
+	}
+
+	// This convention copies each decimal IPv4 octet verbatim into an IPv6
+	// hextet, so decimal octet 208 is represented by numeric hextet 0x208.
+	v4 := ipv4.As4()
+	v6 := ipv6.As16()
+	for index, octet := range v4 {
+		expected, err := strconv.ParseUint(strconv.Itoa(int(octet)), 16, 16)
+		if err != nil || binary.BigEndian.Uint16(v6[8+index*2:10+index*2]) != uint16(expected) {
+			return false
+		}
+	}
+	return true
+}
+
+func filterUnmatchedAddresses(addresses []netip.Addr, matched map[netip.Addr]bool) []netip.Addr {
+	remaining := addresses[:0]
+	for _, address := range addresses {
+		if !matched[address] {
+			remaining = append(remaining, address)
+		}
+	}
+	return remaining
 }
 
 func (r AddressPairResolution) counterpart(address string) (string, bool) {

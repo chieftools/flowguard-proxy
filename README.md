@@ -262,7 +262,7 @@ Transparent mode:
 - Bounds per-client connection pools with an LRU limit; overflow requests use non-persistent connections rather than growing the pool without limit.
 - Treats all upstream mode, mark, table, pool, and address-pair settings as startup-only. Restart FlowGuard after changing them.
 
-For dual-stack servers, FlowGuard must know which IPv4 and IPv6 addresses represent the same backend. Resolution is deliberately conservative: explicit `address_pairs` win, then one IPv4 and one IPv6 co-listed in a single NGINX `server` block, then a single unambiguous remaining pair. FlowGuard refuses to start transparent mode if multiple addresses remain ambiguous:
+For dual-stack servers, FlowGuard must know which IPv4 and IPv6 addresses represent the same backend. Resolution is deliberately conservative: explicit `address_pairs` win, followed by IPv4 and IPv6 addresses co-listed in a single NGINX `server` block, unique IPv6 addresses whose final four hextets repeat the decimal IPv4 octets (for example, `10.20.30.14` and `fd12:3456:789a:1:10:20:30:14`), and finally a single unambiguous remaining pair. FlowGuard refuses to start transparent mode if multiple candidates match or addresses otherwise remain ambiguous:
 
 ```json
 {
