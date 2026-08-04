@@ -15,6 +15,7 @@ release.
 
 - Added transparent upstream client-IP forwarding for same-host Linux backends, including dual-stack address pairing, lifecycle-managed policy routing, readiness inspection, and CLI overrides for testing. ([85c60a1a](https://github.com/chieftools/flowguard-proxy/commit/85c60a1a13deed76fb34893f126c0498ab314edd))
 - Added interactive setup for selecting the upstream client-IP mode, enabled HTTP protocols, HTTP/3 advertisement, and ambiguous IPv4/IPv6 address pairs, with accessible and line-oriented terminal fallbacks. ([f37d19c9](https://github.com/chieftools/flowguard-proxy/commit/f37d19c93fd9b0e9428ce5bc33e82fb27cf35651))
+- Added post-setup guidance to start or restart FlowGuard so startup-only networking changes take effect. ([feaf4e82](https://github.com/chieftools/flowguard-proxy/commit/feaf4e822140c7774736daec2da816562f9bd5df))
 
 ### Changed
 
