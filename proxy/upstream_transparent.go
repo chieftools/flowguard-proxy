@@ -201,8 +201,9 @@ func (p *transparentTransportPool) Close() {
 }
 
 type transparentRoundTripper struct {
-	server *Server
-	pool   *transparentTransportPool
+	server   *Server
+	pool     *transparentTransportPool
+	fallback http.RoundTripper
 }
 
 func (t *transparentRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -218,36 +219,65 @@ func (t *transparentRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 	if !clientIP.IsGlobalUnicast() {
 		return nil, fmt.Errorf("validated client IP %q is not a unicast source address", rawClientIP)
 	}
-	destination, err := t.server.transparentUpstreamAddress(clientIP)
+	route, err := t.server.transparentUpstreamRoute(clientIP)
 	if err != nil {
 		return nil, err
 	}
+	if route.headerFallback {
+		if t.fallback == nil {
+			return nil, fmt.Errorf("transparent upstream header fallback is not initialized")
+		}
+		return t.fallback.RoundTrip(req)
+	}
 	return t.pool.RoundTrip(req, transparentTransportKey{
 		source:      clientIP,
-		destination: destination,
+		destination: route.destination,
 		scheme:      t.server.config.scheme,
 	})
 }
 
-func (s *Server) transparentUpstreamAddress(clientIP netip.Addr) (string, error) {
+func (t *transparentRoundTripper) CloseIdleConnections() {
+	if t == nil {
+		return
+	}
+	if t.pool != nil {
+		t.pool.CloseIdleConnections()
+	}
+	if closer, ok := t.fallback.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}
+
+type transparentUpstreamRoute struct {
+	destination    string
+	headerFallback bool
+}
+
+func (s *Server) transparentUpstreamRoute(clientIP netip.Addr) (transparentUpstreamRoute, error) {
 	bindIP, err := netip.ParseAddr(s.config.bindAddr)
 	if err != nil {
-		return "", fmt.Errorf("invalid server bind address %q: %w", s.config.bindAddr, err)
+		return transparentUpstreamRoute{}, fmt.Errorf("invalid server bind address %q: %w", s.config.bindAddr, err)
 	}
 	bindIP = bindIP.Unmap()
 	target := bindIP
 	if clientIP.Is4() != bindIP.Is4() {
 		counterpart, ok := s.config.addressPairs.counterpart(bindIP.String())
 		if !ok {
-			return "", fmt.Errorf("no %s upstream address pair is configured for bind address %s",
+			if _, _, singleStack := s.config.addressPairs.singleStackFamily(); singleStack && s.config.addressPairs.Complete() {
+				return transparentUpstreamRoute{
+					destination:    net.JoinHostPort(bindIP.String(), s.upstreamPort()),
+					headerFallback: true,
+				}, nil
+			}
+			return transparentUpstreamRoute{}, fmt.Errorf("no %s upstream address pair is configured for bind address %s",
 				clientIPFamily(clientIP), bindIP)
 		}
 		target, err = netip.ParseAddr(counterpart)
 		if err != nil {
-			return "", fmt.Errorf("invalid paired upstream address %q: %w", counterpart, err)
+			return transparentUpstreamRoute{}, fmt.Errorf("invalid paired upstream address %q: %w", counterpart, err)
 		}
 	}
-	return net.JoinHostPort(target.String(), s.upstreamPort()), nil
+	return transparentUpstreamRoute{destination: net.JoinHostPort(target.String(), s.upstreamPort())}, nil
 }
 
 func clientIPFamily(addr netip.Addr) string {

@@ -955,6 +955,11 @@ func formatProxyStartupSummary(servers []*Server, bindAddressCount int) string {
 
 func (p *Manager) Start() error {
 	log.Printf("[proxy] Upstream client IP mode: %s", p.upstreamMode)
+	if p.upstreamMode == config.UpstreamClientIPModeTransparent {
+		if warning := transparentHeaderFallbackWarning(p.addressPairs, p.config.BindAddrs); warning != "" {
+			log.Printf("[proxy] WARNING: %s", warning)
+		}
+	}
 	p.configManager.StartTrustedProxyRefresh()
 
 	if p.transparentNet != nil {

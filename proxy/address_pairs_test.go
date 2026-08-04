@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"flowguard/config"
@@ -81,5 +82,73 @@ func TestResolveAddressPairsRejectsExplicitNonBindAddress(t *testing.T) {
 	}}}
 	if _, err := ResolveAddressPairs(cfg, []string{"192.0.2.10", "2001:db8::10"}); err == nil {
 		t.Fatal("expected non-bind address pair to fail")
+	}
+}
+
+func TestResolveAddressPairsTracksAddressFamilyCoverage(t *testing.T) {
+	v4Only, err := ResolveAddressPairs(&config.Config{}, []string{"192.0.2.10", "192.0.2.20"})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs IPv4: %v", err)
+	}
+	if !v4Only.hasIPv4 || v4Only.hasIPv6 {
+		t.Fatalf("unexpected IPv4-only coverage: %#v", v4Only)
+	}
+	if available, missing, ok := v4Only.singleStackFamily(); !ok || available != "IPv4" || missing != "IPv6" {
+		t.Fatalf("unexpected single-stack result: available=%q missing=%q ok=%v", available, missing, ok)
+	}
+
+	dualStack, err := ResolveAddressPairs(&config.Config{}, []string{"192.0.2.10", "2001:db8::10"})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs dual-stack: %v", err)
+	}
+	if !dualStack.hasIPv4 || !dualStack.hasIPv6 {
+		t.Fatalf("unexpected dual-stack coverage: %#v", dualStack)
+	}
+	if _, _, ok := dualStack.singleStackFamily(); ok {
+		t.Fatal("complete dual-stack coverage reported as single-stack")
+	}
+}
+
+func TestTransparentHeaderFallbackWarning(t *testing.T) {
+	tests := []struct {
+		name      string
+		bindAddrs []string
+		want      []string
+	}{
+		{
+			name:      "IPv4 only",
+			bindAddrs: []string{"192.0.2.20", "192.0.2.10"},
+			want:      []string{"IPv4-only", "validated IPv6 clients", "192.0.2.10, 192.0.2.20"},
+		},
+		{
+			name:      "IPv6 only",
+			bindAddrs: []string{"2001:db8::10"},
+			want:      []string{"IPv6-only", "validated IPv4 clients", "2001:db8::10"},
+		},
+		{
+			name:      "paired dual-stack",
+			bindAddrs: []string{"192.0.2.10", "2001:db8::10"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolution, err := ResolveAddressPairs(&config.Config{}, tt.bindAddrs)
+			if err != nil {
+				t.Fatalf("ResolveAddressPairs: %v", err)
+			}
+			warning := transparentHeaderFallbackWarning(resolution, tt.bindAddrs)
+			if len(tt.want) == 0 {
+				if warning != "" {
+					t.Fatalf("unexpected warning: %s", warning)
+				}
+				return
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(warning, want) {
+					t.Fatalf("warning does not contain %q: %s", want, warning)
+				}
+			}
+		})
 	}
 }

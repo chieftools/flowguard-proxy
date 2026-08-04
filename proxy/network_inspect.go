@@ -19,13 +19,14 @@ type NetworkPrerequisite struct {
 }
 
 type NetworkInspection struct {
-	Mode             string
-	BindAddresses    []string
-	Pairing          AddressPairResolution
-	Prerequisites    []NetworkPrerequisite
-	HeaderReady      bool
-	TransparentReady bool
-	Ready            bool
+	Mode                string
+	BindAddresses       []string
+	Pairing             AddressPairResolution
+	Prerequisites       []NetworkPrerequisite
+	TransparentWarnings []string
+	HeaderReady         bool
+	TransparentReady    bool
+	Ready               bool
 }
 
 func InspectNetwork(cfg *config.Config, bindAddrs []string) (NetworkInspection, error) {
@@ -75,6 +76,9 @@ func InspectNetwork(cfg *config.Config, bindAddrs []string) (NetworkInspection, 
 		})
 	}
 	inspection.Pairing = pairing
+	if warning := transparentHeaderFallbackWarning(pairing, bindAddrs); warning != "" {
+		inspection.TransparentWarnings = append(inspection.TransparentWarnings, warning)
+	}
 	if runtime.GOOS != "linux" {
 		addPrerequisite(NetworkPrerequisite{
 			Name: "operating system", Ready: false, Details: "transparent mode requires Linux",
@@ -294,6 +298,9 @@ func FormatNetworkInspection(inspection NetworkInspection) string {
 	}
 	for _, warning := range inspection.Pairing.Warnings {
 		fmt.Fprintf(&output, "  Warning: %s\n", warning)
+	}
+	for _, warning := range inspection.TransparentWarnings {
+		fmt.Fprintf(&output, "  WARNING: %s\n", warning)
 	}
 	if len(inspection.Prerequisites) > 0 {
 		output.WriteString("  Prerequisites:\n")

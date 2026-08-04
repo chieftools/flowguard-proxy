@@ -1,15 +1,21 @@
 package proxy
 
 import (
+	"context"
+	"errors"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"testing"
 	"time"
 
 	"flowguard/config"
+	"flowguard/middleware"
 )
 
-func TestTransparentUpstreamAddressUsesMatchingFamily(t *testing.T) {
+func TestTransparentUpstreamRouteUsesMatchingAndPairedFamilies(t *testing.T) {
 	resolution, err := ResolveAddressPairs(&config.Config{}, []string{"192.0.2.10", "2001:db8::10"})
 	if err != nil {
 		t.Fatalf("ResolveAddressPairs: %v", err)
@@ -21,13 +27,43 @@ func TestTransparentUpstreamAddressUsesMatchingFamily(t *testing.T) {
 	})
 
 	ipv4, _ := netip.ParseAddr("198.51.100.20")
-	if got, err := server.transparentUpstreamAddress(ipv4); err != nil || got != "192.0.2.10:80" {
-		t.Fatalf("unexpected IPv4 upstream address %q, %v", got, err)
+	if got, err := server.transparentUpstreamRoute(ipv4); err != nil || got.destination != "192.0.2.10:80" || got.headerFallback {
+		t.Fatalf("unexpected IPv4 upstream route %#v, %v", got, err)
 	}
 
 	ipv6, _ := netip.ParseAddr("2001:db8::20")
-	if got, err := server.transparentUpstreamAddress(ipv6); err != nil || got != "[2001:db8::10]:80" {
-		t.Fatalf("unexpected IPv6 upstream address %q, %v", got, err)
+	if got, err := server.transparentUpstreamRoute(ipv6); err != nil || got.destination != "[2001:db8::10]:80" || got.headerFallback {
+		t.Fatalf("unexpected IPv6 upstream route %#v, %v", got, err)
+	}
+}
+
+func TestTransparentUpstreamRouteUsesHeaderFallbackForSingleStack(t *testing.T) {
+	tests := []struct {
+		name        string
+		bindAddr    string
+		clientIP    string
+		destination string
+	}{
+		{name: "IPv4 server with IPv6 client", bindAddr: "192.0.2.10", clientIP: "2001:db8::20", destination: "192.0.2.10:80"},
+		{name: "IPv6 server with IPv4 client", bindAddr: "2001:db8::10", clientIP: "198.51.100.20", destination: "[2001:db8::10]:80"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolution, err := ResolveAddressPairs(&config.Config{}, []string{tt.bindAddr})
+			if err != nil {
+				t.Fatalf("ResolveAddressPairs: %v", err)
+			}
+			server := NewServer(&ServerConfig{scheme: "http", bindAddr: tt.bindAddr, addressPairs: resolution})
+			clientIP := netip.MustParseAddr(tt.clientIP)
+			route, err := server.transparentUpstreamRoute(clientIP)
+			if err != nil {
+				t.Fatalf("transparentUpstreamRoute: %v", err)
+			}
+			if !route.headerFallback || route.destination != tt.destination {
+				t.Fatalf("unexpected fallback route: %#v", route)
+			}
+		})
 	}
 }
 
@@ -64,8 +100,108 @@ func TestTransparentUpstreamAddressFailsWithoutCounterpart(t *testing.T) {
 		bindAddr: "192.0.2.10",
 	})
 	ipv6, _ := netip.ParseAddr("2001:db8::20")
-	if _, err := server.transparentUpstreamAddress(ipv6); err == nil {
+	if _, err := server.transparentUpstreamRoute(ipv6); err == nil {
 		t.Fatal("expected cross-family upstream selection to fail without a pair")
+	}
+}
+
+func TestTransparentUpstreamRouteDoesNotFallbackForAmbiguousDualStack(t *testing.T) {
+	resolution, err := ResolveAddressPairs(&config.Config{}, []string{
+		"192.0.2.10", "192.0.2.20", "2001:db8::10", "2001:db8::20",
+	})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	if resolution.Complete() {
+		t.Fatalf("expected ambiguous resolution, got %#v", resolution)
+	}
+	server := NewServer(&ServerConfig{scheme: "http", bindAddr: "192.0.2.10", addressPairs: resolution})
+	if _, err := server.transparentUpstreamRoute(netip.MustParseAddr("2001:db8::30")); err == nil {
+		t.Fatal("ambiguous dual-stack route used header fallback")
+	}
+}
+
+func TestTransparentRoundTripperFallbackUsesCanonicalHeaders(t *testing.T) {
+	resolution, err := ResolveAddressPairs(&config.Config{}, []string{"192.0.2.10"})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	server := NewServer(&ServerConfig{
+		scheme:       "http",
+		bindAddr:     "192.0.2.10",
+		addressPairs: resolution,
+	})
+
+	called := false
+	fallback := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		called = true
+		if got := req.Header.Get("X-Forwarded-For"); got != "2001:db8::20" {
+			t.Fatalf("X-Forwarded-For = %q", got)
+		}
+		if got := req.Header.Get("X-Real-IP"); got != "2001:db8::20" {
+			t.Fatalf("X-Real-IP = %q", got)
+		}
+		return &http.Response{StatusCode: http.StatusNoContent, Header: make(http.Header), Body: http.NoBody, Request: req}, nil
+	})
+	proxy := server.createReverseProxyWithHost(&url.URL{Scheme: "http", Host: "example.com"}, "example.com")
+	proxy.Transport = &transparentRoundTripper{
+		server:   server,
+		pool:     newTransparentTransportPool(1, time.Minute, 1),
+		fallback: fallback,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
+	req.Header.Set("X-Forwarded-For", "attacker")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ContextKeyClientIP, "2001:db8::20"))
+	recorder := httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, req)
+
+	if !called || recorder.Code != http.StatusNoContent {
+		t.Fatalf("fallback called=%v status=%d", called, recorder.Code)
+	}
+}
+
+func TestTransparentRoundTripperDoesNotFallbackAfterTransparentFailure(t *testing.T) {
+	resolution, err := ResolveAddressPairs(&config.Config{}, []string{"192.0.2.10"})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	server := NewServer(&ServerConfig{scheme: "http", bindAddr: "192.0.2.10", addressPairs: resolution})
+	wantErr := errors.New("transparent transport failed")
+	pool := newTransparentTransportPool(1, time.Minute, 1)
+	pool.newTransport = func(transparentTransportKey, bool) (*http.Transport, error) {
+		return nil, wantErr
+	}
+	fallbackCalled := false
+	transport := &transparentRoundTripper{
+		server: server,
+		pool:   pool,
+		fallback: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			fallbackCalled = true
+			return nil, nil
+		}),
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ContextKeyClientIP, "198.51.100.20"))
+
+	if _, err := transport.RoundTrip(req); !errors.Is(err, wantErr) {
+		t.Fatalf("RoundTrip error = %v, want %v", err, wantErr)
+	}
+	if fallbackCalled {
+		t.Fatal("transparent failure triggered header fallback")
+	}
+}
+
+func TestFallbackDialerPinsConfiguredBindAddress(t *testing.T) {
+	for _, source := range []string{"192.0.2.10", "2001:db8::10"} {
+		dialer := newUpstreamDialer(source, true)
+		local, ok := dialer.LocalAddr.(*net.TCPAddr)
+		if !ok || !local.IP.Equal(net.ParseIP(source)) {
+			t.Fatalf("unexpected pinned source for %s: %#v", source, dialer.LocalAddr)
+		}
+	}
+	if unpinned := newUpstreamDialer("192.0.2.10", false); unpinned.LocalAddr != nil {
+		t.Fatalf("ordinary header transport should retain kernel source selection: %#v", unpinned.LocalAddr)
 	}
 }
 

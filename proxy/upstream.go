@@ -36,6 +36,15 @@ type upstreamRetryTransport struct {
 	onRecovered  func(*http.Request, int, error)
 }
 
+func (t *upstreamRetryTransport) CloseIdleConnections() {
+	if t == nil {
+		return
+	}
+	if closer, ok := t.next.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}
+
 func (t *upstreamRetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.next == nil {
 		t.next = http.DefaultTransport
@@ -375,19 +384,26 @@ func (s *Server) ensureUpstreamTransport() http.RoundTripper {
 }
 
 func (s *Server) newUpstreamTransport() http.RoundTripper {
+	var next http.RoundTripper
 	if s.config.transparentPool != nil {
-		return &upstreamRetryTransport{
-			next:         &transparentRoundTripper{server: s, pool: s.config.transparentPool},
-			breaker:      s.upstreamBreaker,
-			recoveryWait: upstreamRecoveryWait,
-			onRecovered:  s.logUpstreamRecovery,
+		next = &transparentRoundTripper{
+			server:   s,
+			pool:     s.config.transparentPool,
+			fallback: s.newOrdinaryUpstreamTransport(true),
 		}
+	} else {
+		next = s.newOrdinaryUpstreamTransport(false)
 	}
+	return &upstreamRetryTransport{
+		next:         next,
+		breaker:      s.upstreamBreaker,
+		recoveryWait: upstreamRecoveryWait,
+		onRecovered:  s.logUpstreamRecovery,
+	}
+}
 
-	dialer := &net.Dialer{
-		Timeout:   upstreamDialTimeout,
-		KeepAlive: upstreamKeepAlive,
-	}
+func (s *Server) newOrdinaryUpstreamTransport(pinSource bool) *http.Transport {
+	dialer := newUpstreamDialer(s.config.bindAddr, pinSource)
 
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -408,12 +424,18 @@ func (s *Server) newUpstreamTransport() http.RoundTripper {
 		}
 	}
 
-	return &upstreamRetryTransport{
-		next:         transport,
-		breaker:      s.upstreamBreaker,
-		recoveryWait: upstreamRecoveryWait,
-		onRecovered:  s.logUpstreamRecovery,
+	return transport
+}
+
+func newUpstreamDialer(source string, pinSource bool) *net.Dialer {
+	dialer := &net.Dialer{
+		Timeout:   upstreamDialTimeout,
+		KeepAlive: upstreamKeepAlive,
 	}
+	if pinSource {
+		dialer.LocalAddr = &net.TCPAddr{IP: net.ParseIP(source)}
+	}
+	return dialer
 }
 
 func (s *Server) upstreamAddress() string {

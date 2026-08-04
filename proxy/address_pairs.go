@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"sort"
+	"strings"
 
 	"flowguard/certmanager"
 	"flowguard/config"
@@ -21,6 +22,8 @@ type AddressPairResolution struct {
 	Warnings   []string
 
 	counterparts map[netip.Addr]netip.Addr
+	hasIPv4      bool
+	hasIPv6      bool
 }
 
 func ResolveAddressPairs(cfg *config.Config, bindAddrs []string) (AddressPairResolution, error) {
@@ -39,8 +42,10 @@ func ResolveAddressPairs(cfg *config.Config, bindAddrs []string) (AddressPairRes
 		}
 		bindSet[addr] = true
 		if addr.Is4() {
+			resolution.hasIPv4 = true
 			ipv4 = append(ipv4, addr)
 		} else {
+			resolution.hasIPv6 = true
 			ipv6 = append(ipv6, addr)
 		}
 	}
@@ -153,4 +158,46 @@ func (r AddressPairResolution) counterpart(address string) (string, bool) {
 
 func (r AddressPairResolution) Complete() bool {
 	return len(r.Unresolved) == 0
+}
+
+func (r AddressPairResolution) singleStackFamily() (available, missing string, ok bool) {
+	switch {
+	case r.hasIPv4 && !r.hasIPv6:
+		return "IPv4", "IPv6", true
+	case r.hasIPv6 && !r.hasIPv4:
+		return "IPv6", "IPv4", true
+	default:
+		return "", "", false
+	}
+}
+
+func transparentHeaderFallbackWarning(pairing AddressPairResolution, bindAddrs []string) string {
+	available, missing, ok := pairing.singleStackFamily()
+	if !ok || !pairing.Complete() {
+		return ""
+	}
+
+	addresses := make([]string, 0, len(bindAddrs))
+	for _, raw := range bindAddrs {
+		addr, err := netip.ParseAddr(raw)
+		if err != nil {
+			continue
+		}
+		addr = addr.Unmap()
+		if (available == "IPv4" && addr.Is4()) || (available == "IPv6" && addr.Is6()) {
+			addresses = append(addresses, addr.String())
+		}
+	}
+	sort.Strings(addresses)
+	sourceDescription := strings.Join(addresses, ", ")
+	if sourceDescription == "" {
+		sourceDescription = "the configured bind addresses"
+	}
+
+	return fmt.Sprintf(
+		"transparent upstream is %s-only; validated %s clients will use canonical header fallback from %s; the backend must trust these FlowGuard source addresses",
+		available,
+		missing,
+		sourceDescription,
+	)
 }

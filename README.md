@@ -144,6 +144,8 @@ FlowGuard supports two upstream client-IP modes. The default, `headers`, works w
 
 The backend must trust only connections that actually came through FlowGuard. Trusting a public server address is not inherently unsafe, but it becomes a spoofing risk if an attacker or another local workload can reach the backend directly while supplying its own forwarding headers. FlowGuard installs a direct-port guard for its interception listeners; you should still keep backend exposure and local workload access as narrow as possible.
 
+`set_real_ip_from` matches the TCP source address of the peer sending the forwarding header; it does not trust every request sent to that public destination. When FlowGuard is disabled, a direct client's source address does not match the server's own public address, so NGINX ignores client-supplied forwarding headers. If a CDN or another trusted proxy may connect directly while FlowGuard is disabled, keep that proxy's ranges in the trusted set as well.
+
 For NGINX, replace the example addresses with every address on which FlowGuard accepts traffic:
 
 ```nginx
@@ -170,6 +172,9 @@ nginx -t
 #### Transparent upstream client IP
 
 On a same-host Linux deployment, the opt-in `transparent` mode makes the validated client IP the TCP source address seen by the backend. NGINX, Apache, and other HTTP servers can then use their ordinary remote address without real-IP header configuration.
+
+> [!WARNING]
+> Transparent source preservation is per address family. On an IPv4-only server, a validated IPv6 client cannot be the source of an IPv4 TCP connection, and the inverse is also true. FlowGuard therefore uses canonical `X-Forwarded-For` and `X-Real-IP` header fallback only for opposite-family clients on genuinely single-stack servers. The fallback connection is pinned to the corresponding FlowGuard bind address, which the backend must trust with `real_ip` or equivalent handling. Matching-family requests remain fully transparent. Configure complete IPv4/IPv6 address pairs when both families must be preserved as the backend TCP source.
 
 For a quick test, override the configured mode for this process only. Transparent settings still come from the configuration, with the defaults below used when they are omitted:
 
@@ -211,6 +216,7 @@ Transparent mode:
 - Creates a dedicated `FLOWGUARD_UPSTREAM` mangle chain and dedicated policy rule/table, adopts exact stale FlowGuard-owned resources after a crash, and removes them on clean shutdown.
 - Temporarily enables `net.ipv4.conf.all.src_valid_mark` when needed and restores the previous value on shutdown.
 - Performs a real source-address round trip before opening public listeners. Startup fails if interception cannot be proven.
+- Uses the validated client as the TCP source for matching or paired address families. A single-stack family mismatch uses canonical header fallback from the endpoint's bind address; it never falls back because a transparent dial or route failed.
 - Bounds per-client connection pools with an LRU limit; overflow requests use non-persistent connections rather than growing the pool without limit.
 - Treats all upstream mode, mark, table, pool, and address-pair settings as startup-only. Restart FlowGuard after changing them.
 
