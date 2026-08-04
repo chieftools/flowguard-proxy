@@ -29,6 +29,9 @@ var networkInspectCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if verbose {
+			fmt.Fprint(cmd.OutOrStdout(), proxy.FormatNetworkDiagnostics(inspection))
+		}
 		fmt.Fprint(cmd.OutOrStdout(), proxy.FormatNetworkInspection(inspection))
 		if !inspection.Ready {
 			return fmt.Errorf("configured upstream client IP mode %q is not ready", inspection.Mode)

@@ -19,9 +19,10 @@ type ResolvedAddressPair struct {
 }
 
 type AddressPairResolution struct {
-	Pairs      []ResolvedAddressPair
-	Unresolved []string
-	Warnings   []string
+	Pairs       []ResolvedAddressPair
+	Unresolved  []string
+	Warnings    []string
+	Diagnostics []string
 
 	counterparts map[netip.Addr]netip.Addr
 	hasIPv4      bool
@@ -51,6 +52,10 @@ func ResolveAddressPairs(cfg *config.Config, bindAddrs []string) (AddressPairRes
 			ipv6 = append(ipv6, addr)
 		}
 	}
+	resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf(
+		"pairing: considering %d IPv4 bind address(es) [%s] and %d IPv6 bind address(es) [%s]",
+		len(ipv4), formatAddresses(ipv4), len(ipv6), formatAddresses(ipv6),
+	))
 
 	addPair := func(v4, v6 netip.Addr, provenance string) error {
 		if !v4.Is4() || !v6.Is6() || v6.Is4In6() {
@@ -79,16 +84,22 @@ func ResolveAddressPairs(cfg *config.Config, bindAddrs []string) (AddressPairRes
 	}
 
 	settings := cfg.TransparentUpstreamSettings()
+	if len(settings.AddressPairs) == 0 {
+		resolution.Diagnostics = append(resolution.Diagnostics, "explicit: no configured address pairs")
+	}
 	for _, pair := range settings.AddressPairs {
 		v4, _ := netip.ParseAddr(pair.IPv4)
 		v6, _ := netip.ParseAddr(pair.IPv6)
 		if err := addPair(v4.Unmap(), v6.Unmap(), "explicit"); err != nil {
+			resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf("explicit: rejected %s <-> %s: %v", pair.IPv4, pair.IPv6, err))
 			return resolution, err
 		}
+		resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf("explicit: accepted %s <-> %s", v4.Unmap(), v6.Unmap()))
 	}
 
 	if cfg != nil && cfg.Host != nil && cfg.Host.NginxConfigPath != "" {
-		discovered, warnings, err := certmanager.DiscoverNginxAddressPairs(cfg.Host.NginxConfigPath)
+		discovered, warnings, diagnostics, err := certmanager.DiscoverNginxAddressPairsWithDiagnostics(cfg.Host.NginxConfigPath)
+		resolution.Diagnostics = append(resolution.Diagnostics, diagnostics...)
 		if err != nil {
 			resolution.Warnings = append(resolution.Warnings, err.Error())
 		} else {
@@ -97,19 +108,43 @@ func ResolveAddressPairs(cfg *config.Config, bindAddrs []string) (AddressPairRes
 				v4, _ := netip.ParseAddr(pair.IPv4)
 				v6, _ := netip.ParseAddr(pair.IPv6)
 				if !bindSet[v4] || !bindSet[v6] {
+					var missing []string
+					if !bindSet[v4] {
+						missing = append(missing, v4.String())
+					}
+					if !bindSet[v6] {
+						missing = append(missing, v6.String())
+					}
+					resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf(
+						"nginx: ignored discovered pair %s <-> %s because %s are not FlowGuard bind addresses",
+						v4, v6, strings.Join(missing, ", "),
+					))
 					continue
 				}
 				if _, v4Assigned := resolution.counterparts[v4]; v4Assigned {
+					resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf(
+						"nginx: ignored discovered pair %s <-> %s because %s already has a counterpart",
+						v4, v6, v4,
+					))
 					continue
 				}
 				if _, v6Assigned := resolution.counterparts[v6]; v6Assigned {
+					resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf(
+						"nginx: ignored discovered pair %s <-> %s because %s already has a counterpart",
+						v4, v6, v6,
+					))
 					continue
 				}
 				if err := addPair(v4, v6, "nginx"); err != nil {
 					resolution.Warnings = append(resolution.Warnings, err.Error())
+					resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf("nginx: rejected %s <-> %s: %v", v4, v6, err))
+				} else {
+					resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf("nginx: applied %s <-> %s", v4, v6))
 				}
 			}
 		}
+	} else {
+		resolution.Diagnostics = append(resolution.Diagnostics, "nginx: skipped because host.nginx_config_path is not configured")
 	}
 
 	var remainingV4 []netip.Addr
@@ -127,23 +162,41 @@ func ResolveAddressPairs(cfg *config.Config, bindAddrs []string) (AddressPairRes
 
 	matchedV4 := make(map[netip.Addr]bool)
 	matchedV6 := make(map[netip.Addr]bool)
-	for _, v4 := range remainingV4 {
-		var match netip.Addr
-		matches := 0
-		for _, v6 := range remainingV6 {
-			if ipv6HasDecimalIPv4Suffix(v6, v4) {
-				match = v6
-				matches++
+	if len(remainingV4) == 0 || len(remainingV6) == 0 {
+		resolution.Diagnostics = append(resolution.Diagnostics, "ipv4-suffix: not applicable without unmatched addresses from both families")
+	} else {
+		for _, v4 := range remainingV4 {
+			var match netip.Addr
+			var candidates []string
+			matches := 0
+			for _, v6 := range remainingV6 {
+				if ipv6HasDecimalIPv4Suffix(v6, v4) {
+					match = v6
+					matches++
+					candidates = append(candidates, v6.String())
+				}
 			}
+			if matches == 0 {
+				resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf(
+					"ipv4-suffix: no IPv6 bind address ends with decimal IPv4 octets for %s",
+					v4,
+				))
+				continue
+			}
+			if matches > 1 {
+				resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf(
+					"ipv4-suffix: %s matched multiple IPv6 bind addresses [%s]; left unresolved",
+					v4, strings.Join(candidates, ", "),
+				))
+				continue
+			}
+			if err := addPair(v4, match, "ipv4-suffix"); err != nil {
+				return resolution, err
+			}
+			resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf("ipv4-suffix: accepted %s <-> %s", v4, match))
+			matchedV4[v4] = true
+			matchedV6[match] = true
 		}
-		if matches != 1 {
-			continue
-		}
-		if err := addPair(v4, match, "ipv4-suffix"); err != nil {
-			return resolution, err
-		}
-		matchedV4[v4] = true
-		matchedV6[match] = true
 	}
 	remainingV4 = filterUnmatchedAddresses(remainingV4, matchedV4)
 	remainingV6 = filterUnmatchedAddresses(remainingV6, matchedV6)
@@ -152,8 +205,17 @@ func ResolveAddressPairs(cfg *config.Config, bindAddrs []string) (AddressPairRes
 		if err := addPair(remainingV4[0], remainingV6[0], "single-pair"); err != nil {
 			return resolution, err
 		}
+		resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf(
+			"single-pair: accepted the only remaining addresses %s <-> %s",
+			remainingV4[0], remainingV6[0],
+		))
 		remainingV4 = nil
 		remainingV6 = nil
+	} else {
+		resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf(
+			"single-pair: not applicable with %d unmatched IPv4 and %d unmatched IPv6 address(es)",
+			len(remainingV4), len(remainingV6),
+		))
 	}
 
 	if len(ipv4) > 0 && len(ipv6) > 0 {
@@ -161,11 +223,16 @@ func ResolveAddressPairs(cfg *config.Config, bindAddrs []string) (AddressPairRes
 			resolution.Unresolved = append(resolution.Unresolved, addr.String())
 		}
 	}
+	sort.Strings(resolution.Unresolved)
+	if len(resolution.Unresolved) == 0 {
+		resolution.Diagnostics = append(resolution.Diagnostics, "pairing: all dual-stack bind addresses were resolved")
+	} else {
+		resolution.Diagnostics = append(resolution.Diagnostics, "pairing: unresolved bind addresses: "+strings.Join(resolution.Unresolved, ", "))
+	}
 
 	sort.Slice(resolution.Pairs, func(i, j int) bool {
 		return resolution.Pairs[i].IPv4 < resolution.Pairs[j].IPv4
 	})
-	sort.Strings(resolution.Unresolved)
 	sort.Strings(resolution.Warnings)
 	return resolution, nil
 }
@@ -196,6 +263,15 @@ func filterUnmatchedAddresses(addresses []netip.Addr, matched map[netip.Addr]boo
 		}
 	}
 	return remaining
+}
+
+func formatAddresses(addresses []netip.Addr) string {
+	values := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		values = append(values, address.String())
+	}
+	sort.Strings(values)
+	return strings.Join(values, ", ")
 }
 
 func (r AddressPairResolution) counterpart(address string) (string, bool) {

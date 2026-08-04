@@ -147,6 +147,9 @@ Interactive setup also checks whether transparent upstream networking is
 available, helps resolve ambiguous IPv4/IPv6 address pairs, and asks which HTTP
 protocols to enable. New setups prefer transparent client-IP forwarding when
 its prerequisites are ready; rediscovery defaults to the current settings.
+Run `flowguard setup -v` to show each server-source, bind-address, and
+address-pair detection decision, including why NGINX listeners or pairing
+heuristics were rejected.
 
 On a capable terminal, setup uses an interactive form: use the arrow keys (or
 `j`/`k`) to move, Space to toggle checkboxes, and Enter to confirm. Address-pair

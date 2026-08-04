@@ -108,6 +108,44 @@ func TestPromptSetupServerConfigurationFallsBackToHeadersAndShowsRequirements(t 
 	}
 }
 
+func TestPromptSetupServerConfigurationShowsVerbosePairingDiagnostics(t *testing.T) {
+	resetSetupTestGlobals(t)
+	verbose = true
+	setupInspectNetwork = func(*config.Config, []string) (proxy.NetworkInspection, error) {
+		return proxy.NetworkInspection{
+			HeaderReady:      true,
+			TransparentReady: true,
+			Diagnostics:      []string{"bind addresses: using private test addresses"},
+			Pairing: proxy.AddressPairResolution{
+				Pairs: []proxy.ResolvedAddressPair{{
+					IPv4: "10.20.30.10", IPv6: "fd12:3456:789a::10", Provenance: "nginx",
+				}},
+				Diagnostics: []string{"nginx: accepted 10.20.30.10 <-> fd12:3456:789a::10"},
+			},
+			Prerequisites: []proxy.NetworkPrerequisite{{
+				Name: "address pairing", Ready: true, Details: "all addresses resolved",
+			}},
+		}, nil
+	}
+	var output bytes.Buffer
+	setupOutput = &output
+	reader := bufio.NewReader(strings.NewReader(strings.Repeat("\n", 4)))
+
+	if _, err := promptSetupServerConfiguration(reader, &config.Config{}, false); err != nil {
+		t.Fatalf("promptSetupServerConfiguration: %v", err)
+	}
+	for _, expected := range []string{
+		"Verbose network detection:",
+		"bind addresses: using private test addresses",
+		"nginx: accepted 10.20.30.10 <-> fd12:3456:789a::10",
+		"prerequisite [ok] address pairing: all addresses resolved",
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("expected verbose output to contain %q:\n%s", expected, output.String())
+		}
+	}
+}
+
 func TestPromptSetupServerConfigurationKeepsConfiguredTransparentDefaultWhenUnavailable(t *testing.T) {
 	resetSetupTestGlobals(t)
 	setupInspectNetwork = func(*config.Config, []string) (proxy.NetworkInspection, error) {

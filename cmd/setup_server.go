@@ -188,6 +188,9 @@ func setSetupAddressPairs(cfg *config.Config, pairs []config.AddressPair) {
 }
 
 func printSetupNetworkOptions(inspection proxy.NetworkInspection) {
+	if verbose {
+		fmt.Fprint(setupOutput, proxy.FormatNetworkDiagnostics(inspection))
+	}
 	fmt.Fprintln(setupOutput, "  Upstream client IP mode:")
 	fmt.Fprintln(setupOutput, "    headers: available")
 	fmt.Fprintf(setupOutput, "      Documentation: %s\n", setupHeadersDocumentationURL)

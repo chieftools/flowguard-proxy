@@ -216,12 +216,22 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, r
 		var hasCertCandidate bool
 		var nginxCandidate setupDiscoveryCandidate
 		var hasNginxCandidate bool
+		var discoveryDiagnostics []string
 		if err := runSetupStep("Looking for server configuration", "Server configuration discovery complete", func() error {
-			certCandidate, hasCertCandidate = discoverPleskCertificatePath()
-			nginxCandidate, hasNginxCandidate = discoverNginxConfigPath()
+			var diagnostics []string
+			certCandidate, hasCertCandidate, diagnostics = discoverPleskCertificatePath()
+			discoveryDiagnostics = append(discoveryDiagnostics, diagnostics...)
+			nginxCandidate, hasNginxCandidate, diagnostics = discoverNginxConfigPath()
+			discoveryDiagnostics = append(discoveryDiagnostics, diagnostics...)
 			return nil
 		}); err != nil {
 			return nil, err
+		}
+		if verbose {
+			fmt.Fprintln(setupOutput, "  Verbose server configuration detection:")
+			for _, diagnostic := range discoveryDiagnostics {
+				fmt.Fprintf(setupOutput, "    - %s\n", diagnostic)
+			}
 		}
 
 		if hasCertCandidate {
@@ -245,6 +255,8 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, r
 				discoveredNginxConfigPath = nginxCandidate.path
 			}
 		}
+	} else if verbose {
+		fmt.Fprintf(setupOutput, "  Verbose server configuration detection:\n    - skipped because configured paths are being reused (certificate=%q, nginx=%q)\n", certPath, nginxConfigPath)
 	}
 
 	if discoveredCertPath == "" && discoveredNginxConfigPath == "" {
@@ -314,20 +326,26 @@ func configuredSetupPaths(cfg *config.Config) (string, string) {
 	return cfg.Host.CertPath, cfg.Host.NginxConfigPath
 }
 
-func discoverPleskCertificatePath() (setupDiscoveryCandidate, bool) {
+func discoverPleskCertificatePath() (setupDiscoveryCandidate, bool, []string) {
+	var diagnostics []string
 	for _, root := range setupPleskRoots() {
 		path := filepath.Join(root, "var", "certificates")
 		summary, err := certmanager.ProbeCertificateDirectorySummary(path)
 		if err == nil {
+			diagnostics = append(diagnostics, fmt.Sprintf(
+				"Plesk certificates: accepted %s (%d usable certificate(s), %d hostname(s))",
+				path, summary.CertificateCount, summary.HostnameCount,
+			))
 			return setupDiscoveryCandidate{
 				kind:    "certificate",
 				path:    path,
 				summary: summary,
-			}, true
+			}, true, diagnostics
 		}
+		diagnostics = append(diagnostics, fmt.Sprintf("Plesk certificates: rejected %s: %v", path, err))
 	}
 
-	return setupDiscoveryCandidate{}, false
+	return setupDiscoveryCandidate{}, false, diagnostics
 }
 
 func setupPleskRoots() []string {
@@ -375,17 +393,20 @@ func readPleskProductRoot(path string) (string, error) {
 	return "", fmt.Errorf("PRODUCT_ROOT_D not found in %s", path)
 }
 
-func discoverNginxConfigPath() (setupDiscoveryCandidate, bool) {
+func discoverNginxConfigPath() (setupDiscoveryCandidate, bool, []string) {
 	summary, err := certmanager.ProbeNginxConfigSummary(setupNginxConfigPath)
 	if err == nil {
 		return setupDiscoveryCandidate{
-			kind:    "nginx",
-			path:    setupNginxConfigPath,
-			summary: summary,
-		}, true
+				kind:    "nginx",
+				path:    setupNginxConfigPath,
+				summary: summary,
+			}, true, []string{fmt.Sprintf(
+				"NGINX configuration: accepted %s (%d usable certificate(s), %d hostname(s))",
+				setupNginxConfigPath, summary.CertificateCount, summary.HostnameCount,
+			)}
 	}
 
-	return setupDiscoveryCandidate{}, false
+	return setupDiscoveryCandidate{}, false, []string{fmt.Sprintf("NGINX configuration: rejected %s: %v", setupNginxConfigPath, err)}
 }
 
 func printSetupDiscoveryCandidate(candidate setupDiscoveryCandidate) {

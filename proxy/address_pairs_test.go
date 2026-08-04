@@ -71,6 +71,33 @@ http {
 	}
 }
 
+func TestResolveAddressPairsDiagnosticsExplainNginxBindMismatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nginx.conf")
+	body := `events {}
+http {
+  server {
+    listen 10.20.30.10:443 ssl;
+    listen [fd12:3456:789a::10]:443 ssl;
+  }
+}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write nginx config: %v", err)
+	}
+	cfg := &config.Config{Host: &config.HostConfig{NginxConfigPath: path}}
+
+	resolution, err := ResolveAddressPairs(cfg, []string{
+		"10.20.30.20", "10.20.30.30", "fd12:3456:789a::20", "fd12:3456:789a::30",
+	})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	diagnostics := strings.Join(resolution.Diagnostics, "\n")
+	if !strings.Contains(diagnostics, "ignored discovered pair 10.20.30.10 <-> fd12:3456:789a::10") ||
+		!strings.Contains(diagnostics, "not FlowGuard bind addresses") {
+		t.Fatalf("expected bind mismatch diagnostics, got:\n%s", diagnostics)
+	}
+}
+
 func TestResolveAddressPairsUsesDecimalIPv4Suffix(t *testing.T) {
 	bindAddrs := []string{
 		"fd12:3456:789a:1:10:20:30:18",

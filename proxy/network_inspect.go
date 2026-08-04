@@ -23,6 +23,7 @@ type NetworkInspection struct {
 	BindAddresses       []string
 	Pairing             AddressPairResolution
 	Prerequisites       []NetworkPrerequisite
+	Diagnostics         []string
 	TransparentWarnings []string
 	HeaderReady         bool
 	TransparentReady    bool
@@ -30,6 +31,7 @@ type NetworkInspection struct {
 }
 
 func InspectNetwork(cfg *config.Config, bindAddrs []string) (NetworkInspection, error) {
+	autoDetected := len(bindAddrs) == 0
 	if len(bindAddrs) == 0 {
 		var err error
 		bindAddrs, err = DetectPublicIPAddresses()
@@ -45,6 +47,17 @@ func InspectNetwork(cfg *config.Config, bindAddrs []string) (NetworkInspection, 
 		TransparentReady: true,
 	}
 	sort.Strings(inspection.BindAddresses)
+	if autoDetected {
+		inspection.Diagnostics = append(inspection.Diagnostics, fmt.Sprintf(
+			"bind addresses: auto-detected %d public address(es): %s",
+			len(inspection.BindAddresses), strings.Join(inspection.BindAddresses, ", "),
+		))
+	} else {
+		inspection.Diagnostics = append(inspection.Diagnostics, fmt.Sprintf(
+			"bind addresses: using %d configured address(es): %s",
+			len(inspection.BindAddresses), strings.Join(inspection.BindAddresses, ", "),
+		))
+	}
 	addPrerequisite := func(prerequisite NetworkPrerequisite) {
 		inspection.Prerequisites = append(inspection.Prerequisites, prerequisite)
 		inspection.TransparentReady = inspection.TransparentReady && prerequisite.Ready
@@ -167,6 +180,25 @@ func InspectNetwork(cfg *config.Config, bindAddrs []string) (NetworkInspection, 
 		}
 	}
 	return finish()
+}
+
+func FormatNetworkDiagnostics(inspection NetworkInspection) string {
+	var output strings.Builder
+	output.WriteString("  Verbose network detection:\n")
+	for _, diagnostic := range inspection.Diagnostics {
+		fmt.Fprintf(&output, "    - %s\n", diagnostic)
+	}
+	for _, diagnostic := range inspection.Pairing.Diagnostics {
+		fmt.Fprintf(&output, "    - %s\n", diagnostic)
+	}
+	for _, prerequisite := range inspection.Prerequisites {
+		status := "ok"
+		if !prerequisite.Ready {
+			status = "failed"
+		}
+		fmt.Fprintf(&output, "    - prerequisite [%s] %s: %s\n", status, prerequisite.Name, prerequisite.Details)
+	}
+	return output.String()
 }
 
 func inspectMangleIdentity(family int, command string, settings config.TransparentUpstreamSettings) NetworkPrerequisite {

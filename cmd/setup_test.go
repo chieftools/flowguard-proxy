@@ -26,6 +26,7 @@ func resetSetupTestGlobals(t *testing.T) {
 
 	oldConfigFile := configFile
 	oldDiscover := setupDiscover
+	oldVerbose := verbose
 	oldNoTUI := noTUI
 	oldInput := setupInput
 	oldOutput := setupOutput
@@ -40,6 +41,7 @@ func resetSetupTestGlobals(t *testing.T) {
 
 	configFile = filepath.Join(t.TempDir(), "config.json")
 	setupDiscover = false
+	verbose = false
 	noTUI = false
 	setupInput = strings.NewReader("")
 	setupOutput = io.Discard
@@ -63,6 +65,7 @@ func resetSetupTestGlobals(t *testing.T) {
 	t.Cleanup(func() {
 		configFile = oldConfigFile
 		setupDiscover = oldDiscover
+		verbose = oldVerbose
 		noTUI = oldNoTUI
 		setupInput = oldInput
 		setupOutput = oldOutput
@@ -256,6 +259,7 @@ func TestSetupHostSkipsPathDiscoveryWhenPathsAlreadyConfigured(t *testing.T) {
 
 func TestSetupHostForcedDiscoveryRunsDespiteExistingPaths(t *testing.T) {
 	resetSetupTestGlobals(t)
+	verbose = true
 
 	root, psaConfPath := writeSetupTestPleskCertRoot(t)
 	setupPsaConfPath = psaConfPath
@@ -299,6 +303,8 @@ func TestSetupHostForcedDiscoveryRunsDespiteExistingPaths(t *testing.T) {
 	out := output.String()
 	for _, want := range []string{
 		"Looking for server configuration",
+		"Verbose server configuration detection:",
+		"Plesk certificates: accepted",
 		"Discovered Plesk certificate directory",
 		"Found 1 usable certificate covering 1 hostname.",
 		"  Use this server configuration? [Y/n]:",

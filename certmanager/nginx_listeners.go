@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -21,15 +22,25 @@ type NginxAddressPair struct {
 // Blocks with multiple addresses of either family and relationships that are
 // not globally one-to-one are reported as ambiguous rather than guessed.
 func DiscoverNginxAddressPairs(configPath string) ([]NginxAddressPair, []string, error) {
+	pairs, warnings, _, err := DiscoverNginxAddressPairsWithDiagnostics(configPath)
+	return pairs, warnings, err
+}
+
+// DiscoverNginxAddressPairsWithDiagnostics also reports each listener parsing
+// and pairing decision for verbose setup output.
+func DiscoverNginxAddressPairsWithDiagnostics(configPath string) ([]NginxAddressPair, []string, []string, error) {
+	diagnostics := []string{fmt.Sprintf("nginx: inspecting configuration %s", configPath)}
 	_, configFiles, err := parseNginxConfig(configPath, false)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read nginx configuration: %w", err)
+		diagnostics = append(diagnostics, fmt.Sprintf("nginx: configuration could not be read: %v", err))
+		return nil, nil, diagnostics, fmt.Errorf("read nginx configuration: %w", err)
 	}
+	sort.Strings(configFiles)
+	diagnostics = append(diagnostics, fmt.Sprintf("nginx: inspecting %d parsed configuration file(s)", len(configFiles)))
 
 	type candidate struct {
 		ipv4 netip.Addr
 		ipv6 netip.Addr
-		file string
 	}
 	var candidates []candidate
 	var warnings []string
@@ -37,14 +48,30 @@ func DiscoverNginxAddressPairs(configPath string) ([]NginxAddressPair, []string,
 		data, err := os.ReadFile(path)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("could not inspect nginx listeners in %s: %v", path, err))
+			diagnostics = append(diagnostics, fmt.Sprintf("nginx: skipped %s because it could not be read: %v", path, err))
 			continue
 		}
 		blocks, blockWarnings := nginxServerListenerBlocks(string(data))
+		diagnostics = append(diagnostics, fmt.Sprintf("nginx: %s contains %d server block(s)", path, len(blocks)))
 		for _, warning := range blockWarnings {
 			warnings = append(warnings, fmt.Sprintf("%s: %s", path, warning))
 		}
-		for _, block := range blocks {
+		for index, block := range blocks {
+			for _, ignored := range block.ignored {
+				diagnostics = append(diagnostics, fmt.Sprintf(
+					"nginx: %s server block %d ignored listen %q: %s",
+					path, index+1, ignored.raw, ignored.reason,
+				))
+			}
+			diagnostics = append(diagnostics, fmt.Sprintf(
+				"nginx: %s server block %d has explicit IPv4 listeners [%s] and IPv6 listeners [%s]",
+				path, index+1, formatNginxListenerAddresses(block.ipv4), formatNginxListenerAddresses(block.ipv6),
+			))
 			if len(block.ipv4) == 0 || len(block.ipv6) == 0 {
+				diagnostics = append(diagnostics, fmt.Sprintf(
+					"nginx: %s server block %d was not a pair candidate because it needs one explicit listener from each address family",
+					path, index+1,
+				))
 				continue
 			}
 			if len(block.ipv4) != 1 || len(block.ipv6) != 1 {
@@ -52,13 +79,21 @@ func DiscoverNginxAddressPairs(configPath string) ([]NginxAddressPair, []string,
 					"%s: server block has %d explicit IPv4 and %d explicit IPv6 listeners; pairing is ambiguous",
 					path, len(block.ipv4), len(block.ipv6),
 				))
+				diagnostics = append(diagnostics, fmt.Sprintf(
+					"nginx: %s server block %d was not a pair candidate because multiple explicit listeners make it ambiguous",
+					path, index+1,
+				))
 				continue
 			}
-			candidates = append(candidates, candidate{
+			pairCandidate := candidate{
 				ipv4: firstAddr(block.ipv4),
 				ipv6: firstAddr(block.ipv6),
-				file: path,
-			})
+			}
+			candidates = append(candidates, pairCandidate)
+			diagnostics = append(diagnostics, fmt.Sprintf(
+				"nginx: %s server block %d proposed %s <-> %s",
+				path, index+1, pairCandidate.ipv4, pairCandidate.ipv6,
+			))
 		}
 	}
 
@@ -90,6 +125,10 @@ func DiscoverNginxAddressPairs(configPath string) ([]NginxAddressPair, []string,
 	pairs := make([]NginxAddressPair, 0, len(v4ToV6))
 	for ipv4, ipv6 := range v4ToV6 {
 		if ambiguousV4[ipv4] || ambiguousV6[ipv6] || v6ToV4[ipv6] != ipv4 {
+			diagnostics = append(diagnostics, fmt.Sprintf(
+				"nginx: rejected %s <-> %s because the relationship is not globally one-to-one",
+				ipv4, ipv6,
+			))
 			continue
 		}
 		pairs = append(pairs, NginxAddressPair{IPv4: ipv4.String(), IPv6: ipv6.String()})
@@ -98,12 +137,24 @@ func DiscoverNginxAddressPairs(configPath string) ([]NginxAddressPair, []string,
 		return pairs[i].IPv4 < pairs[j].IPv4
 	})
 	sort.Strings(warnings)
-	return pairs, dedupeStrings(warnings), nil
+	for _, pair := range pairs {
+		diagnostics = append(diagnostics, fmt.Sprintf("nginx: accepted %s <-> %s", pair.IPv4, pair.IPv6))
+	}
+	if len(pairs) == 0 {
+		diagnostics = append(diagnostics, "nginx: no unique IPv4/IPv6 listener pairs were found")
+	}
+	return pairs, dedupeStrings(warnings), diagnostics, nil
 }
 
 type nginxListenerBlock struct {
-	ipv4 map[netip.Addr]bool
-	ipv6 map[netip.Addr]bool
+	ipv4    map[netip.Addr]bool
+	ipv6    map[netip.Addr]bool
+	ignored []nginxIgnoredListener
+}
+
+type nginxIgnoredListener struct {
+	raw    string
+	reason string
 }
 
 type nginxParseContext struct {
@@ -151,12 +202,14 @@ func nginxServerListenerBlocks(input string) ([]nginxListenerBlock, []string) {
 			if len(directive) >= 2 && directive[0] == "listen" {
 				server := stack[len(stack)-1].server
 				if server != nil {
-					if addr, ok := parseNginxListenAddress(directive[1]); ok {
+					if addr, ok, reason := parseNginxListenAddress(directive[1]); ok {
 						if addr.Is4() {
 							server.ipv4[addr] = true
 						} else if addr.Is6() && !addr.Is4In6() {
 							server.ipv6[addr] = true
 						}
+					} else {
+						server.ignored = append(server.ignored, nginxIgnoredListener{raw: directive[1], reason: reason})
 					}
 				}
 			}
@@ -232,35 +285,59 @@ func tokenizeNginx(input string) []string {
 	return tokens
 }
 
-func parseNginxListenAddress(raw string) (netip.Addr, bool) {
+func parseNginxListenAddress(raw string) (netip.Addr, bool, string) {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || strings.HasPrefix(raw, "unix:") || strings.Contains(raw, "$") ||
-		raw == "*" || raw == "0.0.0.0" || raw == "[::]" || raw == "::" {
-		return netip.Addr{}, false
+	if raw == "" {
+		return netip.Addr{}, false, "the listen address is empty"
+	}
+	if strings.HasPrefix(raw, "unix:") {
+		return netip.Addr{}, false, "Unix sockets do not identify an IP bind address"
+	}
+	if strings.Contains(raw, "$") {
+		return netip.Addr{}, false, "variable-based listeners cannot be resolved statically"
+	}
+	if raw == "*" || raw == "0.0.0.0" || raw == "[::]" || raw == "::" {
+		return netip.Addr{}, false, "wildcard listeners do not identify a specific bind address"
+	}
+	if _, err := strconv.ParseUint(raw, 10, 16); err == nil {
+		return netip.Addr{}, false, "port-only listeners apply to wildcard addresses"
 	}
 	if _, err := netip.ParseAddr(raw); err == nil {
 		addr, _ := netip.ParseAddr(raw)
 		if addr.IsUnspecified() {
-			return netip.Addr{}, false
+			return netip.Addr{}, false, "wildcard listeners do not identify a specific bind address"
 		}
-		return addr.Unmap(), true
+		return addr.Unmap(), true, ""
 	}
 	if host, _, err := net.SplitHostPort(raw); err == nil {
 		addr, err := netip.ParseAddr(strings.Trim(host, "[]"))
-		if err == nil && !addr.IsUnspecified() {
-			return addr.Unmap(), true
+		if err == nil {
+			if addr.IsUnspecified() {
+				return netip.Addr{}, false, "wildcard listeners do not identify a specific bind address"
+			}
+			return addr.Unmap(), true, ""
 		}
+		return netip.Addr{}, false, "the listener host is not a literal IP address"
 	}
 	if strings.Count(raw, ":") == 1 {
 		host, _, ok := strings.Cut(raw, ":")
 		if ok {
 			addr, err := netip.ParseAddr(host)
 			if err == nil && !addr.IsUnspecified() {
-				return addr.Unmap(), true
+				return addr.Unmap(), true, ""
 			}
 		}
 	}
-	return netip.Addr{}, false
+	return netip.Addr{}, false, "the listener is not a supported literal IP address"
+}
+
+func formatNginxListenerAddresses(values map[netip.Addr]bool) string {
+	addresses := make([]string, 0, len(values))
+	for address := range values {
+		addresses = append(addresses, address.String())
+	}
+	sort.Strings(addresses)
+	return strings.Join(addresses, ", ")
 }
 
 func firstAddr(values map[netip.Addr]bool) netip.Addr {
