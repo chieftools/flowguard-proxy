@@ -95,7 +95,7 @@ func getInterfaceForIP(targetIP string) (string, error) {
 }
 
 // getPublicIPAddresses returns all public IP addresses configured on the machine
-func getPublicIPAddresses() ([]string, error) {
+func getPublicIPAddresses(verbose bool) ([]string, error) {
 	var publicIPs []string
 	seenIPs := make(map[string]bool)
 
@@ -117,7 +117,7 @@ func getPublicIPAddresses() ([]string, error) {
 
 		addrs, err := iface.Addrs()
 		if err != nil {
-			log.Printf("Warning: failed to get addresses for interface %s: %v", iface.Name, err)
+			log.Printf("[network] Warning: failed to get addresses for interface %s: %v", iface.Name, err)
 			continue
 		}
 
@@ -139,7 +139,9 @@ func getPublicIPAddresses() ([]string, error) {
 				if !seenIPs[ipStr] {
 					seenIPs[ipStr] = true
 					publicIPs = append(publicIPs, ipStr)
-					log.Printf("Found public IP: %s on interface %s", ipStr, iface.Name)
+					if verbose {
+						log.Printf("[network] Found public IP: %s on interface %s", ipStr, iface.Name)
+					}
 				}
 			}
 		}
@@ -155,7 +157,7 @@ func getPublicIPAddresses() ([]string, error) {
 // DetectPublicIPAddresses returns the public addresses FlowGuard would bind by
 // default. The returned slice is safe for callers to modify.
 func DetectPublicIPAddresses() ([]string, error) {
-	addresses, err := getPublicIPAddresses()
+	addresses, err := getPublicIPAddresses(false)
 	return append([]string(nil), addresses...), err
 }
 

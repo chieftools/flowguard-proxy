@@ -105,7 +105,11 @@ func (m *IPLookupMiddleware) loadASNDatabase() error {
 
 	m.asnDB = db
 	m.dbPath = dbPath
-	log.Printf("[middleware:iplookup] Loaded ASN database from %s", dbPath)
+	if m.configMgr.IsVerbose() {
+		log.Printf("[middleware:iplookup] Loaded ASN database from %s", dbPath)
+	} else {
+		log.Printf("[middleware:iplookup] Loaded ASN database")
+	}
 	return nil
 }
 
@@ -298,7 +302,9 @@ func (m *IPLookupMiddleware) ReloadDatabase() {
 // startPeriodicRefresh starts the periodic database refresh goroutine
 func (m *IPLookupMiddleware) startPeriodicRefresh() {
 	ipDbRefreshInterval := m.configMgr.GetIPDatabaseRefreshInterval()
-	log.Printf("[middleware:iplookup] Starting IP database refresh with interval: %v", ipDbRefreshInterval)
+	if m.configMgr.IsVerbose() {
+		log.Printf("[middleware:iplookup] Starting IP database refresh with interval: %v", ipDbRefreshInterval)
+	}
 
 	ticker := time.NewTicker(ipDbRefreshInterval)
 	defer ticker.Stop()
@@ -306,7 +312,9 @@ func (m *IPLookupMiddleware) startPeriodicRefresh() {
 	for {
 		select {
 		case <-m.stopChan:
-			log.Printf("[middleware:iplookup] Stopping IP database refresh goroutine")
+			if m.configMgr.IsVerbose() {
+				log.Printf("[middleware:iplookup] Stopping IP database refresh goroutine")
+			}
 			return
 		case <-ticker.C:
 			// Check if interval has changed in config

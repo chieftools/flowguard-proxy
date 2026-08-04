@@ -26,12 +26,13 @@ type ListConfig struct {
 
 // IPList represents a single named IP list with its trie
 type IPList struct {
-	name   string
-	config ListConfig
-	trie   *bart.Lite
-	loaded bool // tracks if list has been loaded at least once
-	empty  bool // true if list has 0 entries (optimization to skip lookups)
-	mu     sync.RWMutex
+	name    string
+	config  ListConfig
+	trie    *bart.Lite
+	loaded  bool // tracks if list has been loaded at least once
+	empty   bool // true if list has 0 entries (optimization to skip lookups)
+	entries int
+	mu      sync.RWMutex
 }
 
 // Manager manages multiple named IP lists
@@ -80,7 +81,7 @@ func (m *Manager) addList(name string, config ListConfig) error {
 	}
 
 	// Load initial data
-	if err := list.load(m.cache, m.verbose); err != nil {
+	if err := list.loadInitial(m.cache, m.verbose); err != nil {
 		return fmt.Errorf("failed to load initial data: %w", err)
 	}
 
@@ -93,16 +94,21 @@ func (m *Manager) addList(name string, config ListConfig) error {
 
 // load loads IP data into the list's trie
 func (l *IPList) load(cacheInstance *cache.Cache, verbose bool) error {
-	return l.loadInternal(cacheInstance, verbose, false)
+	return l.loadInternal(cacheInstance, verbose, false, true)
+}
+
+// loadInitial loads a list without emitting an individual success message.
+func (l *IPList) loadInitial(cacheInstance *cache.Cache, verbose bool) error {
+	return l.loadInternal(cacheInstance, verbose, false, false)
 }
 
 // forceLoad loads IP data into the list's trie, bypassing cache TTL but respecting etag
 func (l *IPList) forceLoad(cacheInstance *cache.Cache, verbose bool) error {
-	return l.loadInternal(cacheInstance, verbose, true)
+	return l.loadInternal(cacheInstance, verbose, true, true)
 }
 
 // loadInternal handles the common loading logic for both regular and forced loads
-func (l *IPList) loadInternal(cacheInstance *cache.Cache, verbose bool, forceRefresh bool) error {
+func (l *IPList) loadInternal(cacheInstance *cache.Cache, verbose bool, forceRefresh, logSuccess bool) error {
 	var data []byte
 	var err error
 	var source string
@@ -163,10 +169,21 @@ func (l *IPList) loadInternal(cacheInstance *cache.Cache, verbose bool, forceRef
 	l.trie = newTrie
 	l.loaded = true
 	l.empty = (count == 0)
+	l.entries = count
 	l.mu.Unlock()
 
-	log.Printf("[ip_list] Loaded list '%s' from %s: %d entries", l.name, source, count)
+	if logSuccess {
+		log.Printf("[ip_list] %s", loadedListLogMessage(l.name, source, count, cacheInstance, verbose))
+	}
 	return nil
+}
+
+func loadedListLogMessage(name, source string, count int, cacheInstance *cache.Cache, verbose bool) string {
+	if !verbose && cacheInstance.IsAPIURL(source) {
+		return fmt.Sprintf("Loaded list '%s': %d entries", name, count)
+	}
+
+	return fmt.Sprintf("Loaded list '%s' from %s: %d entries", name, source, count)
 }
 
 // parseIPsToTrie parses IP data and builds a new trie
@@ -300,6 +317,24 @@ func (m *Manager) GetListNames() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// Stats returns the number of loaded lists and their combined entry count.
+func (m *Manager) Stats() (listCount, entryCount int) {
+	m.mu.RLock()
+	lists := make([]*IPList, 0, len(m.lists))
+	for _, list := range m.lists {
+		lists = append(lists, list)
+	}
+	m.mu.RUnlock()
+
+	for _, list := range lists {
+		list.mu.RLock()
+		entryCount += list.entries
+		list.mu.RUnlock()
+	}
+
+	return len(lists), entryCount
 }
 
 // RefreshListsByBaseID refreshes all lists that match a base ID

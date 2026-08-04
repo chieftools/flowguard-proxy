@@ -161,6 +161,11 @@ func (m *Manager) GetUserAgent() string {
 	return m.userAgent
 }
 
+// IsVerbose reports whether verbose runtime logging is enabled.
+func (m *Manager) IsVerbose() bool {
+	return m.verbose
+}
+
 // OnChange adds a callback to be called when configuration changes
 func (m *Manager) OnChange(callback func(*Config)) {
 	m.mu.Lock()

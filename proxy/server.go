@@ -174,14 +174,14 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		if isClientAbortedProxyError(r, err) {
 			if s.config.verbose {
-				log.Printf("[%s:%s] client aborted proxy request for %s: %v", s.config.bindAddr, s.config.bindPort, proxyHost, err)
+				log.Printf("[proxy] [%s:%s] client aborted proxy request for %s: %v", s.config.bindAddr, s.config.bindPort, proxyHost, err)
 			}
 			w.WriteHeader(statusClientClosedRequest)
 			return
 		}
 
 		if s.config.verbose {
-			log.Printf("[%s:%s] proxy error for %s: %v", s.config.bindAddr, s.config.bindPort, proxyHost, err)
+			log.Printf("[proxy] [%s:%s] proxy error for %s: %v", s.config.bindAddr, s.config.bindPort, proxyHost, err)
 		} else if !strings.Contains(err.Error(), "context canceled") {
 			s.logProxyError(proxyHost, err)
 		}
@@ -225,7 +225,7 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 	}
 
 	if s.config.verbose {
-		log.Printf("[%s:%s] routing request for %s", s.config.bindAddr, s.config.bindPort, proxyHost)
+		log.Printf("[proxy] [%s:%s] routing request for %s", s.config.bindAddr, s.config.bindPort, proxyHost)
 	}
 
 	return proxy
@@ -313,7 +313,9 @@ func (s *Server) Start(tlsConfig *tls.Config, errChan chan<- error) error {
 		WriteTimeout: 300 * time.Second,
 	}
 
-	log.Printf("[%s:%s] Starting %s proxy server", s.config.bindAddr, s.config.bindPort, s.config.scheme)
+	if s.config.verbose {
+		log.Printf("[proxy] [%s:%s] Starting %s proxy server", s.config.bindAddr, s.config.bindPort, s.config.scheme)
+	}
 
 	if tcpEnabled {
 		listener, err := net.Listen("tcp", addr)
@@ -330,7 +332,7 @@ func (s *Server) Start(tlsConfig *tls.Config, errChan chan<- error) error {
 		udpConn, err := net.ListenPacket("udp", addr)
 		if err != nil {
 			if closeErr := s.CloseListener(); closeErr != nil {
-				log.Printf("[%s:%s] Error closing listener after HTTP/3 bind failure: %v", s.config.bindAddr, s.config.bindPort, closeErr)
+				log.Printf("[proxy] [%s:%s] Error closing listener after HTTP/3 bind failure: %v", s.config.bindAddr, s.config.bindPort, closeErr)
 			}
 
 			s.resetListenerState()
@@ -423,16 +425,18 @@ func (s *Server) http3ConnContext(ctx context.Context, conn *quic.Conn) context.
 }
 
 func (s *Server) Shutdown(ctx context.Context) {
-	log.Printf("[%s:%s] Request received to shutdown server", s.config.bindAddr, s.config.bindPort)
+	if s.config.verbose {
+		log.Printf("[proxy] [%s:%s] Request received to shutdown server", s.config.bindAddr, s.config.bindPort)
+	}
 
 	s.CleanupPortRedirect()
 	s.closeUpstreamIdleConnections()
 
 	if s.http3Server != nil {
 		if err := s.http3Server.Shutdown(ctx); err != nil {
-			log.Printf("[%s:%s] Error shutting down HTTP/3 server: %v", s.config.bindAddr, s.config.bindPort, err)
+			log.Printf("[proxy] [%s:%s] Error shutting down HTTP/3 server: %v", s.config.bindAddr, s.config.bindPort, err)
 			if closeErr := s.http3Server.Close(); closeErr != nil {
-				log.Printf("[%s:%s] Error closing HTTP/3 server: %v", s.config.bindAddr, s.config.bindPort, closeErr)
+				log.Printf("[proxy] [%s:%s] Error closing HTTP/3 server: %v", s.config.bindAddr, s.config.bindPort, closeErr)
 			}
 		}
 		s.http3Server = nil
@@ -440,22 +444,24 @@ func (s *Server) Shutdown(ctx context.Context) {
 
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil {
-			log.Printf("[%s:%s] Error shutting down server: %v", s.config.bindAddr, s.config.bindPort, err)
+			log.Printf("[proxy] [%s:%s] Error shutting down server: %v", s.config.bindAddr, s.config.bindPort, err)
 			if closeErr := s.CloseListener(); closeErr != nil {
-				log.Printf("[%s:%s] Error closing listener: %v", s.config.bindAddr, s.config.bindPort, closeErr)
+				log.Printf("[proxy] [%s:%s] Error closing listener: %v", s.config.bindAddr, s.config.bindPort, closeErr)
 			}
 		} else {
 			s.markListenerClosed()
-			log.Printf("[%s:%s] Proxy server stopped gracefully", s.config.bindAddr, s.config.bindPort)
+			if s.config.verbose {
+				log.Printf("[proxy] [%s:%s] Proxy server stopped gracefully", s.config.bindAddr, s.config.bindPort)
+			}
 			if closeErr := s.CloseListener(); closeErr != nil {
-				log.Printf("[%s:%s] Error closing listener: %v", s.config.bindAddr, s.config.bindPort, closeErr)
+				log.Printf("[proxy] [%s:%s] Error closing listener: %v", s.config.bindAddr, s.config.bindPort, closeErr)
 			}
 		}
 		s.httpServer = nil
 		s.resetListenerState()
 	} else {
 		if err := s.CloseListener(); err != nil {
-			log.Printf("[%s:%s] Error closing listener: %v", s.config.bindAddr, s.config.bindPort, err)
+			log.Printf("[proxy] [%s:%s] Error closing listener: %v", s.config.bindAddr, s.config.bindPort, err)
 		}
 		s.resetListenerState()
 	}

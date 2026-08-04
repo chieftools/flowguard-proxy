@@ -360,3 +360,31 @@ func TestAPIKeyAutomaticFileCache(t *testing.T) {
 		t.Errorf("Expected 'Bearer file-api-key-67890', got '%s'", receivedAuthHeader)
 	}
 }
+
+func TestIsAPIURL(t *testing.T) {
+	cache, err := NewCache(t.TempDir(), "test-agent", false)
+	if err != nil {
+		t.Fatalf("NewCache: %v", err)
+	}
+	cache.SetAPICredentials("https://flowguard.network", "test-key")
+
+	tests := []struct {
+		name string
+		url  string
+		want bool
+	}{
+		{name: "API resource", url: "https://flowguard.network/api/v1/ip_list/example/download", want: true},
+		{name: "API resource with query", url: "https://flowguard.network/api/v1/ip_list/example/download?confidence=80", want: true},
+		{name: "same origin outside API", url: "https://flowguard.network/public/list.txt", want: false},
+		{name: "lookalike origin", url: "https://flowguard.network.example/api/v1/ip_list/example/download", want: false},
+		{name: "external resource", url: "https://example.com/list.txt", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cache.IsAPIURL(tt.url); got != tt.want {
+				t.Fatalf("IsAPIURL(%q) = %v, want %v", tt.url, got, tt.want)
+			}
+		})
+	}
+}

@@ -344,7 +344,7 @@ func (l *proxyErrorLogLimiter) flush(key, bindAddr, bindPort, host string, err e
 		return
 	}
 
-	log.Printf("[%s:%s] proxy error for %s: suppressed %d similar transient errors: %v",
+	log.Printf("[upstream] [%s:%s] proxy error for %s: suppressed %d similar transient errors: %v",
 		bindAddr, bindPort, host, entry.suppressed, err)
 }
 
@@ -360,7 +360,7 @@ func (l *proxyErrorLogLimiter) flushRecovery(key, bindAddr, bindPort, host strin
 		return
 	}
 
-	log.Printf("[%s:%s] upstream recovered for %s: suppressed %d similar transient recovery logs: %v",
+	log.Printf("[upstream] [%s:%s] upstream recovered for %s: suppressed %d similar transient recovery logs: %v",
 		bindAddr, bindPort, host, entry.suppressed, err)
 }
 
@@ -467,11 +467,11 @@ func (s *Server) logUpstreamRecovery(req *http.Request, failures int, err error)
 }
 
 func logProxyErrorNow(bindAddr, bindPort, host string, err error) {
-	log.Printf("[%s:%s] proxy error for %s: %v", bindAddr, bindPort, host, err)
+	log.Printf("[upstream] [%s:%s] proxy error for %s: %v", bindAddr, bindPort, host, err)
 }
 
 func logUpstreamRecoveryNow(bindAddr, bindPort, host string, failures int, err error) {
-	log.Printf("[%s:%s] upstream recovered for %s after %d transient failure(s): %v",
+	log.Printf("[upstream] [%s:%s] upstream recovered for %s after %d transient failure(s): %v",
 		bindAddr, bindPort, host, failures, err)
 }
 

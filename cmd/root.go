@@ -57,7 +57,7 @@ func GetUserAgent() string {
 func GetConfigManager() *config.Manager {
 	configMgr, err := TryGetConfigManager()
 	if err != nil {
-		log.Printf("Failed to load configuration from %s: %v", configFile, err)
+		log.Printf("[config] Failed to load configuration from %s: %v", configFile, err)
 		os.Exit(1)
 	}
 	return configMgr

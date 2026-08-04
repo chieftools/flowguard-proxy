@@ -32,6 +32,7 @@ type Config struct {
 	NoRedirect           bool
 	AdvertiseHTTP3       bool
 	UpstreamClientIPMode string
+	Updater              *updater.Updater
 }
 
 type Manager struct {
@@ -81,18 +82,18 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 	middlewareChain.Add(rulesMiddleware)
 
 	// Determine bind addresses based on configuration
-	bindAddrs := cfg.BindAddrs
-	if len(bindAddrs) == 0 {
+	autoDetectedBindAddrs := len(cfg.BindAddrs) == 0
+	if autoDetectedBindAddrs {
 		// Default: Get all public IP addresses on the machine
-		publicIPs, err := getPublicIPAddresses()
+		publicIPs, err := getPublicIPAddresses(cfg.Verbose)
 		if err != nil {
-			log.Printf("Failed to get public IPs: %v", err)
+			log.Printf("[network] Failed to get public IPs: %v", err)
 			os.Exit(1)
 		}
 
-		log.Printf("Auto-detected %d public IP address(es) for binding", len(publicIPs))
 		cfg.BindAddrs = publicIPs
 	}
+	log.Printf("[network] %s", formatBindAddresses(cfg.BindAddrs, autoDetectedBindAddrs))
 
 	// Get certificate paths from both CLI config and JSON config
 	certPath := ""
@@ -194,10 +195,13 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 	if cacheDir == "" {
 		cacheDir = "/var/cache/flowguard"
 	}
-	u, err := updater.New(cfg.Version, cacheDir, cfg.Verbose)
+	u := cfg.Updater
+	if u == nil {
+		u, err = updater.New(cfg.Version, cacheDir, cfg.Verbose)
+	}
 	if err != nil {
 		log.Printf("[updater] Package upgrades unavailable: %v", err)
-	} else {
+	} else if u != nil {
 		pm.updater = u
 		configMgr.OnUpgradeRequest(func(version string) {
 			pm.handleUpgradeRequest(version)
@@ -271,7 +275,16 @@ func (p *Manager) initializeIPListManager(cfg *config.Config, rulesMiddleware *m
 
 	// Set the IP list manager on the rules middleware
 	rulesMiddleware.SetIPListManager(ipListMgr)
-	log.Printf("[ip_list] Initialized IP list manager with %d list(s)", len(listsConfig))
+	listCount, entryCount := ipListMgr.Stats()
+	listLabel := "lists"
+	if listCount == 1 {
+		listLabel = "list"
+	}
+	entryLabel := "entries"
+	if entryCount == 1 {
+		entryLabel = "entry"
+	}
+	log.Printf("[ip_list] Initialized %d %s with %d total %s", listCount, listLabel, entryCount, entryLabel)
 }
 
 // handleIPListConfigChange handles changes to IP list configuration during hot-reload
@@ -407,6 +420,15 @@ func resolveUpstreamClientIPMode(configured, override string) (string, error) {
 		return "", fmt.Errorf("upstream client IP mode must be %q or %q", config.UpstreamClientIPModeHeaders, config.UpstreamClientIPModeTransparent)
 	}
 	return mode, nil
+}
+
+func formatBindAddresses(addresses []string, autoDetected bool) string {
+	source := "configured"
+	if autoDetected {
+		source = "auto-detected"
+	}
+
+	return fmt.Sprintf("Bind addresses (%d, %s): %s", len(addresses), source, strings.Join(addresses, ", "))
 }
 
 func (p *Manager) stopServers(servers []*Server) {
@@ -665,7 +687,9 @@ func (p *Manager) evaluateFirewall(autoRepair bool) api.FirewallHeartbeat {
 }
 
 func (p *Manager) runFirewallMonitor() {
-	log.Println("[firewall] Monitor started")
+	if p.config.Verbose {
+		log.Println("[firewall] Monitor started")
+	}
 
 	for {
 		enabled, autoRepair, interval := p.firewallMonitorSettings()
@@ -674,7 +698,9 @@ func (p *Manager) runFirewallMonitor() {
 			select {
 			case <-p.stopFirewallMonitor:
 				timer.Stop()
-				log.Println("[firewall] Monitor stopped")
+				if p.config.Verbose {
+					log.Println("[firewall] Monitor stopped")
+				}
 				return
 			case <-timer.C:
 				continue
@@ -685,7 +711,9 @@ func (p *Manager) runFirewallMonitor() {
 		select {
 		case <-p.stopFirewallMonitor:
 			timer.Stop()
-			log.Println("[firewall] Monitor stopped")
+			if p.config.Verbose {
+				log.Println("[firewall] Monitor stopped")
+			}
 			return
 		case <-timer.C:
 			p.updateFirewallState(p.evaluateFirewall(autoRepair))
@@ -748,7 +776,9 @@ func (p *Manager) runHeartbeat() {
 		}
 	}
 
-	log.Println("[heartbeat] Started")
+	if p.config.Verbose {
+		log.Println("[heartbeat] Started")
+	}
 
 	// Send immediately on startup
 	p.sendHeartbeat()
@@ -764,7 +794,9 @@ func (p *Manager) runHeartbeat() {
 			select {
 			case <-p.stopHeartbeat:
 				timer.Stop()
-				log.Println("[heartbeat] Stopped")
+				if p.config.Verbose {
+					log.Println("[heartbeat] Stopped")
+				}
 				return
 			case <-p.forceHeartbeat:
 				timer.Stop()
@@ -787,7 +819,9 @@ func (p *Manager) runHeartbeat() {
 		select {
 		case <-p.stopHeartbeat:
 			timer.Stop()
-			log.Println("[heartbeat] Stopped")
+			if p.config.Verbose {
+				log.Println("[heartbeat] Stopped")
+			}
 			return
 		case <-p.forceHeartbeat:
 			timer.Stop()
@@ -877,9 +911,55 @@ func (p *Manager) startServers(protocols config.ProtocolSettings, advertiseHTTP3
 	return started, nil
 }
 
+func formatProxyStartupSummary(servers []*Server, bindAddressCount int) string {
+	httpEndpoints := 0
+	httpsEndpoints := 0
+	for _, server := range servers {
+		if server == nil || server.config == nil {
+			continue
+		}
+		switch server.config.scheme {
+		case "http":
+			httpEndpoints++
+		case "https":
+			httpsEndpoints++
+		}
+	}
+
+	details := make([]string, 0, 2)
+	if httpEndpoints > 0 {
+		details = append(details, fmt.Sprintf("%d HTTP", httpEndpoints))
+	}
+	if httpsEndpoints > 0 {
+		details = append(details, fmt.Sprintf("%d HTTPS", httpsEndpoints))
+	}
+
+	endpointLabel := "endpoints"
+	if len(servers) == 1 {
+		endpointLabel = "endpoint"
+	}
+	addressLabel := "addresses"
+	if bindAddressCount == 1 {
+		addressLabel = "address"
+	}
+
+	return fmt.Sprintf(
+		"Started %d proxy %s across %d bind %s (%s)",
+		len(servers),
+		endpointLabel,
+		bindAddressCount,
+		addressLabel,
+		strings.Join(details, ", "),
+	)
+}
+
 func (p *Manager) Start() error {
+	log.Printf("[proxy] Upstream client IP mode: %s", p.upstreamMode)
+
 	trustedProxiesRefreshInterval := p.configManager.GetRefreshInterval()
-	log.Printf("[trusted_proxy] Starting trusted proxy refresh with interval: %v", trustedProxiesRefreshInterval)
+	if p.config.Verbose {
+		log.Printf("[trusted_proxy] Starting trusted proxy refresh with interval: %v", trustedProxiesRefreshInterval)
+	}
 
 	// Periodically refresh trusted proxy lists from URLs
 	go func() {
@@ -915,12 +995,20 @@ func (p *Manager) Start() error {
 	p.serverMu.Lock()
 	p.servers = servers
 	p.serverMu.Unlock()
+	log.Printf("[proxy] %s", formatProxyStartupSummary(servers, len(p.config.BindAddrs)))
 
 	// Small delay before we setup port redirection rules
 	time.Sleep(100 * time.Millisecond)
 
 	if err := p.setupPortRedirects(); err != nil {
 		return err
+	}
+	if p.managesRedirect() {
+		endpointLabel := "endpoints"
+		if len(servers) == 1 {
+			endpointLabel = "endpoint"
+		}
+		log.Printf("[firewall] Configured traffic redirection for %d proxy %s", len(servers), endpointLabel)
 	}
 
 	p.setInitialFirewallState(p.initialFirewallState())

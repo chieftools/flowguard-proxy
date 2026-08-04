@@ -54,13 +54,13 @@ func runProxy() {
 	// Load configuration
 	configMgr, err := config.NewManager(configFile, GetUserAgent(), GetVersion(), cacheDir, verbose)
 	if err != nil {
-		log.Printf("Failed to load configuration from %s: %v", configFile, err)
+		log.Printf("[config] Failed to load configuration from %s: %v", configFile, err)
 		os.Exit(1)
 	}
 
 	err = configMgr.RefreshFromAPI(false)
 	if err != nil {
-		log.Printf("Warning: Failed to refresh configuration from API: %v", err)
+		log.Printf("[config] Warning: Failed to refresh configuration from API: %v", err)
 	}
 
 	// Check for post-upgrade state (rollback if previous upgrade failed)
@@ -85,9 +85,10 @@ func runProxy() {
 		UserAgent:            GetUserAgent(),
 		NoRedirect:           noRedirect,
 		UpstreamClientIPMode: upstreamClientIPMode,
+		Updater:              u,
 	})
 	if err != nil {
-		log.Fatalf("[FATAL] Failed to initialize proxy: %v", err)
+		log.Fatalf("[proxy] Failed to initialize: %v", err)
 	}
 
 	sigChan := make(chan os.Signal, 1)
@@ -96,10 +97,10 @@ func runProxy() {
 	if err := proxyManager.Start(); err != nil {
 		// If we fail to start, attempt to shut down any started servers
 		if shutdownErr := proxyManager.Shutdown(); shutdownErr != nil {
-			log.Printf("Shutdown error: %v", shutdownErr)
+			log.Printf("[proxy] Shutdown error: %v", shutdownErr)
 		}
 
-		log.Fatalf("[FATAL] Failed to start proxy: %v", err)
+		log.Fatalf("[proxy] Failed to start: %v", err)
 	}
 
 	status := proxyManager.StatusMessage()
@@ -119,13 +120,13 @@ func runProxy() {
 			log.Printf("[systemd] Failed to notify stopping state: %v", notifyErr)
 		}
 		if shutdownErr := proxyManager.Shutdown(); shutdownErr != nil {
-			log.Printf("Shutdown error: %v", shutdownErr)
+			log.Printf("[proxy] Shutdown error: %v", shutdownErr)
 		}
-		log.Fatalf("[FATAL] Proxy runtime failure: %v", err)
+		log.Fatalf("[proxy] Runtime failure: %v", err)
 	}
 
 	if err := proxyManager.Shutdown(); err != nil {
-		log.Printf("Shutdown error: %v", err)
+		log.Printf("[proxy] Shutdown error: %v", err)
 	}
 }
 

@@ -166,7 +166,9 @@ func (s *Server) SetupPortRedirect() error {
 		}
 	}
 
-	log.Printf("[%s] redirection setup complete for %s:%s on interface %s", rules[0].command, s.config.bindAddr, s.config.bindPort, iface)
+	if s.config.verbose {
+		log.Printf("[%s] redirection setup complete for %s:%s on interface %s", rules[0].command, s.config.bindAddr, s.config.bindPort, iface)
+	}
 	return nil
 }
 
@@ -177,7 +179,7 @@ func (s *Server) CleanupPortRedirect() {
 
 	rules, _, err := s.firewallRules()
 	if err != nil {
-		log.Printf("Warning: %v", err)
+		log.Printf("[firewall] Warning: %v", err)
 		return
 	}
 
@@ -196,7 +198,7 @@ func (s *Server) CleanupPortRedirect() {
 		}
 	}
 
-	if totalRemoved > 0 {
+	if s.config.verbose && totalRemoved > 0 {
 		log.Printf("[%s] redirection cleanup complete for %s:%s (%d rules removed)", rules[0].command, s.config.bindAddr, s.config.bindPort, totalRemoved)
 	}
 }

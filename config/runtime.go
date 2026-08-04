@@ -324,7 +324,9 @@ func (m *Manager) RefreshFromAPI(force bool) error {
 
 // StartAPIRefresh starts a goroutine that periodically refreshes the configuration from the API
 func (m *Manager) StartAPIRefresh(interval time.Duration) {
-	log.Printf("[config] Started API configuration refresher")
+	if m.verbose {
+		log.Printf("[config] Started API configuration refresher")
+	}
 
 	go func() {
 		// Initial refresh on startup
@@ -445,7 +447,9 @@ func (m *Manager) updatePusherClient(config *Config) {
 				}
 			}()
 
-			log.Printf("[config] Realtime client initialized")
+			if m.verbose {
+				log.Printf("[config] Realtime client initialized")
+			}
 		}
 	} else {
 		// Update existing client configuration

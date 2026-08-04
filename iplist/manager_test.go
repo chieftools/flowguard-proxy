@@ -1,8 +1,12 @@
 package iplist
 
 import (
+	"bytes"
+	"log"
 	"net/netip"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"flowguard/cache"
@@ -272,6 +276,100 @@ func TestManagerContains(t *testing.T) {
 				t.Errorf("Contains(%s, %s) = %v; want %v", tt.listName, tt.ip, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestLoadedListLogMessage(t *testing.T) {
+	cacheInstance, err := cache.NewCache(t.TempDir(), "test-agent", false)
+	if err != nil {
+		t.Fatalf("NewCache: %v", err)
+	}
+	cacheInstance.SetAPICredentials("https://flowguard.network", "test-key")
+
+	tests := []struct {
+		name    string
+		source  string
+		verbose bool
+		want    string
+	}{
+		{
+			name:   "API URL hidden",
+			source: "https://flowguard.network/api/v1/ip_list/list-id/download?confidence=80",
+			want:   "Loaded list 'list-id': 42 entries",
+		},
+		{
+			name:    "API URL shown in verbose mode",
+			source:  "https://flowguard.network/api/v1/ip_list/list-id/download?confidence=80",
+			verbose: true,
+			want:    "Loaded list 'list-id' from https://flowguard.network/api/v1/ip_list/list-id/download?confidence=80: 42 entries",
+		},
+		{
+			name:   "external URL shown",
+			source: "https://example.com/list.txt",
+			want:   "Loaded list 'list-id' from https://example.com/list.txt: 42 entries",
+		},
+		{
+			name:   "local path shown",
+			source: "/etc/flowguard/list.txt",
+			want:   "Loaded list 'list-id' from /etc/flowguard/list.txt: 42 entries",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := loadedListLogMessage("list-id", tt.source, 42, cacheInstance, tt.verbose); got != tt.want {
+				t.Fatalf("loadedListLogMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInitialLoadsAreSummarizedAndRefreshesAreLoggedIndividually(t *testing.T) {
+	listPath := filepath.Join(t.TempDir(), "list.txt")
+	if err := os.WriteFile(listPath, []byte("192.0.2.1\n192.0.2.2\n"), 0o644); err != nil {
+		t.Fatalf("write list: %v", err)
+	}
+
+	cacheInstance, err := cache.NewCache(t.TempDir(), "test-agent", false)
+	if err != nil {
+		t.Fatalf("NewCache: %v", err)
+	}
+
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() {
+		log.SetOutput(previousWriter)
+	})
+
+	manager, err := New(map[string]ListConfig{
+		"test-list": {Path: listPath},
+	}, cacheInstance, false)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer manager.Stop()
+
+	if strings.Contains(logs.String(), "Loaded list") {
+		t.Fatalf("initial load emitted an individual success message: %s", logs.String())
+	}
+	if listCount, entryCount := manager.Stats(); listCount != 1 || entryCount != 2 {
+		t.Fatalf("Stats() = (%d, %d), want (1, 2)", listCount, entryCount)
+	}
+
+	if err := os.WriteFile(listPath, []byte("198.51.100.1\n"), 0o644); err != nil {
+		t.Fatalf("update list: %v", err)
+	}
+	logs.Reset()
+	if err := manager.RefreshListsByBaseID("test-list"); err != nil {
+		t.Fatalf("RefreshListsByBaseID: %v", err)
+	}
+
+	if !strings.Contains(logs.String(), "Loaded list 'test-list'") {
+		t.Fatalf("refresh did not emit an individual success message: %s", logs.String())
+	}
+	if listCount, entryCount := manager.Stats(); listCount != 1 || entryCount != 1 {
+		t.Fatalf("Stats() after refresh = (%d, %d), want (1, 1)", listCount, entryCount)
 	}
 }
 

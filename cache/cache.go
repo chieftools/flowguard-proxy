@@ -53,6 +53,16 @@ func (c *Cache) SetAPICredentials(apiBase, apiKey string) {
 	c.apiKey = apiKey
 }
 
+// IsAPIURL reports whether rawURL is below the configured FlowGuard API path.
+func (c *Cache) IsAPIURL(rawURL string) bool {
+	if c == nil || c.apiBase == "" {
+		return false
+	}
+
+	apiPath := strings.TrimRight(c.apiBase, "/") + "/api/"
+	return strings.HasPrefix(rawURL, apiPath)
+}
+
 // FetchWithCache fetches data from a URL with caching support
 // Returns (data, wasUpdated, error) where wasUpdated indicates if data changed
 // Optional bearerToken parameter can be provided to add Authorization header
@@ -197,7 +207,9 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken
 			if time.Since(meta.Timestamp) < effectiveMaxAge {
 				// Verify file exists
 				if _, err := os.Stat(cacheFile); err == nil {
-					log.Printf("[cache] Using cached file for %s (age: %v)", url, time.Since(meta.Timestamp))
+					if c.verbose {
+						log.Printf("[cache] Using cached file for %s (age: %v)", url, time.Since(meta.Timestamp))
+					}
 					return cacheFile, false, nil
 				}
 			}
@@ -205,7 +217,9 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken
 	}
 
 	// Fetch fresh file
-	log.Printf("[cache] Fetching fresh file from %s", url)
+	if c.verbose {
+		log.Printf("[cache] Fetching fresh file from %s", url)
+	}
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {

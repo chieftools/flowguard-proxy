@@ -10,6 +10,7 @@ import (
 	"flowguard/certmanager"
 	"flowguard/config"
 	"flowguard/middleware"
+	"flowguard/updater"
 )
 
 func boolPtr(v bool) *bool {
@@ -64,7 +65,10 @@ func TestNewManagerAllowsReadableNginxConfigWithoutCertificates(t *testing.T) {
 		},
 	})
 
-	manager, err := NewManager(configMgr, newProxyTestConfig())
+	injectedUpdater := &updater.Updater{}
+	proxyConfig := newProxyTestConfig()
+	proxyConfig.Updater = injectedUpdater
+	manager, err := NewManager(configMgr, proxyConfig)
 	if err != nil {
 		configMgr.Stop()
 		t.Fatalf("new manager: %v", err)
@@ -77,6 +81,9 @@ func TestNewManagerAllowsReadableNginxConfigWithoutCertificates(t *testing.T) {
 
 	if got := manager.certManager.HostnameCount(); got != 0 {
 		t.Fatalf("expected no certificates to be loaded, got %d hostnames", got)
+	}
+	if manager.updater != injectedUpdater {
+		t.Fatal("expected manager to reuse the configured updater")
 	}
 }
 
@@ -175,5 +182,69 @@ func TestProtocolConfigChangeRestartsListeners(t *testing.T) {
 	}
 	if manager.servers[0].config.scheme != "https" {
 		t.Fatalf("expected remaining server to be HTTPS, got %s", manager.servers[0].config.scheme)
+	}
+}
+
+func TestFormatProxyStartupSummary(t *testing.T) {
+	tests := []struct {
+		name             string
+		servers          []*Server
+		bindAddressCount int
+		want             string
+	}{
+		{
+			name: "dual stack HTTP and HTTPS",
+			servers: []*Server{
+				{config: &ServerConfig{scheme: "http"}},
+				{config: &ServerConfig{scheme: "https"}},
+				{config: &ServerConfig{scheme: "http"}},
+				{config: &ServerConfig{scheme: "https"}},
+			},
+			bindAddressCount: 2,
+			want:             "Started 4 proxy endpoints across 2 bind addresses (2 HTTP, 2 HTTPS)",
+		},
+		{
+			name:             "single HTTPS endpoint",
+			servers:          []*Server{{config: &ServerConfig{scheme: "https"}}},
+			bindAddressCount: 1,
+			want:             "Started 1 proxy endpoint across 1 bind address (1 HTTPS)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatProxyStartupSummary(tt.servers, tt.bindAddressCount); got != tt.want {
+				t.Fatalf("formatProxyStartupSummary() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatBindAddresses(t *testing.T) {
+	tests := []struct {
+		name         string
+		addresses    []string
+		autoDetected bool
+		want         string
+	}{
+		{
+			name:         "auto-detected dual stack",
+			addresses:    []string{"185.208.210.215", "2a0b:3c40:15:0:185:208:210:215"},
+			autoDetected: true,
+			want:         "Bind addresses (2, auto-detected): 185.208.210.215, 2a0b:3c40:15:0:185:208:210:215",
+		},
+		{
+			name:      "configured single address",
+			addresses: []string{"192.0.2.10"},
+			want:      "Bind addresses (1, configured): 192.0.2.10",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatBindAddresses(tt.addresses, tt.autoDetected); got != tt.want {
+				t.Fatalf("formatBindAddresses() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
