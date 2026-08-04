@@ -130,19 +130,36 @@ func TestServerFirewallRulesBuildConsistently(t *testing.T) {
 			if iface != "eth0" {
 				t.Fatalf("unexpected iface: %s", iface)
 			}
-			if len(rules) != 2 {
-				t.Fatalf("expected 2 rules, got %d", len(rules))
+			if len(rules) != 3 {
+				t.Fatalf("expected 3 rules, got %d", len(rules))
 			}
-			if rules[0].command != tt.expectedBinary || rules[1].command != tt.expectedBinary {
+			if rules[0].command != tt.expectedBinary || rules[1].command != tt.expectedBinary || rules[2].command != tt.expectedBinary {
 				t.Fatalf("unexpected command binaries: %#v", rules)
 			}
 
-			inputArgs := rules[0].commandArgs(rules[0].setupVerb)
+			dropArgs := rules[0].commandArgs(rules[0].setupVerb)
+			expectedDrop := []string{
+				"-I", "INPUT",
+				"-d", tt.bindAddr,
+				"-p", "tcp",
+				"--dport", "11080",
+				"-j", "DROP",
+				"-m", "comment", "--comment", "FlowGuard direct-port guard",
+			}
+			if !reflect.DeepEqual(dropArgs, expectedDrop) {
+				t.Fatalf("unexpected direct-port guard args: %#v", dropArgs)
+			}
+
+			inputArgs := rules[1].commandArgs(rules[1].setupVerb)
 			expectedInput := []string{
 				"-I", "INPUT",
 				"-d", tt.bindAddr,
 				"-p", "tcp",
 				"--dport", "11080",
+				"-m", "conntrack",
+				"--ctstate", "DNAT",
+				"--ctorigdst", tt.bindAddr,
+				"--ctorigdstport", "80",
 				"-j", "ACCEPT",
 				"-m", "comment", "--comment", "FlowGuard",
 			}
@@ -150,7 +167,7 @@ func TestServerFirewallRulesBuildConsistently(t *testing.T) {
 				t.Fatalf("unexpected INPUT args: %#v", inputArgs)
 			}
 
-			dnatArgs := rules[1].commandArgs(rules[1].setupVerb)
+			dnatArgs := rules[2].commandArgs(rules[2].setupVerb)
 			expectedDNAT := []string{
 				"-t", "nat",
 				"-A", "PREROUTING",
@@ -179,8 +196,8 @@ func TestServerFirewallRulesIncludeUDPForHTTPS(t *testing.T) {
 	if iface != "eth0" {
 		t.Fatalf("unexpected iface: %s", iface)
 	}
-	if len(rules) != 4 {
-		t.Fatalf("expected 4 rules, got %d", len(rules))
+	if len(rules) != 6 {
+		t.Fatalf("expected 6 rules, got %d", len(rules))
 	}
 
 	expected := [][]string{
@@ -189,6 +206,18 @@ func TestServerFirewallRulesIncludeUDPForHTTPS(t *testing.T) {
 			"-d", "203.0.113.10",
 			"-p", "tcp",
 			"--dport", "11080",
+			"-j", "DROP",
+			"-m", "comment", "--comment", "FlowGuard direct-port guard",
+		},
+		{
+			"-I", "INPUT",
+			"-d", "203.0.113.10",
+			"-p", "tcp",
+			"--dport", "11080",
+			"-m", "conntrack",
+			"--ctstate", "DNAT",
+			"--ctorigdst", "203.0.113.10",
+			"--ctorigdstport", "443",
 			"-j", "ACCEPT",
 			"-m", "comment", "--comment", "FlowGuard",
 		},
@@ -208,6 +237,18 @@ func TestServerFirewallRulesIncludeUDPForHTTPS(t *testing.T) {
 			"-d", "203.0.113.10",
 			"-p", "udp",
 			"--dport", "11080",
+			"-j", "DROP",
+			"-m", "comment", "--comment", "FlowGuard direct-port guard",
+		},
+		{
+			"-I", "INPUT",
+			"-d", "203.0.113.10",
+			"-p", "udp",
+			"--dport", "11080",
+			"-m", "conntrack",
+			"--ctstate", "DNAT",
+			"--ctorigdst", "203.0.113.10",
+			"--ctorigdstport", "443",
 			"-j", "ACCEPT",
 			"-m", "comment", "--comment", "FlowGuard",
 		},
@@ -240,7 +281,7 @@ func TestServerFirewallRulesOmitUDPWhenHTTP3Disabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("firewallRules: %v", err)
 	}
-	if len(rules) != 2 {
+	if len(rules) != 3 {
 		t.Fatalf("expected only TCP rules, got %d", len(rules))
 	}
 	for _, rule := range rules {

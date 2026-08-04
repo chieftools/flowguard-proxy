@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"strings"
 	"syscall"
@@ -163,16 +164,98 @@ func TestReverseProxyUsesRequestedHostAndDialsBindAddress(t *testing.T) {
 		t.Fatalf("new request: %v", err)
 	}
 
-	proxy.Director(req)
+	outReq := req.Clone(req.Context())
+	proxy.Rewrite(&httputil.ProxyRequest{In: req, Out: outReq})
 
-	if req.URL.Host != "example.com" {
-		t.Fatalf("expected upstream URL host to stay on requested host for SNI/pooling, got %q", req.URL.Host)
+	if outReq.URL.Host != "example.com" {
+		t.Fatalf("expected upstream URL host to stay on requested host for SNI/pooling, got %q", outReq.URL.Host)
 	}
-	if req.Host != "example.com" {
-		t.Fatalf("expected Host header to be preserved, got %q", req.Host)
+	if outReq.Host != "example.com" {
+		t.Fatalf("expected Host header to be preserved, got %q", outReq.Host)
 	}
 	if got := server.upstreamAddress(); got != "185.208.210.7:443" {
 		t.Fatalf("expected dial address to target bind IP on default HTTPS port, got %q", got)
+	}
+}
+
+func TestReverseProxyReplacesSpoofableForwardingHeaders(t *testing.T) {
+	server := NewServer(&ServerConfig{
+		scheme:   "https",
+		bindAddr: "192.0.2.10",
+		bindPort: "11443",
+	})
+	target, err := url.Parse("https://example.com")
+	if err != nil {
+		t.Fatalf("parse target: %v", err)
+	}
+
+	proxy := server.createReverseProxyWithHost(target, "example.com")
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
+	req.RemoteAddr = "198.51.100.25:43210"
+	req.Header.Set("Forwarded", "for=attacker")
+	req.Header.Set("X-Forwarded-For", "attacker")
+	req.Header.Set("X-Forwarded-Host", "attacker.example")
+	req.Header.Set("X-Forwarded-Port", "1234")
+	req.Header.Set("X-Forwarded-Proto", "http")
+	req.Header.Set("X-Real-IP", "203.0.113.99")
+	req.Header.Set("CF-Connecting-IP", "203.0.113.98")
+	req.Header.Set("True-Client-IP", "203.0.113.97")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ContextKeyClientIP, "203.0.113.20"))
+
+	outReq := req.Clone(req.Context())
+	proxy.Rewrite(&httputil.ProxyRequest{In: req, Out: outReq})
+
+	if got := outReq.Header.Get("X-Forwarded-For"); got != "203.0.113.20" {
+		t.Fatalf("unexpected X-Forwarded-For: %q", got)
+	}
+	if got := outReq.Header.Get("X-Real-IP"); got != "203.0.113.20" {
+		t.Fatalf("unexpected X-Real-IP: %q", got)
+	}
+	if got := outReq.Header.Get("X-Forwarded-Host"); got != "example.com" {
+		t.Fatalf("unexpected X-Forwarded-Host: %q", got)
+	}
+	if got := outReq.Header.Get("X-Forwarded-Proto"); got != "https" {
+		t.Fatalf("unexpected X-Forwarded-Proto: %q", got)
+	}
+	for _, name := range []string{"Forwarded", "X-Forwarded-Port", "CF-Connecting-IP", "True-Client-IP"} {
+		if got := outReq.Header.Get(name); got != "" {
+			t.Fatalf("expected %s to be stripped, got %q", name, got)
+		}
+	}
+}
+
+func TestReverseProxyPreservesRawQuery(t *testing.T) {
+	server := NewServer(&ServerConfig{
+		scheme:   "https",
+		bindAddr: "192.0.2.10",
+		bindPort: "11443",
+	})
+	target, err := url.Parse("https://example.com")
+	if err != nil {
+		t.Fatalf("parse target: %v", err)
+	}
+
+	proxy := server.createReverseProxyWithHost(target, "example.com")
+	var upstreamRawQuery string
+	proxy.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		upstreamRawQuery = req.URL.RawQuery
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Header:     make(http.Header),
+			Body:       http.NoBody,
+			Request:    req,
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/test?legacy=one;two&valid=value", nil)
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("unexpected response status: %d", w.Code)
+	}
+	if upstreamRawQuery != req.URL.RawQuery {
+		t.Fatalf("upstream raw query = %q, want %q", upstreamRawQuery, req.URL.RawQuery)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -148,6 +149,9 @@ func (m *IPLookupMiddleware) extractIPs(r *http.Request) (clientIP string, proxy
 	if err != nil {
 		remoteIP = r.RemoteAddr
 	}
+	if addr, parseErr := netip.ParseAddr(remoteIP); parseErr == nil {
+		remoteIP = addr.Unmap().String()
+	}
 
 	trustedProxy := false
 	if m.configMgr != nil {
@@ -165,10 +169,18 @@ func (m *IPLookupMiddleware) extractIPs(r *http.Request) (clientIP string, proxy
 		if xff != "" {
 			// Get the rightmost non-trusted IP from the chain
 			ips := strings.Split(xff, ",")
+			parsedIPs := make([]string, 0, len(ips))
+			for _, rawIP := range ips {
+				ip, ok := parseForwardedIP(rawIP)
+				if !ok {
+					return remoteIP, ""
+				}
+				parsedIPs = append(parsedIPs, ip)
+			}
 
 			// Traverse from right to left to find the first non-trusted IP
-			for i := len(ips) - 1; i >= 0; i-- {
-				ip := strings.TrimSpace(ips[i])
+			for i := len(parsedIPs) - 1; i >= 0; i-- {
+				ip := parsedIPs[i]
 				if !m.configMgr.IsTrustedProxy(ip) {
 					clientIP = ip
 					return clientIP, proxyIP
@@ -176,8 +188,8 @@ func (m *IPLookupMiddleware) extractIPs(r *http.Request) (clientIP string, proxy
 			}
 
 			// If all IPs in the chain are trusted, use the leftmost one
-			if len(ips) > 0 {
-				clientIP = strings.TrimSpace(ips[0])
+			if len(parsedIPs) > 0 {
+				clientIP = parsedIPs[0]
 				return clientIP, proxyIP
 			}
 		}
@@ -185,8 +197,10 @@ func (m *IPLookupMiddleware) extractIPs(r *http.Request) (clientIP string, proxy
 		// Check X-Real-IP header
 		xri := r.Header.Get("X-Real-IP")
 		if xri != "" {
-			clientIP = xri
-			return clientIP, proxyIP
+			if clientIP, ok := parseForwardedIP(xri); ok {
+				return clientIP, proxyIP
+			}
+			return remoteIP, ""
 		}
 
 		// Fallback to remote IP if no headers present
@@ -199,6 +213,24 @@ func (m *IPLookupMiddleware) extractIPs(r *http.Request) (clientIP string, proxy
 	}
 
 	return clientIP, proxyIP
+}
+
+func parseForwardedIP(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if addr, err := netip.ParseAddr(raw); err == nil {
+		addr = addr.Unmap()
+		if addr.IsGlobalUnicast() {
+			return addr.String(), true
+		}
+		return "", false
+	}
+	if addrPort, err := netip.ParseAddrPort(raw); err == nil {
+		addr := addrPort.Addr().Unmap()
+		if addr.IsGlobalUnicast() {
+			return addr.String(), true
+		}
+	}
+	return "", false
 }
 
 func (m *IPLookupMiddleware) isTrustedByHeaderAuth(r *http.Request) bool {

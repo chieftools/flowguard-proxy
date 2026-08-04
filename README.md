@@ -140,11 +140,11 @@ sudo yum update flowguard
 
 ### Configure your server
 
-Since FlowGuard operates as a reverse proxy, backend servers must be configured correctly to see the original client IPs. This typically involves setting up the backend to trust the proxy and extract the real client IP from headers like `X-Forwarded-For`.
+FlowGuard supports two upstream client-IP modes. The default, `headers`, works with any HTTP backend. FlowGuard removes incoming forwarding headers and writes canonical `X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Host`, and `X-Forwarded-Proto` values from its validated client identity.
 
-This is an example of how this can be done in NGINX, replacing `<public v4 address>` and `<public v6 address>` with the actual public IP addresses of your server:
+The backend must trust only connections that actually came through FlowGuard. Trusting a public server address is not inherently unsafe, but it becomes a spoofing risk if an attacker or another local workload can reach the backend directly while supplying its own forwarding headers. FlowGuard installs a direct-port guard for its interception listeners; you should still keep backend exposure and local workload access as narrow as possible.
 
-Remember to add _all_ public IPs assigned to your server if you are using FlowGuard in it's default configuration where it will intercept traffic on all public IPs assigned to the server.
+For NGINX, replace the example addresses with every address on which FlowGuard accepts traffic:
 
 ```nginx
 real_ip_header X-Forwarded-For;
@@ -153,20 +153,18 @@ set_real_ip_from <public v4 address>;
 set_real_ip_from <public v6 address>;
 ```
 
-A script that can generate this for you:
+You can generate this configuration from the server's public addresses:
 
 ```bash
 NGINX_CONF=/etc/nginx/conf.d/flowguard.conf
 
-echo "real_ip_header X-Forwarded-For;" > $NGINX_CONF
-echo "real_ip_recursive on;" >> $NGINX_CONF
-echo "set_real_ip_from "`curl -sS ipv4.chief.tools`";" >> $NGINX_CONF
-echo "set_real_ip_from "`curl -sS ipv6.chief.tools`";" >> $NGINX_CONF
-
-cat $NGINX_CONF
-
-service nginx configtest
-# service nginx reload
+echo "real_ip_header X-Forwarded-For;" > "${NGINX_CONF}"
+echo "real_ip_recursive on;" >> "${NGINX_CONF}"
+echo "set_real_ip_from $(curl -sS ipv4.chief.tools);" >> "${NGINX_CONF}"
+echo "set_real_ip_from $(curl -sS ipv6.chief.tools);" >> "${NGINX_CONF}"
+cat "${NGINX_CONF}"
+nginx -t
+# systemctl reload nginx
 ```
 
 #### Transparent upstream client IP

@@ -153,3 +153,41 @@ func TestIPLookupHandleStripsHeaderBeforeNextHandler(t *testing.T) {
 
 	ipLookup.Handle(httptest.NewRecorder(), req, next)
 }
+
+func TestExtractIPsRejectsMalformedTrustedForwardingChain(t *testing.T) {
+	manager := newIPLookupTestConfigManager(t, `{
+  "ipnets": ["198.51.100.10"]
+}`)
+	ipLookup := &IPLookupMiddleware{configMgr: manager}
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+	req.RemoteAddr = "198.51.100.10:12345"
+	req.Header.Set("X-Forwarded-For", "203.0.113.9, not-an-ip")
+
+	clientIP, proxyIP := ipLookup.extractIPs(req)
+
+	if clientIP != "198.51.100.10" {
+		t.Fatalf("expected fail-closed fallback to immediate peer, got %q", clientIP)
+	}
+	if proxyIP != "" {
+		t.Fatalf("expected malformed chain not to mark request as proxied, got %q", proxyIP)
+	}
+}
+
+func TestExtractIPsCanonicalizesForwardedAddressWithPort(t *testing.T) {
+	manager := newIPLookupTestConfigManager(t, `{
+  "ipnets": ["198.51.100.10"]
+}`)
+	ipLookup := &IPLookupMiddleware{configMgr: manager}
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+	req.RemoteAddr = "198.51.100.10:12345"
+	req.Header.Set("X-Forwarded-For", "[2001:db8::10]:443")
+
+	clientIP, proxyIP := ipLookup.extractIPs(req)
+
+	if clientIP != "2001:db8::10" {
+		t.Fatalf("expected canonical IPv6 client IP, got %q", clientIP)
+	}
+	if proxyIP != "198.51.100.10" {
+		t.Fatalf("expected immediate peer as proxy, got %q", proxyIP)
+	}
+}

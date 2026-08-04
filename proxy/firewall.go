@@ -65,7 +65,7 @@ func (s *Server) firewallRules() ([]firewallRuleSpec, string, error) {
 		protocols = append(protocols, "udp")
 	}
 
-	rules := make([]firewallRuleSpec, 0, len(protocols)*2)
+	rules := make([]firewallRuleSpec, 0, len(protocols)*3)
 	for _, protocol := range protocols {
 		rules = append(rules,
 			firewallRuleSpec{
@@ -76,6 +76,22 @@ func (s *Server) firewallRules() ([]firewallRuleSpec, string, error) {
 					"-d", s.config.bindAddr,
 					"-p", protocol,
 					"--dport", s.config.bindPort,
+					"-j", "DROP",
+					"-m", "comment", "--comment", "FlowGuard direct-port guard",
+				},
+			},
+			firewallRuleSpec{
+				command:   iptablesCmd,
+				setupVerb: "-I",
+				chain:     "INPUT",
+				args: []string{
+					"-d", s.config.bindAddr,
+					"-p", protocol,
+					"--dport", s.config.bindPort,
+					"-m", "conntrack",
+					"--ctstate", "DNAT",
+					"--ctorigdst", s.config.bindAddr,
+					"--ctorigdstport", s.config.redirPort,
 					"-j", "ACCEPT",
 					"-m", "comment", "--comment", "FlowGuard",
 				},
@@ -125,14 +141,10 @@ func (s *Server) CheckPortRedirect() ([]firewallRuleSpec, error) {
 	return missing, nil
 }
 
-func (s *Server) RepairPortRedirect(rules []firewallRuleSpec) error {
-	for _, rule := range rules {
-		if err := s.runFirewallRule(rule, rule.setupVerb); err != nil {
-			return fmt.Errorf("failed to repair %s rule for %s:%s: %w", rule.command, s.config.bindAddr, s.config.bindPort, err)
-		}
-	}
-
-	return nil
+func (s *Server) RepairPortRedirect(_ []firewallRuleSpec) error {
+	// Reinstall the complete rule set so the DNAT-only ACCEPT rule is always
+	// inserted above the direct-port DROP guard, even after a partial loss.
+	return s.SetupPortRedirect()
 }
 
 func (s *Server) SetupPortRedirect() error {

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -148,22 +149,26 @@ func (s *Server) resetListenerState() {
 }
 
 func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *httputil.ReverseProxy {
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.ErrorLog = newFilteredLogger(s.config.verbose)
-	proxy.Transport = s.ensureUpstreamTransport()
+	proxy := &httputil.ReverseProxy{
+		ErrorLog:  newFilteredLogger(s.config.verbose),
+		Transport: s.ensureUpstreamTransport(),
+		Rewrite: func(proxyRequest *httputil.ProxyRequest) {
+			out := proxyRequest.Out
+			out.URL.Host = maybeFormatV6Addr(proxyHost)
+			out.URL.Scheme = target.Scheme
+			out.URL.RawQuery = proxyRequest.In.URL.RawQuery
+			out.Host = proxyHost
 
-	// Customize the director to preserve the original Host header
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-
-		// Override the Host header to preserve the original one
-		req.Host = proxyHost
-		// Ensure URL points to the actual backend
-		req.URL.Host = maybeFormatV6Addr(proxyHost)
-		req.URL.Scheme = target.Scheme
-
-		req.Header.Set("FG-Stream", middleware.GetStreamID(req))
+			clientIP := canonicalRequestClientIP(proxyRequest.In)
+			stripForwardingHeaders(out.Header)
+			if clientIP != "" {
+				out.Header.Set("X-Forwarded-For", clientIP)
+				out.Header.Set("X-Real-IP", clientIP)
+			}
+			out.Header.Set("X-Forwarded-Host", proxyRequest.In.Host)
+			out.Header.Set("X-Forwarded-Proto", s.config.scheme)
+			out.Header.Set("FG-Stream", middleware.GetStreamID(proxyRequest.In))
+		},
 	}
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
@@ -224,6 +229,45 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 	}
 
 	return proxy
+}
+
+func stripForwardingHeaders(header http.Header) {
+	for _, name := range []string{
+		"Forwarded",
+		"X-Forwarded-For",
+		"X-Forwarded-Host",
+		"X-Forwarded-Port",
+		"X-Forwarded-Proto",
+		"X-Real-IP",
+		"X-Client-IP",
+		"Client-IP",
+		"True-Client-IP",
+		"CF-Connecting-IP",
+		"Fastly-Client-IP",
+		"FG-Stream",
+	} {
+		header.Del(name)
+	}
+}
+
+func canonicalRequestClientIP(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if raw := middleware.GetClientIP(r); raw != "" {
+		if addr, err := netip.ParseAddr(raw); err == nil {
+			return addr.Unmap().String()
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return ""
+	}
+	return addr.Unmap().String()
 }
 
 func (s *Server) addAltSvcHeader(resp *http.Response) {
