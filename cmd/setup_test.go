@@ -304,6 +304,9 @@ func TestSetupHostForcedDiscoveryRunsDespiteExistingPaths(t *testing.T) {
 		"  Use this server configuration? [Y/n]:",
 		"Updated FlowGuard control plane",
 		"Stored configuration at",
+		"  ✓ Setup complete",
+		"Start FlowGuard, or restart it if already running, to apply this configuration.",
+		"systemd: sudo systemctl restart flowguard",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, out)

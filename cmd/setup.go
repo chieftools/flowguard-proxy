@@ -158,9 +158,20 @@ func setupHostWithClientAndDiscovery(client setupAPIClient, discover bool) error
 		return err
 	}
 
-	return runSetupStep("Storing configuration", fmt.Sprintf("Stored configuration at %s", configFile), func() error {
+	if err := runSetupStep("Storing configuration", fmt.Sprintf("Stored configuration at %s", configFile), func() error {
 		return writeSetupConfig(finalBody)
-	})
+	}); err != nil {
+		return err
+	}
+
+	printSetupCompletion()
+	return nil
+}
+
+func printSetupCompletion() {
+	fmt.Fprintln(setupOutput, "  ✓ Setup complete")
+	fmt.Fprintln(setupOutput, "    Start FlowGuard, or restart it if already running, to apply this configuration.")
+	fmt.Fprintln(setupOutput, "    systemd: sudo systemctl restart flowguard")
 }
 
 func validateSetupNetwork(cfg *config.Config) error {
