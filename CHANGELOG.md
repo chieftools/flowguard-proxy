@@ -9,6 +9,26 @@ release.
 
 ## [Unreleased]
 
+## [0.15.0]
+
+### Added
+
+- Added transparent upstream client-IP forwarding for same-host Linux backends, including dual-stack address pairing, lifecycle-managed policy routing, readiness inspection, and CLI overrides for testing. ([85c60a1a](https://github.com/chieftools/flowguard-proxy/commit/85c60a1a13deed76fb34893f126c0498ab314edd))
+- Added interactive setup for selecting the upstream client-IP mode, enabled HTTP protocols, HTTP/3 advertisement, and ambiguous IPv4/IPv6 address pairs, with accessible and line-oriented terminal fallbacks. ([f37d19c9](https://github.com/chieftools/flowguard-proxy/commit/f37d19c93fd9b0e9428ce5bc33e82fb27cf35651))
+
+### Changed
+
+- Canonicalized upstream forwarding headers, removed spoofable forwarding values, preserved request query strings during proxy rewrites, and hardened interception ports against direct traffic. ([002cc4d5](https://github.com/chieftools/flowguard-proxy/commit/002cc4d59ba9688f938f84aab39e81da7414e2f6))
+- Added canonical header fallback for opposite-family clients on single-stack transparent deployments while keeping matching-family connections transparent. ([396ff3b2](https://github.com/chieftools/flowguard-proxy/commit/396ff3b2ed075c8e3dedd758698ca93b59f89579))
+- Unified trusted-proxy and IP-list loading so trusted proxy lists refresh while FlowGuard is running. ([21d8be43](https://github.com/chieftools/flowguard-proxy/commit/21d8be434699a6f1d64a791bb1def03367f5ab62))
+- Improved startup logging with concise endpoint, firewall, IP-list, bind-address, and upstream-mode summaries. ([f2f720fd](https://github.com/chieftools/flowguard-proxy/commit/f2f720fd3918bbd90339c1822dab6fa84414c1fd))
+- Allowed `flowguard setup` without a host key to reuse the configured key and rediscover the server configuration. ([4555c2fa](https://github.com/chieftools/flowguard-proxy/commit/4555c2fa10d940e3497b4ea1a1df06fc68899b18))
+- Updated dependencies. ([e19c61c0](https://github.com/chieftools/flowguard-proxy/commit/e19c61c0b4d971f96420541dfd2b5afa4c3410ed))
+
+### Fixed
+
+- Started the realtime configuration client only while the proxy is running, avoiding unnecessary short-lived connections from inspection and setup commands. ([cf547c1a](https://github.com/chieftools/flowguard-proxy/commit/cf547c1aecded495313a6d9fb3194f2d02fe19c2))
+
 ## [0.14.0]
 
 ### Added
