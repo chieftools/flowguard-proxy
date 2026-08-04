@@ -47,8 +47,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           ./bin/changelog-section.sh "${{ steps.version.outputs.VERSION }}" > "${{ runner.temp }}/release-notes.md"
-          printf '\n\n- Installation instructions: https://github.com/chieftools/flowguard-proxy#quick-install\n' >> "${{ runner.temp }}/release-notes.md"
-          printf '%s\n' '- Upgrade instructions: https://github.com/chieftools/flowguard-proxy#upgrading' >> "${{ runner.temp }}/release-notes.md"
+          printf '\n\n---\n\n%s\n' 'More information: [installation instructions](https://github.com/chieftools/flowguard-proxy#quick-install) &middot; [upgrade instructions](https://github.com/chieftools/flowguard-proxy#upgrading) &middot; [configuration instructions](https://github.com/chieftools/flowguard-proxy#configure-your-server)' >> "${{ runner.temp }}/release-notes.md"
 
       - name: Install build dependencies
         run: |
