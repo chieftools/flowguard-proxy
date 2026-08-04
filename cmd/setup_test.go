@@ -305,18 +305,70 @@ func TestSetupHostForcedDiscoveryRunsDespiteExistingPaths(t *testing.T) {
 		"Looking for server configuration",
 		"Verbose server configuration detection:",
 		"Plesk certificates: accepted",
-		"Discovered Plesk certificate directory",
-		"Found 1 usable certificate covering 1 hostname.",
+		"  ✓ Discovered Plesk certificate directory",
+		"    Found 1 usable certificate covering 1 hostname.",
 		"  Use this server configuration? [Y/n]:",
 		"Updated FlowGuard control plane",
 		"Stored configuration at",
-		"  ✓ Setup complete",
+		"✓ Setup complete",
 		"Start FlowGuard, or restart it if already running, to apply this configuration.",
 		"systemd: sudo systemctl restart flowguard",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, out)
 		}
+	}
+}
+
+func TestValidateSetupNetworkSummarizesReadyTransparentMode(t *testing.T) {
+	resetSetupTestGlobals(t)
+	setupInspectNetwork = func(*config.Config, []string) (proxy.NetworkInspection, error) {
+		return proxy.NetworkInspection{
+			Mode:             config.UpstreamClientIPModeTransparent,
+			HeaderReady:      true,
+			TransparentReady: true,
+			Ready:            true,
+			BindAddresses:    []string{"10.20.30.10", "fd12:3456:789a::10"},
+		}, nil
+	}
+	var output bytes.Buffer
+	setupOutput = &output
+	cfg := &config.Config{Server: &config.ServerConfig{Upstream: &config.UpstreamConfig{
+		ClientIPMode: config.UpstreamClientIPModeTransparent,
+	}}}
+
+	if err := validateSetupNetwork(cfg); err != nil {
+		t.Fatalf("validateSetupNetwork: %v", err)
+	}
+	if output.String() != "✓ Transparent upstream networking ready\n" {
+		t.Fatalf("expected concise readiness output, got %q", output.String())
+	}
+}
+
+func TestValidateSetupNetworkPrintsInspectionWhenTransparentModeIsNotReady(t *testing.T) {
+	resetSetupTestGlobals(t)
+	setupInspectNetwork = func(*config.Config, []string) (proxy.NetworkInspection, error) {
+		return proxy.NetworkInspection{
+			Mode:             config.UpstreamClientIPModeTransparent,
+			HeaderReady:      true,
+			TransparentReady: false,
+			Ready:            false,
+			BindAddresses:    []string{"10.20.30.10"},
+		}, nil
+	}
+	var output bytes.Buffer
+	setupOutput = &output
+	cfg := &config.Config{Server: &config.ServerConfig{Upstream: &config.UpstreamConfig{
+		ClientIPMode: config.UpstreamClientIPModeTransparent,
+	}}}
+
+	err := validateSetupNetwork(cfg)
+	if err == nil {
+		t.Fatal("expected transparent readiness validation to fail")
+	}
+	if !strings.Contains(output.String(), "Configured upstream client IP mode: transparent") ||
+		!strings.Contains(output.String(), "Ready: false") {
+		t.Fatalf("expected failed inspection details, got:\n%s", output.String())
 	}
 }
 

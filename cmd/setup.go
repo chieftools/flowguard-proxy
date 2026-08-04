@@ -169,9 +169,9 @@ func setupHostWithClientAndDiscovery(client setupAPIClient, discover bool) error
 }
 
 func printSetupCompletion() {
-	fmt.Fprintln(setupOutput, "  ✓ Setup complete")
-	fmt.Fprintln(setupOutput, "    Start FlowGuard, or restart it if already running, to apply this configuration.")
-	fmt.Fprintln(setupOutput, "    systemd: sudo systemctl restart flowguard")
+	fmt.Fprintln(setupOutput, "✓ Setup complete")
+	fmt.Fprintln(setupOutput, "  Start FlowGuard, or restart it if already running, to apply this configuration.")
+	fmt.Fprintln(setupOutput, "  systemd: sudo systemctl restart flowguard")
 }
 
 func validateSetupNetwork(cfg *config.Config) error {
@@ -182,10 +182,11 @@ func validateSetupNetwork(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("inspect transparent upstream networking: %w", err)
 	}
-	fmt.Fprint(setupOutput, proxy.FormatNetworkInspection(inspection))
 	if !inspection.Ready {
+		fmt.Fprint(setupOutput, proxy.FormatNetworkInspection(inspection))
 		return fmt.Errorf("transparent upstream networking is not ready; run flowguard network inspect for details")
 	}
+	fmt.Fprintln(setupOutput, "✓ Transparent upstream networking ready")
 	return nil
 }
 
@@ -412,16 +413,16 @@ func discoverNginxConfigPath() (setupDiscoveryCandidate, bool, []string) {
 func printSetupDiscoveryCandidate(candidate setupDiscoveryCandidate) {
 	switch candidate.kind {
 	case "certificate":
-		fmt.Fprintf(setupOutput, "✓ Discovered Plesk certificate directory: %s\n", candidate.path)
+		fmt.Fprintf(setupOutput, "  ✓ Discovered Plesk certificate directory: %s\n", candidate.path)
 	case "nginx":
-		fmt.Fprintf(setupOutput, "✓ Discovered nginx config: %s\n", candidate.path)
+		fmt.Fprintf(setupOutput, "  ✓ Discovered nginx config: %s\n", candidate.path)
 	default:
-		fmt.Fprintf(setupOutput, "✓ Discovered server configuration: %s\n", candidate.path)
+		fmt.Fprintf(setupOutput, "  ✓ Discovered server configuration: %s\n", candidate.path)
 	}
 
 	fmt.Fprintf(
 		setupOutput,
-		"  Found %s covering %s.\n",
+		"    Found %s covering %s.\n",
 		plural(candidate.summary.CertificateCount, "usable certificate", "usable certificates"),
 		plural(candidate.summary.HostnameCount, "hostname", "hostnames"),
 	)
