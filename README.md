@@ -138,6 +138,11 @@ sudo yum clean expire-cache --disablerepo=* --enablerepo=flowguard
 sudo yum update flowguard
 ```
 
+After the initial setup, run `flowguard setup` without a host key to reuse the
+key in `/etc/flowguard/config.json`, download the latest configuration, and
+repeat interactive server-configuration discovery. Use `--config` when the
+existing configuration is stored elsewhere.
+
 ### Configure your server
 
 FlowGuard supports two upstream client-IP modes. The default, `headers`, works with any HTTP backend. FlowGuard removes incoming forwarding headers and writes canonical `X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Host`, and `X-Forwarded-Proto` values from its validated client identity.

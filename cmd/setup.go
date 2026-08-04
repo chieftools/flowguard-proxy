@@ -47,24 +47,27 @@ type setupDiscoveryCandidate struct {
 }
 
 var setupCmd = &cobra.Command{
-	Use:   "setup <host-key>",
+	Use:   "setup [host-key]",
 	Short: "Configure FlowGuard with a host key",
 	Long: `Downloads the host configuration from the FlowGuard API and saves it to disk.
 
-The host key is provided by the FlowGuard control panel and looks like: fgsvr_...`,
+The host key is provided by the FlowGuard control panel and looks like: fgsvr_...
+If omitted, FlowGuard reuses the host key from the existing configuration and
+rediscovers the local server configuration.`,
 	Args: func(cmd *cobra.Command, args []string) error {
-		if len(args) < 1 {
-			return fmt.Errorf("host key is required (e.g., fgsvr_...)")
-		}
 		if len(args) > 1 {
 			return fmt.Errorf("too many arguments (expected only host key)")
 		}
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		hostKey := args[0]
+		hostKey, discover, err := resolveSetupInvocation(args)
+		if err != nil {
+			log.Printf("[ERROR] Failed to setup host: %v", err)
+			os.Exit(1)
+		}
 
-		if err := setupHost(hostKey); err != nil {
+		if err := setupHost(hostKey, discover); err != nil {
 			log.Printf("[ERROR] Failed to setup host: %v", err)
 			os.Exit(1)
 		}
@@ -76,8 +79,41 @@ func init() {
 	rootCmd.AddCommand(setupCmd)
 }
 
-// setupHost downloads the host configuration from the FlowGuard API and saves it to disk
-func setupHost(hostKey string) error {
+func resolveSetupInvocation(args []string) (string, bool, error) {
+	if len(args) == 1 {
+		return args[0], setupDiscover, nil
+	}
+
+	hostKey, err := configuredSetupHostKey(configFile)
+	if err != nil {
+		return "", false, err
+	}
+
+	return hostKey, true, nil
+}
+
+func configuredSetupHostKey(path string) (string, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("host key is required (e.g., fgsvr_...); no existing configuration found at %s", path)
+		}
+		return "", fmt.Errorf("read existing configuration at %s: %w", path, err)
+	}
+
+	cfg, err := parseSetupConfig(body)
+	if err != nil {
+		return "", fmt.Errorf("load existing configuration at %s: %w", path, err)
+	}
+	if cfg.Host == nil || strings.TrimSpace(cfg.Host.Key) == "" {
+		return "", fmt.Errorf("host key is required (e.g., fgsvr_...); existing configuration at %s has no host key", path)
+	}
+
+	return cfg.Host.Key, nil
+}
+
+// setupHost downloads the host configuration from the FlowGuard API and saves it to disk.
+func setupHost(hostKey string, discover bool) error {
 	// Create API client
 	client := api.NewClient(hostKey, GetUserAgent())
 
@@ -86,10 +122,14 @@ func setupHost(hostKey string) error {
 	}
 
 	// Fetch configuration from API (no ETag for initial setup)
-	return setupHostWithClient(client)
+	return setupHostWithClientAndDiscovery(client, discover)
 }
 
 func setupHostWithClient(client setupAPIClient) error {
+	return setupHostWithClientAndDiscovery(client, setupDiscover)
+}
+
+func setupHostWithClientAndDiscovery(client setupAPIClient, discover bool) error {
 	var body []byte
 	if err := runSetupStep("Fetching host configuration", "Host configuration received", func() error {
 		var err error
@@ -105,7 +145,7 @@ func setupHostWithClient(client setupAPIClient) error {
 		return err
 	}
 
-	if shouldRunSetupDiscovery(cfg) {
+	if shouldRunSetupDiscovery(cfg, discover) {
 		finalBody, err = runSetupDiscovery(client, body, cfg)
 		if err != nil {
 			return err
@@ -149,8 +189,8 @@ func parseSetupConfig(body []byte) (*config.Config, error) {
 	return &cfg, nil
 }
 
-func shouldRunSetupDiscovery(cfg *config.Config) bool {
-	if setupDiscover {
+func shouldRunSetupDiscovery(cfg *config.Config, discover bool) bool {
+	if discover {
 		return true
 	}
 

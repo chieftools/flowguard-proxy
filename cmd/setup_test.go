@@ -132,6 +132,65 @@ func writeSetupTestCombinedPEM(t *testing.T, path string) {
 	}
 }
 
+func TestResolveSetupInvocationReusesConfiguredKeyAndEnablesDiscovery(t *testing.T) {
+	resetSetupTestGlobals(t)
+
+	if err := os.WriteFile(configFile, []byte(`{"host":{"key":"fgsvr_existing"}}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	hostKey, discover, err := resolveSetupInvocation(nil)
+	if err != nil {
+		t.Fatalf("resolveSetupInvocation: %v", err)
+	}
+	if hostKey != "fgsvr_existing" {
+		t.Fatalf("expected configured host key, got %q", hostKey)
+	}
+	if !discover {
+		t.Fatal("expected discovery to be enabled when reusing the configured host key")
+	}
+}
+
+func TestResolveSetupInvocationExplicitKeyPreservesDiscoverFlag(t *testing.T) {
+	resetSetupTestGlobals(t)
+
+	hostKey, discover, err := resolveSetupInvocation([]string{"fgsvr_new"})
+	if err != nil {
+		t.Fatalf("resolveSetupInvocation: %v", err)
+	}
+	if hostKey != "fgsvr_new" {
+		t.Fatalf("expected explicit host key, got %q", hostKey)
+	}
+	if discover {
+		t.Fatal("expected discovery to remain disabled for an explicit host key")
+	}
+
+	setupDiscover = true
+	_, discover, err = resolveSetupInvocation([]string{"fgsvr_new"})
+	if err != nil {
+		t.Fatalf("resolveSetupInvocation with --discover: %v", err)
+	}
+	if !discover {
+		t.Fatal("expected explicit --discover to enable discovery")
+	}
+}
+
+func TestResolveSetupInvocationWithoutConfiguredKeyFails(t *testing.T) {
+	resetSetupTestGlobals(t)
+
+	if err := os.WriteFile(configFile, []byte(`{"host":{}}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, _, err := resolveSetupInvocation(nil)
+	if err == nil {
+		t.Fatal("expected missing configured host key to fail")
+	}
+	if !strings.Contains(err.Error(), "host key is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestSetupHostSkipsDiscoveryWhenPathsAlreadyConfigured(t *testing.T) {
 	resetSetupTestGlobals(t)
 
@@ -152,12 +211,11 @@ func TestSetupHostSkipsDiscoveryWhenPathsAlreadyConfigured(t *testing.T) {
 	}
 }
 
-func TestSetupHostDiscoverFlagRunsDespiteExistingPaths(t *testing.T) {
+func TestSetupHostForcedDiscoveryRunsDespiteExistingPaths(t *testing.T) {
 	resetSetupTestGlobals(t)
 
 	root, psaConfPath := writeSetupTestPleskCertRoot(t)
 	setupPsaConfPath = psaConfPath
-	setupDiscover = true
 	setupInput = strings.NewReader("\n")
 	var output bytes.Buffer
 	setupOutput = &output
@@ -180,8 +238,8 @@ func TestSetupHostDiscoverFlagRunsDespiteExistingPaths(t *testing.T) {
 		},
 	}
 
-	if err := setupHostWithClient(client); err != nil {
-		t.Fatalf("setupHostWithClient: %v", err)
+	if err := setupHostWithClientAndDiscovery(client, true); err != nil {
+		t.Fatalf("setupHostWithClientAndDiscovery: %v", err)
 	}
 
 	if !patchCalled {
