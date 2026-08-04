@@ -348,8 +348,30 @@ func (m *Manager) StartAPIRefresh(interval time.Duration) {
 	}()
 }
 
-// updatePusherClient updates or creates the Realtime client based on configuration
+// StartRealtime enables realtime configuration events for the running proxy.
+func (m *Manager) StartRealtime() {
+	m.realtimeMu.Lock()
+	if m.realtimeEnabled {
+		m.realtimeMu.Unlock()
+		return
+	}
+	m.realtimeEnabled = true
+	m.realtimeMu.Unlock()
+
+	m.mu.RLock()
+	cfg := m.config
+	m.mu.RUnlock()
+	m.updatePusherClient(cfg)
+}
+
+// updatePusherClient updates or creates the Realtime client when realtime is enabled.
 func (m *Manager) updatePusherClient(config *Config) {
+	m.realtimeMu.Lock()
+	defer m.realtimeMu.Unlock()
+	if !m.realtimeEnabled || config == nil {
+		return
+	}
+
 	// If no pusher config or no host key, disconnect any existing client
 	if config.Realtime == nil || config.Host == nil || config.Host.Key == "" {
 		if m.realtimeClient != nil {
@@ -416,8 +438,9 @@ func (m *Manager) updatePusherClient(config *Config) {
 			})
 
 			// Start connection in background
+			client := m.realtimeClient
 			go func() {
-				if err := m.realtimeClient.Connect(); err != nil {
+				if err := client.Connect(); err != nil {
 					log.Printf("[config] Failed to connect to realtime server: %v", err)
 				}
 			}()

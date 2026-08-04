@@ -29,12 +29,14 @@ type Manager struct {
 	currentConfigID string
 	apiClient       *api.Client
 	realtimeClient  *pusher.Client
+	realtimeEnabled bool
 	trustedProxyIPs []net.IPNet
 	callbacks       []func(*Config)
 	watcher         *fsnotify.Watcher
 	stopWatcher     chan struct{}
 	stopAPIRefresh  chan struct{}
 	mu              sync.RWMutex
+	realtimeMu      sync.Mutex
 
 	// IP list update callback support with debouncing
 	ipListUpdateCallbacks []func(listIDs []string)
@@ -208,10 +210,11 @@ func (m *Manager) Stop() {
 	}
 
 	// Disconnect Realtime client
-	m.mu.Lock()
+	m.realtimeMu.Lock()
+	m.realtimeEnabled = false
 	if m.realtimeClient != nil {
 		m.realtimeClient.Disconnect()
 		m.realtimeClient = nil
 	}
-	m.mu.Unlock()
+	m.realtimeMu.Unlock()
 }

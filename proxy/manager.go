@@ -938,6 +938,7 @@ func (p *Manager) Start() error {
 	case err := <-p.serveErrChan:
 		return err
 	default:
+		p.configManager.StartRealtime()
 		return nil
 	}
 }

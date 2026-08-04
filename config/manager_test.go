@@ -81,3 +81,30 @@ func TestRemoveOnChangeStopsCallbackFromRunning(t *testing.T) {
 		t.Fatalf("expected removed callback not to run, got %d calls", called.Load())
 	}
 }
+
+func TestLoadDoesNotStartRealtimeClient(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "host": {"key": "host-key"},
+  "realtime": {
+    "key": "app-key",
+    "host": "127.0.0.1",
+    "port": 1,
+    "channel": "private-test",
+    "auth_url": "http://127.0.0.1:1/auth"
+  }
+}`)
+	manager := &Manager{
+		configPath: configPath,
+		apiClient:  api.NewClient("", "FlowGuard/test"),
+	}
+
+	if err := manager.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if manager.realtimeClient != nil {
+		t.Fatal("configuration loading must not initialize a realtime client")
+	}
+	if manager.realtimeEnabled {
+		t.Fatal("configuration loading must not enable realtime events")
+	}
+}
