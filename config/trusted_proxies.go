@@ -1,45 +1,45 @@
 package config
 
 import (
-	"bufio"
 	"fmt"
 	"log"
-	"net"
+	"net/netip"
 	"strings"
 	"time"
+
+	"flowguard/iplist"
 )
 
-const DefaultTrustedProxyHeaderAuthHeader = "FG-Trusted-Proxy-Secret"
+const (
+	DefaultTrustedProxyHeaderAuthHeader = "FG-Trusted-Proxy-Secret"
+	defaultTrustedProxyRefreshInterval  = 30 * time.Minute
+)
 
-// GetRefreshInterval returns the configured refresh interval for trusted proxies
+// GetRefreshInterval returns the configured refresh interval for trusted proxies.
 func (m *Manager) GetRefreshInterval() time.Duration {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
-	if m.config == nil || m.config.TrustedProxies == nil || m.config.TrustedProxies.RefreshIntervalSeconds <= 0 {
-		return 30 * time.Minute // default
-	}
-
-	return time.Duration(m.config.TrustedProxies.RefreshIntervalSeconds) * time.Second
+	return trustedProxyRefreshInterval(m.config)
 }
 
-// IsTrustedProxy checks if an IP is from a trusted proxy
+func trustedProxyRefreshInterval(config *Config) time.Duration {
+	if config == nil || config.TrustedProxies == nil || config.TrustedProxies.RefreshIntervalSeconds <= 0 {
+		return defaultTrustedProxyRefreshInterval
+	}
+	return time.Duration(config.TrustedProxies.RefreshIntervalSeconds) * time.Second
+}
+
+// IsTrustedProxy checks if an IP is from a trusted proxy.
 func (m *Manager) IsTrustedProxy(ip string) bool {
-	parsedIP := net.ParseIP(ip)
-	if parsedIP == nil {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
 		return false
 	}
 
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	for _, network := range m.trustedProxyIPs {
-		if network.Contains(parsedIP) {
-			return true
-		}
-	}
-
-	return false
+	set := m.trustedProxySet
+	m.mu.RUnlock()
+	return set.Contains(addr)
 }
 
 // GetTrustedProxyHeaderAuth returns the configured trusted proxy header auth values.
@@ -57,111 +57,175 @@ func (m *Manager) GetTrustedProxyHeaderAuth() (header string, values []string, o
 	return trustedProxyHeaderAuthHeader(auth), values, true
 }
 
-// RefreshTrustedProxies refreshes trusted proxy lists from URLs
+// StartTrustedProxyRefresh starts periodic URL refreshes for the running proxy.
+func (m *Manager) StartTrustedProxyRefresh() {
+	m.trustedProxyRefreshOnce.Do(func() {
+		m.trustedProxyRefreshWG.Add(1)
+		go m.runTrustedProxyRefresh()
+	})
+}
+
+func (m *Manager) runTrustedProxyRefresh() {
+	defer m.trustedProxyRefreshWG.Done()
+
+	for {
+		interval, enabled := m.trustedProxySchedule()
+		var timer *time.Timer
+		var timerC <-chan time.Time
+		if enabled {
+			timer = time.NewTimer(interval)
+			timerC = timer.C
+		}
+
+		select {
+		case <-m.stopTrustedProxyRefresh:
+			if timer != nil {
+				timer.Stop()
+			}
+			return
+		case <-m.wakeTrustedProxyRefresh:
+			if timer != nil {
+				timer.Stop()
+			}
+			continue
+		case <-timerC:
+			if err := m.RefreshTrustedProxies(); err != nil {
+				log.Printf("[trusted_proxy] Failed to refresh trusted proxy sources: %v", err)
+			}
+		}
+	}
+}
+
+func (m *Manager) trustedProxySchedule() (time.Duration, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.config == nil || m.config.TrustedProxies == nil {
+		return 0, false
+	}
+	for _, source := range m.config.TrustedProxies.IPNets {
+		if isHTTPSource(source) {
+			return trustedProxyRefreshInterval(m.config), true
+		}
+	}
+	return 0, false
+}
+
+func (m *Manager) wakeTrustedProxyRefreshLoop() {
+	select {
+	case m.wakeTrustedProxyRefresh <- struct{}{}:
+	default:
+	}
+}
+
+// RefreshTrustedProxies refreshes URL-backed trusted proxy sources and swaps
+// the effective set atomically. A failed source retains its last valid set.
 func (m *Manager) RefreshTrustedProxies() error {
+	m.trustedProxyUpdateMu.Lock()
+	defer m.trustedProxyUpdateMu.Unlock()
+
 	m.mu.RLock()
 	config := m.config
+	previousSet := m.trustedProxySet
 	m.mu.RUnlock()
 
 	if config == nil || config.TrustedProxies == nil {
 		return nil
 	}
-
-	if err := validateTrustedProxiesConfig(config.TrustedProxies); err != nil {
-		return err
-	}
-
-	// Get cache TTL from config
-	cacheTTL := 24 * time.Hour // default
-	if config.TrustedProxies.RefreshIntervalSeconds > 0 {
-		cacheTTL = time.Duration(config.TrustedProxies.RefreshIntervalSeconds) * time.Second
-	}
-
-	// Force cache refresh by clearing old entries for URLs
-	for _, proxy := range config.TrustedProxies.IPNets {
-		if strings.HasPrefix(proxy, "http://") || strings.HasPrefix(proxy, "https://") {
-			// Clear stale cache entries older than the configured TTL
-			if _, timestamp, err := m.cache.LoadFromCache(proxy); err == nil {
-				if time.Since(timestamp) > cacheTTL {
-					m.cache.ClearCacheEntry(proxy)
-					log.Printf("[config] Cleared stale cache entry for %s", proxy)
-				} else {
-					log.Printf("[config] Cache still fresh for %s (age: %v, TTL: %v)", proxy, time.Since(timestamp), cacheTTL)
-				}
-			}
-		}
-	}
-
-	trustedProxyIPs, err := m.parseTrustedProxies(config.TrustedProxies.IPNets)
+	set, sources, err := m.buildTrustedProxySet(config.TrustedProxies, true)
 	if err != nil {
 		return err
 	}
 
 	m.mu.Lock()
-	m.trustedProxyIPs = trustedProxyIPs
+	m.trustedProxySet = set
+	m.trustedProxySources = sources
 	m.mu.Unlock()
 
-	log.Printf("[config] Refreshed trusted proxy lists (%d networks)", len(trustedProxyIPs))
+	if !previousSet.Equal(set) {
+		log.Printf("[trusted_proxy] Refreshed trusted proxy sources (%d networks)", set.Size())
+	} else if m.verbose {
+		log.Printf("[trusted_proxy] Trusted proxy sources unchanged (%d networks)", set.Size())
+	}
 	return nil
 }
 
-// parseIPOrCIDR parses a string as either a CIDR or plain IP address.
-// Plain IPs are converted to /32 (IPv4) or /128 (IPv6) networks.
-func parseIPOrCIDR(s string) (net.IPNet, error) {
-	if strings.Contains(s, "/") {
-		_, network, err := net.ParseCIDR(s)
-		if err != nil {
-			return net.IPNet{}, fmt.Errorf("invalid CIDR %s: %w", s, err)
+func (m *Manager) buildTrustedProxySet(config *TrustedProxiesConfig, force bool) (*iplist.Set, map[string]*iplist.Set, error) {
+	if err := validateTrustedProxiesConfig(config); err != nil {
+		return nil, nil, err
+	}
+
+	m.mu.RLock()
+	previousSources := make(map[string]*iplist.Set, len(m.trustedProxySources))
+	for source, set := range m.trustedProxySources {
+		previousSources[source] = set
+	}
+	m.mu.RUnlock()
+
+	directPrefixes := make([]netip.Prefix, 0, len(config.IPNets))
+	urlSources := make(map[string]*iplist.Set)
+	for _, source := range config.IPNets {
+		if !isHTTPSource(source) {
+			prefix, err := iplist.ParsePrefix(source)
+			if err != nil {
+				return nil, nil, err
+			}
+			directPrefixes = append(directPrefixes, prefix)
+			continue
 		}
-		return *network, nil
+
+		set, err := m.fetchTrustedProxySet(source, config.RefreshIntervalSeconds, force)
+		if err != nil {
+			if previous := previousSources[source]; previous != nil {
+				urlSources[source] = previous
+				log.Printf("[trusted_proxy] Failed to refresh %s; retaining %d last-known-good networks: %v", source, previous.Size(), err)
+			} else {
+				log.Printf("[trusted_proxy] Failed to load %s; source contributes no trusted networks: %v", source, err)
+			}
+			continue
+		}
+		urlSources[source] = set
 	}
 
-	ip := net.ParseIP(s)
-	if ip == nil {
-		return net.IPNet{}, fmt.Errorf("invalid IP address: %s", s)
+	sets := make([]*iplist.Set, 0, len(urlSources)+1)
+	sets = append(sets, iplist.NewSet(directPrefixes))
+	for _, set := range urlSources {
+		sets = append(sets, set)
 	}
-
-	if ip.To4() != nil {
-		return net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}, nil
-	}
-	return net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}, nil
+	return iplist.UnionSets(sets...), urlSources, nil
 }
 
-// parseTrustedProxies parses trusted proxy configuration
-func (m *Manager) parseTrustedProxies(proxies []string) ([]net.IPNet, error) {
-	var result []net.IPNet
-	seenNetworks := make(map[string]bool)
-
-	for _, proxy := range proxies {
-		if strings.HasPrefix(proxy, "http://") || strings.HasPrefix(proxy, "https://") {
-			// Fetch IP ranges from URL
-			ranges, err := m.fetchIPRangesFromURL(proxy)
-			if err != nil {
-				log.Printf("[config] Failed to fetch trusted proxies from %s: %v", proxy, err)
-				continue
-			}
-			for _, r := range ranges {
-				key := r.String()
-				if !seenNetworks[key] {
-					result = append(result, r)
-					seenNetworks[key] = true
-				}
-			}
-		} else {
-			ipNet, err := parseIPOrCIDR(proxy)
-			if err != nil {
-				return nil, err
-			}
-
-			key := ipNet.String()
-			if !seenNetworks[key] {
-				result = append(result, ipNet)
-				seenNetworks[key] = true
-			}
-		}
+func (m *Manager) fetchTrustedProxySet(source string, refreshIntervalSeconds int, force bool) (*iplist.Set, error) {
+	if m.cache == nil {
+		return nil, fmt.Errorf("cache is not initialized")
 	}
 
-	return result, nil
+	var data []byte
+	var err error
+	if force {
+		data, _, err = m.cache.FetchWithCacheForced(source)
+	} else {
+		interval := defaultTrustedProxyRefreshInterval
+		if refreshIntervalSeconds > 0 {
+			interval = time.Duration(refreshIntervalSeconds) * time.Second
+		}
+		data, _, err = m.cache.FetchWithCache(source, interval)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	set, issues, err := iplist.ParseSet(data)
+	if err != nil {
+		return nil, err
+	}
+	for _, issue := range issues {
+		log.Printf("[trusted_proxy] %v at line %d in %s", issue.Err, issue.Line, source)
+	}
+	return set, nil
+}
+
+func isHTTPSource(source string) bool {
+	return strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://")
 }
 
 func validateTrustedProxiesConfig(config *TrustedProxiesConfig) error {
@@ -200,7 +264,6 @@ func trustedProxyHeaderAuthHeader(config *TrustedProxyHeaderAuthConfig) string {
 	if config == nil || config.Header == nil {
 		return DefaultTrustedProxyHeaderAuthHeader
 	}
-
 	return *config.Header
 }
 
@@ -217,53 +280,5 @@ func isHTTPHeaderFieldName(name string) bool {
 			return false
 		}
 	}
-
 	return name != ""
-}
-
-// fetchIPRangesFromURL fetches IP ranges from a URL with caching
-func (m *Manager) fetchIPRangesFromURL(url string) ([]net.IPNet, error) {
-	// Get cache TTL from config
-	cacheTTL := 24 * time.Hour // default
-	m.mu.RLock()
-	if m.config != nil && m.config.TrustedProxies != nil && m.config.TrustedProxies.RefreshIntervalSeconds > 0 {
-		cacheTTL = time.Duration(m.config.TrustedProxies.RefreshIntervalSeconds) * time.Second
-	}
-	m.mu.RUnlock()
-
-	// Use cache if available
-	data, _, err := m.cache.FetchWithCache(url, cacheTTL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch %s: %w", url, err)
-	}
-
-	// Note: Cache already logs the status (cache hit, 304, fresh data)
-	// Parse the data (one CIDR per line)
-	return m.parseIPRanges(data, url)
-}
-
-// parseIPRanges parses IP ranges from raw data (supports plain IPs and CIDR notation)
-func (m *Manager) parseIPRanges(data []byte, source string) ([]net.IPNet, error) {
-	var result []net.IPNet
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		ipNet, err := parseIPOrCIDR(line)
-		if err != nil {
-			log.Printf("[config] %v from %s", err, source)
-			continue
-		}
-		result = append(result, ipNet)
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	return result, nil
 }

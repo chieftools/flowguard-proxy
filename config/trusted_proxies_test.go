@@ -1,87 +1,28 @@
 package config
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"flowguard/cache"
+	"flowguard/iplist"
 )
 
-func TestParseIPOrCIDR(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   string
-		want    string
-		wantErr bool
-	}{
-		{name: "ipv4 address", input: "192.0.2.10", want: "192.0.2.10/32"},
-		{name: "ipv6 address", input: "2001:db8::1", want: "2001:db8::1/128"},
-		{name: "cidr", input: "192.0.2.0/24", want: "192.0.2.0/24"},
-		{name: "invalid", input: "not-an-ip", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseIPOrCIDR(tt.input)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got.String() != tt.want {
-				t.Fatalf("expected %s, got %s", tt.want, got.String())
-			}
-		})
-	}
-}
-
-func TestParseIPRangesSkipsCommentsBlankLinesAndInvalidEntries(t *testing.T) {
+func TestTrustedProxySetDeduplicatesLocalEntries(t *testing.T) {
 	manager := &Manager{}
-	ranges, err := manager.parseIPRanges([]byte(`
-# comment
-192.0.2.0/24
-
-not-an-ip
-2001:db8::1
-`), "test-source")
+	set, _, err := manager.buildTrustedProxySet(&TrustedProxiesConfig{IPNets: []string{
+		"192.0.2.10", "192.0.2.10/32", "2001:db8::1", "2001:db8::1",
+	}}, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	if len(ranges) != 2 {
-		t.Fatalf("expected 2 parsed ranges, got %d", len(ranges))
-	}
-	if ranges[0].String() != "192.0.2.0/24" {
-		t.Fatalf("expected first range to be 192.0.2.0/24, got %s", ranges[0].String())
-	}
-	if ranges[1].String() != "2001:db8::1/128" {
-		t.Fatalf("expected second range to be 2001:db8::1/128, got %s", ranges[1].String())
-	}
-}
-
-func TestParseTrustedProxiesDeduplicatesLocalEntries(t *testing.T) {
-	manager := &Manager{}
-	ranges, err := manager.parseTrustedProxies([]string{
-		"192.0.2.10",
-		"192.0.2.10/32",
-		"2001:db8::1",
-		"2001:db8::1",
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(ranges) != 2 {
-		t.Fatalf("expected 2 deduplicated ranges, got %d", len(ranges))
-	}
-	if ranges[0].String() != "192.0.2.10/32" {
-		t.Fatalf("expected first range to be 192.0.2.10/32, got %s", ranges[0].String())
-	}
-	if ranges[1].String() != "2001:db8::1/128" {
-		t.Fatalf("expected second range to be 2001:db8::1/128, got %s", ranges[1].String())
+	if set.Size() != 2 {
+		t.Fatalf("expected 2 deduplicated networks, got %d", set.Size())
 	}
 }
 
@@ -123,6 +64,195 @@ func TestRefreshTrustedProxiesRejectsInvalidEntry(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "invalid IP address") {
 		t.Fatalf("expected invalid IP error, got %v", err)
 	}
+}
+
+func TestRefreshTrustedProxiesUpdatesURLSource(t *testing.T) {
+	var body atomic.Value
+	body.Store("192.0.2.0/24\n")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body.Load().(string)))
+	}))
+	defer server.Close()
+
+	manager := newTrustedProxyTestManager(t, server.URL)
+	if err := manager.RefreshTrustedProxies(); err != nil {
+		t.Fatalf("initial refresh: %v", err)
+	}
+	if !manager.IsTrustedProxy("192.0.2.1") {
+		t.Fatal("expected initial URL range to be trusted")
+	}
+
+	body.Store("198.51.100.0/24\n")
+	if err := manager.RefreshTrustedProxies(); err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	if manager.IsTrustedProxy("192.0.2.1") || !manager.IsTrustedProxy("198.51.100.1") {
+		t.Fatal("expected refreshed URL range to replace the old range")
+	}
+}
+
+func TestTrustedProxyRefreshLoopUpdatesURLSource(t *testing.T) {
+	var body atomic.Value
+	body.Store("192.0.2.0/24\n")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body.Load().(string)))
+	}))
+	defer server.Close()
+
+	manager := newTrustedProxyTestManager(t, server.URL)
+	if err := manager.RefreshTrustedProxies(); err != nil {
+		t.Fatalf("initial refresh: %v", err)
+	}
+	body.Store("198.51.100.0/24\n")
+
+	manager.StartTrustedProxyRefresh()
+	t.Cleanup(func() {
+		close(manager.stopTrustedProxyRefresh)
+		manager.trustedProxyRefreshWG.Wait()
+	})
+
+	deadline := time.Now().Add(3 * time.Second)
+	for !manager.IsTrustedProxy("198.51.100.1") && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !manager.IsTrustedProxy("198.51.100.1") || manager.IsTrustedProxy("192.0.2.1") {
+		t.Fatal("periodic refresh did not atomically replace the URL source")
+	}
+}
+
+func TestRefreshTrustedProxiesRetainsLastKnownGoodSource(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("192.0.2.0/24\n"))
+	}))
+	defer server.Close()
+
+	manager := newTrustedProxyTestManager(t, server.URL)
+	if err := manager.RefreshTrustedProxies(); err != nil {
+		t.Fatalf("initial refresh: %v", err)
+	}
+
+	// Simulate the cache becoming unavailable after a valid source was loaded.
+	manager.cache = nil
+	if err := manager.RefreshTrustedProxies(); err != nil {
+		t.Fatalf("failed refresh should retain the source: %v", err)
+	}
+	if !manager.IsTrustedProxy("192.0.2.1") {
+		t.Fatal("expected last-known-good URL range to remain trusted")
+	}
+}
+
+func TestRefreshTrustedProxiesRetainsOnlyFailedSource(t *testing.T) {
+	liveServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("198.51.100.0/24\n"))
+	}))
+	defer liveServer.Close()
+
+	failedServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	failedURL := failedServer.URL
+	failedServer.Close()
+
+	manager := newTrustedProxyTestManager(t, liveServer.URL)
+	manager.config.TrustedProxies.IPNets = []string{liveServer.URL, failedURL}
+	lastGood := iplist.NewSet([]netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")})
+	manager.trustedProxySources[failedURL] = lastGood
+	manager.trustedProxySet = lastGood
+
+	if err := manager.RefreshTrustedProxies(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if !manager.IsTrustedProxy("198.51.100.1") || !manager.IsTrustedProxy("203.0.113.1") {
+		t.Fatal("successful source update and failed source fallback were not both applied")
+	}
+}
+
+func TestRefreshTrustedProxiesAcceptsSuccessfulEmptySource(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("# intentionally empty\n"))
+	}))
+	defer server.Close()
+
+	manager := newTrustedProxyTestManager(t, server.URL)
+	lastGood := iplist.NewSet([]netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
+	manager.trustedProxySources[server.URL] = lastGood
+	manager.trustedProxySet = lastGood
+
+	if err := manager.RefreshTrustedProxies(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if manager.IsTrustedProxy("192.0.2.1") {
+		t.Fatal("a successful empty source should remove its previous networks")
+	}
+	if source := manager.trustedProxySources[server.URL]; source == nil || source.Size() != 0 {
+		t.Fatal("successful empty source state was not retained")
+	}
+}
+
+func TestTrustedProxyURLFailureOnColdStartIsFailClosed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	manager := newTrustedProxyTestManager(t, server.URL)
+	set, sources, err := manager.buildTrustedProxySet(manager.config.TrustedProxies, false)
+	if err != nil {
+		t.Fatalf("cold-start build: %v", err)
+	}
+	if set.Size() != 0 || len(sources) != 0 {
+		t.Fatalf("failed source should contribute no trust, got %d networks", set.Size())
+	}
+}
+
+func TestTrustedProxyRemovedURLDoesNotRetainOldSource(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("192.0.2.0/24\n"))
+	}))
+	defer server.Close()
+
+	manager := newTrustedProxyTestManager(t, server.URL)
+	if err := manager.RefreshTrustedProxies(); err != nil {
+		t.Fatalf("initial refresh: %v", err)
+	}
+
+	set, sources, err := manager.buildTrustedProxySet(&TrustedProxiesConfig{
+		IPNets: []string{"198.51.100.1"},
+	}, false)
+	if err != nil {
+		t.Fatalf("build without old URL: %v", err)
+	}
+	if set.Contains(mustParseAddr(t, "192.0.2.1")) || !set.Contains(mustParseAddr(t, "198.51.100.1")) {
+		t.Fatal("removed URL source leaked into the new effective set")
+	}
+	if len(sources) != 0 {
+		t.Fatalf("expected removed URL source state to be discarded, got %d", len(sources))
+	}
+}
+
+func newTrustedProxyTestManager(t *testing.T, source string) *Manager {
+	t.Helper()
+	c, err := cache.NewCache(t.TempDir(), "FlowGuard/test", false)
+	if err != nil {
+		t.Fatalf("new cache: %v", err)
+	}
+	return &Manager{
+		cache:                   c,
+		stopTrustedProxyRefresh: make(chan struct{}),
+		wakeTrustedProxyRefresh: make(chan struct{}, 1),
+		config: &Config{TrustedProxies: &TrustedProxiesConfig{
+			IPNets:                 []string{source},
+			RefreshIntervalSeconds: 1,
+		}},
+		trustedProxySources: make(map[string]*iplist.Set),
+	}
+}
+
+func mustParseAddr(t *testing.T, raw string) netip.Addr {
+	t.Helper()
+	addr, err := netip.ParseAddr(raw)
+	if err != nil {
+		t.Fatalf("parse address %q: %v", raw, err)
+	}
+	return addr
 }
 
 func TestLoadAcceptsTrustedProxyHeaderAuthOnly(t *testing.T) {

@@ -10,18 +10,16 @@ import (
 	"testing"
 
 	"flowguard/cache"
-
-	"github.com/gaissmai/bart"
 )
 
-func TestParseIPsToTrie(t *testing.T) {
+func TestParseSetForManager(t *testing.T) {
 	tests := []struct {
 		name        string
 		data        string
 		expectCount int
 		expectError bool
-		expectNil   bool            // expect nil trie (for empty lists)
-		testIPs     map[string]bool // IP -> should be in trie
+		expectEmpty bool            // expect an empty set
+		testIPs     map[string]bool // IP -> should be in set
 	}{
 		{
 			name: "IPv4 addresses",
@@ -120,20 +118,20 @@ invalid-ip
 			data:        "",
 			expectCount: 0,
 			expectError: false,
-			expectNil:   true, // Empty lists return nil trie
+			expectEmpty: true,
 		},
 		{
 			name:        "Only comments",
 			data:        "# Comment 1\n# Comment 2\n",
 			expectCount: 0,
 			expectError: false,
-			expectNil:   true, // Empty lists return nil trie
+			expectEmpty: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			trie, count, err := parseIPsToTrie([]byte(tt.data), "test")
+			set, _, err := ParseSet([]byte(tt.data))
 
 			if tt.expectError {
 				if err == nil {
@@ -146,20 +144,20 @@ invalid-ip
 				t.Fatalf("Unexpected error: %v", err)
 			}
 
-			if count != tt.expectCount {
-				t.Errorf("Expected count %d but got %d", tt.expectCount, count)
+			if set.Size() != tt.expectCount {
+				t.Errorf("Expected count %d but got %d", tt.expectCount, set.Size())
 			}
 
-			if tt.expectNil {
-				if trie != nil {
-					t.Error("Expected nil trie for empty list")
+			if tt.expectEmpty {
+				if set.Size() != 0 {
+					t.Error("Expected empty set for empty list")
 				}
 				return
 			}
 
 			// Test IP containment
 			for ip, shouldContain := range tt.testIPs {
-				contains := containsIP(trie, ip)
+				contains := containsIP(set, ip)
 				if contains != shouldContain {
 					t.Errorf("IP %s: expected contains=%v but got %v", ip, shouldContain, contains)
 				}
@@ -203,17 +201,17 @@ func TestIPListLoad(t *testing.T) {
 		t.Fatalf("Failed to load list: %v", err)
 	}
 
-	// Test that IPs are in the trie
-	if !containsIP(list.trie, "192.168.1.1") {
+	// Test that IPs are in the set
+	if !containsIP(list.set, "192.168.1.1") {
 		t.Error("Expected 192.168.1.1 to be in list")
 	}
-	if !containsIP(list.trie, "10.0.0.1") {
+	if !containsIP(list.set, "10.0.0.1") {
 		t.Error("Expected 10.0.0.1 to be in list (part of 10.0.0.0/24)")
 	}
-	if !containsIP(list.trie, "2001:db8::1") {
+	if !containsIP(list.set, "2001:db8::1") {
 		t.Error("Expected 2001:db8::1 to be in list")
 	}
-	if containsIP(list.trie, "172.16.0.1") {
+	if containsIP(list.set, "172.16.0.1") {
 		t.Error("Did not expect 172.16.0.1 to be in list")
 	}
 }
@@ -436,16 +434,16 @@ func TestManagerMultipleLists(t *testing.T) {
 	}
 }
 
-// Helper function to check if an IP is in a trie
-func containsIP(trie *bart.Lite, ip string) bool {
-	if trie == nil {
+// Helper function to check if an IP is in a set.
+func containsIP(set *Set, ip string) bool {
+	if set == nil {
 		return false
 	}
 	addr, err := netip.ParseAddr(ip)
 	if err != nil {
 		return false
 	}
-	return trie.Contains(addr)
+	return set.Contains(addr)
 }
 
 func TestMatchesBaseID(t *testing.T) {

@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"sort"
+
+	"flowguard/iplist"
 )
 
 // Load loads or reloads the configuration from disk
@@ -38,16 +39,9 @@ func (m *Manager) Load() error {
 		}
 	}
 
-	// Parse trusted proxy IPs and fetch from URLs
-	var trustedProxyIPs []net.IPNet
 	if config.TrustedProxies != nil {
 		if err := validateTrustedProxiesConfig(config.TrustedProxies); err != nil {
 			return err
-		}
-
-		trustedProxyIPs, err = m.parseTrustedProxies(config.TrustedProxies.IPNets)
-		if err != nil {
-			return fmt.Errorf("failed to parse trusted proxies: %w", err)
 		}
 	}
 
@@ -84,17 +78,34 @@ func (m *Manager) Load() error {
 	// Pre-compute sorted rules for efficient iteration during request processing
 	sortedRules := m.computeSortedRules(config.Rules)
 
+	// Serialize trusted proxy source updates with periodic refreshes. Building
+	// may reuse the last-known-good value for a URL that is temporarily down.
+	m.trustedProxyUpdateMu.Lock()
+
+	trustedProxySet := iplist.NewSet(nil)
+	trustedProxySources := make(map[string]*iplist.Set)
+	if config.TrustedProxies != nil {
+		trustedProxySet, trustedProxySources, err = m.buildTrustedProxySet(config.TrustedProxies, false)
+		if err != nil {
+			m.trustedProxyUpdateMu.Unlock()
+			return fmt.Errorf("failed to parse trusted proxies: %w", err)
+		}
+	}
+
 	// Update configuration atomically
 	m.mu.Lock()
 
 	oldConfig := m.config
 	m.config = &config
 	m.sortedRules = sortedRules
-	m.trustedProxyIPs = trustedProxyIPs
+	m.trustedProxySet = trustedProxySet
+	m.trustedProxySources = trustedProxySources
 	m.lastModified = info.ModTime()
 	m.currentConfigID = config.ID
 
 	m.mu.Unlock()
+	m.trustedProxyUpdateMu.Unlock()
+	m.wakeTrustedProxyRefreshLoop()
 
 	// Update Realtime client configuration
 	m.updatePusherClient(&config)
@@ -113,7 +124,7 @@ func (m *Manager) Load() error {
 		}
 	}
 
-	log.Printf("[config] Loaded configuration from %s (rules: %d, actions: %d, trusted proxies: %d networks)", m.configPath, len(config.Rules), len(config.Actions), len(trustedProxyIPs))
+	log.Printf("[config] Loaded configuration from %s (rules: %d, actions: %d, trusted proxies: %d networks)", m.configPath, len(config.Rules), len(config.Actions), trustedProxySet.Size())
 
 	return nil
 }

@@ -1,7 +1,6 @@
 package iplist
 
 import (
-	"bufio"
 	"fmt"
 	"log"
 	"net/netip"
@@ -11,8 +10,6 @@ import (
 	"time"
 
 	"flowguard/cache"
-
-	"github.com/gaissmai/bart"
 )
 
 // ListConfig represents configuration for a single IP list
@@ -24,11 +21,11 @@ type ListConfig struct {
 	RefreshIntervalSeconds int    `json:"refresh_interval_seconds,omitempty"` // Refresh interval in seconds
 }
 
-// IPList represents a single named IP list with its trie
+// IPList represents a single named IP list with its prefix set.
 type IPList struct {
 	name    string
 	config  ListConfig
-	trie    *bart.Lite
+	set     *Set
 	loaded  bool // tracks if list has been loaded at least once
 	empty   bool // true if list has 0 entries (optimization to skip lookups)
 	entries int
@@ -92,7 +89,7 @@ func (m *Manager) addList(name string, config ListConfig) error {
 	return nil
 }
 
-// load loads IP data into the list's trie
+// load loads IP data into the list's prefix set.
 func (l *IPList) load(cacheInstance *cache.Cache, verbose bool) error {
 	return l.loadInternal(cacheInstance, verbose, false, true)
 }
@@ -102,7 +99,7 @@ func (l *IPList) loadInitial(cacheInstance *cache.Cache, verbose bool) error {
 	return l.loadInternal(cacheInstance, verbose, false, false)
 }
 
-// forceLoad loads IP data into the list's trie, bypassing cache TTL but respecting etag
+// forceLoad loads IP data into the list's prefix set, bypassing cache TTL but respecting etag.
 func (l *IPList) forceLoad(cacheInstance *cache.Cache, verbose bool) error {
 	return l.loadInternal(cacheInstance, verbose, true, true)
 }
@@ -158,15 +155,18 @@ func (l *IPList) loadInternal(cacheInstance *cache.Cache, verbose bool, forceRef
 		return nil
 	}
 
-	// Parse IPs and build new trie (returns nil trie for empty lists)
-	newTrie, count, err := parseIPsToTrie(data, source)
+	newSet, issues, err := ParseSet(data)
 	if err != nil {
 		return fmt.Errorf("failed to parse IPs: %w", err)
 	}
+	for _, issue := range issues {
+		log.Printf("[ip_list] %v at line %d in %s", issue.Err, issue.Line, source)
+	}
+	count := newSet.Size()
 
-	// Atomically swap the trie and update flags
+	// Atomically swap the prefix set and update flags.
 	l.mu.Lock()
-	l.trie = newTrie
+	l.set = newSet
 	l.loaded = true
 	l.empty = (count == 0)
 	l.entries = count
@@ -186,61 +186,6 @@ func loadedListLogMessage(name, source string, count int, cacheInstance *cache.C
 	return fmt.Sprintf("Loaded list '%s' from %s: %d entries", name, source, count)
 }
 
-// parseIPsToTrie parses IP data and builds a new trie
-func parseIPsToTrie(data []byte, source string) (*bart.Lite, int, error) {
-	newTrie := new(bart.Lite)
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	count := 0
-	lineNum := 0
-
-	for scanner.Scan() {
-		lineNum++
-		line := strings.TrimSpace(scanner.Text())
-
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		// Try to parse as CIDR first
-		if strings.Contains(line, "/") {
-			prefix, err := netip.ParsePrefix(line)
-			if err != nil {
-				log.Printf("[ip_list] Invalid CIDR at line %d in %s: %s", lineNum, source, line)
-				continue
-			}
-			newTrie.Insert(prefix)
-			count++
-		} else {
-			// Parse as individual IP
-			addr, err := netip.ParseAddr(line)
-			if err != nil {
-				log.Printf("[ip_list] Invalid IP at line %d in %s: %s", lineNum, source, line)
-				continue
-			}
-			// Convert to /32 or /128 prefix
-			bits := 32
-			if addr.Is6() {
-				bits = 128
-			}
-			prefix := netip.PrefixFrom(addr, bits)
-			newTrie.Insert(prefix)
-			count++
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, 0, fmt.Errorf("scanner error: %w", err)
-	}
-
-	// Return nil trie for empty lists (optimization: no trie allocation needed)
-	if count == 0 {
-		return nil, 0, nil
-	}
-
-	return newTrie, count, nil
-}
-
 // Contains checks if an IP address is in the named list
 func (m *Manager) Contains(listName string, ip string) bool {
 	m.mu.RLock()
@@ -257,10 +202,10 @@ func (m *Manager) Contains(listName string, ip string) bool {
 		list.mu.RUnlock()
 		return false
 	}
-	trie := list.trie
+	set := list.set
 	list.mu.RUnlock()
 
-	if trie == nil {
+	if set == nil {
 		return false
 	}
 
@@ -270,7 +215,7 @@ func (m *Manager) Contains(listName string, ip string) bool {
 		return false
 	}
 
-	return trie.Contains(addr)
+	return set.Contains(addr)
 }
 
 // HasList checks if a named list exists

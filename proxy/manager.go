@@ -955,31 +955,7 @@ func formatProxyStartupSummary(servers []*Server, bindAddressCount int) string {
 
 func (p *Manager) Start() error {
 	log.Printf("[proxy] Upstream client IP mode: %s", p.upstreamMode)
-
-	trustedProxiesRefreshInterval := p.configManager.GetRefreshInterval()
-	if p.config.Verbose {
-		log.Printf("[trusted_proxy] Starting trusted proxy refresh with interval: %v", trustedProxiesRefreshInterval)
-	}
-
-	// Periodically refresh trusted proxy lists from URLs
-	go func() {
-		ticker := time.NewTicker(trustedProxiesRefreshInterval)
-		defer ticker.Stop()
-
-		for range ticker.C {
-			// Check if interval has changed in config
-			newInterval := p.configManager.GetRefreshInterval()
-			if newInterval != trustedProxiesRefreshInterval {
-				log.Printf("[trusted_proxy] Refresh interval changed from %v to %v", trustedProxiesRefreshInterval, newInterval)
-				ticker.Reset(newInterval)
-				trustedProxiesRefreshInterval = newInterval
-			}
-
-			if err := p.configManager.RefreshTrustedProxies(); err != nil {
-				log.Printf("[trusted_proxy] Failed to refresh trusted proxy lists: %v", err)
-			}
-		}
-	}()
+	p.configManager.StartTrustedProxyRefresh()
 
 	if p.transparentNet != nil {
 		if err := p.transparentNet.Setup(); err != nil {

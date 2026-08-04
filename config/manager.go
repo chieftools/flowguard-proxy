@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"log"
-	"net"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -11,6 +10,7 @@ import (
 
 	"flowguard/api"
 	"flowguard/cache"
+	"flowguard/iplist"
 	"flowguard/pusher"
 
 	"github.com/fsnotify/fsnotify"
@@ -18,25 +18,31 @@ import (
 
 // Manager manages the configuration with hot-reload support
 type Manager struct {
-	configPath      string
-	userAgent       string
-	version         string
-	verbose         bool
-	config          *Config
-	sortedRules     []*Rule // Pre-sorted rules for efficient iteration
-	cache           *cache.Cache
-	lastModified    time.Time
-	currentConfigID string
-	apiClient       *api.Client
-	realtimeClient  *pusher.Client
-	realtimeEnabled bool
-	trustedProxyIPs []net.IPNet
-	callbacks       []func(*Config)
-	watcher         *fsnotify.Watcher
-	stopWatcher     chan struct{}
-	stopAPIRefresh  chan struct{}
-	mu              sync.RWMutex
-	realtimeMu      sync.Mutex
+	configPath              string
+	userAgent               string
+	version                 string
+	verbose                 bool
+	config                  *Config
+	sortedRules             []*Rule // Pre-sorted rules for efficient iteration
+	cache                   *cache.Cache
+	lastModified            time.Time
+	currentConfigID         string
+	apiClient               *api.Client
+	realtimeClient          *pusher.Client
+	realtimeEnabled         bool
+	trustedProxySet         *iplist.Set
+	trustedProxySources     map[string]*iplist.Set
+	callbacks               []func(*Config)
+	watcher                 *fsnotify.Watcher
+	stopWatcher             chan struct{}
+	stopAPIRefresh          chan struct{}
+	stopTrustedProxyRefresh chan struct{}
+	wakeTrustedProxyRefresh chan struct{}
+	mu                      sync.RWMutex
+	realtimeMu              sync.Mutex
+	trustedProxyUpdateMu    sync.Mutex
+	trustedProxyRefreshOnce sync.Once
+	trustedProxyRefreshWG   sync.WaitGroup
 
 	// IP list update callback support with debouncing
 	ipListUpdateCallbacks []func(listIDs []string)
@@ -68,17 +74,19 @@ func NewManager(configPath string, userAgent string, version string, cacheDir st
 	}
 
 	m := &Manager{
-		cache:                c,
-		version:              version,
-		verbose:              verbose,
-		watcher:              watcher,
-		userAgent:            userAgent,
-		configPath:           configPath,
-		stopWatcher:          make(chan struct{}),
-		stopAPIRefresh:       make(chan struct{}),
-		apiClient:            api.NewClient("", userAgent),
-		callbacks:            make([]func(*Config), 0),
-		ipListPendingUpdates: make(map[string]struct{}),
+		cache:                   c,
+		version:                 version,
+		verbose:                 verbose,
+		watcher:                 watcher,
+		userAgent:               userAgent,
+		configPath:              configPath,
+		stopWatcher:             make(chan struct{}),
+		stopAPIRefresh:          make(chan struct{}),
+		stopTrustedProxyRefresh: make(chan struct{}),
+		wakeTrustedProxyRefresh: make(chan struct{}, 1),
+		apiClient:               api.NewClient("", userAgent),
+		callbacks:               make([]func(*Config), 0),
+		ipListPendingUpdates:    make(map[string]struct{}),
 	}
 
 	// Load initial configuration
@@ -207,7 +215,9 @@ func (m *Manager) OnUpgradeRequest(callback func(version string)) {
 // Stop stops the configuration file watcher
 func (m *Manager) Stop() {
 	close(m.stopAPIRefresh)
+	close(m.stopTrustedProxyRefresh)
 	close(m.stopWatcher)
+	m.trustedProxyRefreshWG.Wait()
 
 	// Close fsnotify watcher
 	if m.watcher != nil {
