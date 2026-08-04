@@ -12,6 +12,7 @@ import (
 var (
 	// Global flags shared across commands
 	verbose    bool
+	noTUI      bool
 	configFile string
 	cacheDir   string
 
@@ -36,6 +37,7 @@ func Execute() error {
 func init() {
 	// Global flags available to all commands
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
+	rootCmd.PersistentFlags().BoolVar(&noTUI, "no-tui", false, "Use plain prompts instead of the interactive terminal UI")
 	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "/etc/flowguard/config.json", "Path to the configuration file")
 	rootCmd.PersistentFlags().StringVar(&cacheDir, "cache-dir", "/var/cache/flowguard", "Directory for caching external data")
 }

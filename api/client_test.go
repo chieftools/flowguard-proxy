@@ -142,6 +142,112 @@ func TestPatchConfigPathsReturnsAPIError(t *testing.T) {
 	}
 }
 
+func TestPatchConfigSendsSetupConfiguration(t *testing.T) {
+	var received map[string]any
+
+	client := NewClient("host-key", "flowguard-test")
+	client.baseURL = "https://flowguard.test"
+	client.httpClient = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read request body: %v", err)
+			}
+			if err := json.Unmarshal(body, &received); err != nil {
+				t.Fatalf("decode patch payload: %v", err)
+			}
+
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Body:       io.NopCloser(bytes.NewReader(nil)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	advertiseHTTP3 := false
+	err := client.PatchConfig(ConfigPatch{
+		Host: &HostConfigPatch{NginxConfigPath: "/etc/nginx/nginx.conf"},
+		Server: &ServerConfigPatch{
+			Protocols:      &ProtocolsConfigPatch{HTTP1: true, HTTP2: true, HTTP3: true},
+			AdvertiseHTTP3: &advertiseHTTP3,
+			Upstream: &UpstreamConfigPatch{
+				ClientIPMode: "transparent",
+				Transparent: &TransparentUpstreamConfigPatch{
+					AddressPairs: []AddressPairConfigPatch{{IPv4: "192.0.2.10", IPv6: "2001:db8::10"}},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PatchConfig: %v", err)
+	}
+
+	host := received["host"].(map[string]any)
+	if host["nginx_config_path"] != "/etc/nginx/nginx.conf" {
+		t.Fatalf("unexpected host payload: %#v", host)
+	}
+	server := received["server"].(map[string]any)
+	protocols := server["protocols"].(map[string]any)
+	if protocols["http1"] != true || protocols["http2"] != true || protocols["http3"] != true {
+		t.Fatalf("unexpected protocol payload: %#v", protocols)
+	}
+	if server["advertise_http3"] != false {
+		t.Fatalf("unexpected advertise_http3 payload: %#v", server)
+	}
+	upstream := server["upstream"].(map[string]any)
+	if upstream["client_ip_mode"] != "transparent" {
+		t.Fatalf("unexpected upstream payload: %#v", upstream)
+	}
+	transparent := upstream["transparent"].(map[string]any)
+	pairs := transparent["address_pairs"].([]any)
+	if len(pairs) != 1 {
+		t.Fatalf("unexpected address pairs: %#v", pairs)
+	}
+}
+
+func TestPatchConfigSendsEmptyTransparentAddressPairs(t *testing.T) {
+	var received struct {
+		Server struct {
+			Upstream struct {
+				Transparent struct {
+					AddressPairs []AddressPairConfigPatch `json:"address_pairs"`
+				} `json:"transparent"`
+			} `json:"upstream"`
+		} `json:"server"`
+	}
+
+	client := NewClient("host-key", "flowguard-test")
+	client.baseURL = "https://flowguard.test"
+	client.httpClient = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read request body: %v", err)
+			}
+			if err := json.Unmarshal(body, &received); err != nil {
+				t.Fatalf("decode patch payload: %v", err)
+			}
+			return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(bytes.NewReader(nil)), Header: make(http.Header)}, nil
+		}),
+	}
+
+	err := client.PatchConfig(ConfigPatch{
+		Server: &ServerConfigPatch{
+			Upstream: &UpstreamConfigPatch{
+				ClientIPMode: "transparent",
+				Transparent:  &TransparentUpstreamConfigPatch{AddressPairs: []AddressPairConfigPatch{}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PatchConfig: %v", err)
+	}
+	if received.Server.Upstream.Transparent.AddressPairs == nil {
+		t.Fatal("expected address_pairs to be present as an empty array")
+	}
+}
+
 func TestSendHeartbeatIncludesFirewallPayload(t *testing.T) {
 	tests := []FirewallHeartbeat{
 		{Status: "healthy", LastCheckedAt: 100},

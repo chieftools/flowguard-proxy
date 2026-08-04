@@ -15,6 +15,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"flowguard/api"
+	"flowguard/config"
+	"flowguard/proxy"
 )
 
 func resetSetupTestGlobals(t *testing.T) {
@@ -22,18 +26,36 @@ func resetSetupTestGlobals(t *testing.T) {
 
 	oldConfigFile := configFile
 	oldDiscover := setupDiscover
+	oldNoTUI := noTUI
 	oldInput := setupInput
 	oldOutput := setupOutput
 	oldIsInteractive := setupIsInteractive
+	oldInspectNetwork := setupInspectNetwork
+	oldLookupEnvironment := setupLookupEnvironment
+	oldStreamsAreTerminal := setupStreamsAreTerminal
+	oldRunForm := setupRunForm
 	oldPsaConfPath := setupPsaConfPath
 	oldNginxConfigPath := setupNginxConfigPath
 	oldPleskRootFallback := setupPleskRootFallback
 
 	configFile = filepath.Join(t.TempDir(), "config.json")
 	setupDiscover = false
+	noTUI = false
 	setupInput = strings.NewReader("")
 	setupOutput = io.Discard
 	setupIsInteractive = func() bool { return true }
+	setupInspectNetwork = func(*config.Config, []string) (proxy.NetworkInspection, error) {
+		return proxy.NetworkInspection{
+			Mode:             "headers",
+			HeaderReady:      true,
+			TransparentReady: false,
+			Prerequisites: []proxy.NetworkPrerequisite{{
+				Name: "test prerequisite", Ready: false, Details: "not available in unit tests",
+			}},
+		}, nil
+	}
+	setupLookupEnvironment = func(string) (string, bool) { return "", false }
+	setupStreamsAreTerminal = func() bool { return false }
 	setupPsaConfPath = filepath.Join(t.TempDir(), "missing-psa.conf")
 	setupNginxConfigPath = filepath.Join(t.TempDir(), "missing-nginx.conf")
 	setupPleskRootFallback = nil
@@ -41,9 +63,14 @@ func resetSetupTestGlobals(t *testing.T) {
 	t.Cleanup(func() {
 		configFile = oldConfigFile
 		setupDiscover = oldDiscover
+		noTUI = oldNoTUI
 		setupInput = oldInput
 		setupOutput = oldOutput
 		setupIsInteractive = oldIsInteractive
+		setupInspectNetwork = oldInspectNetwork
+		setupLookupEnvironment = oldLookupEnvironment
+		setupStreamsAreTerminal = oldStreamsAreTerminal
+		setupRunForm = oldRunForm
 		setupPsaConfPath = oldPsaConfPath
 		setupNginxConfigPath = oldNginxConfigPath
 		setupPleskRootFallback = oldPleskRootFallback
@@ -54,7 +81,7 @@ type fakeSetupClient struct {
 	initialConfig string
 	updatedConfig string
 	getCount      int
-	patchFunc     func(certPath, nginxConfigPath string) error
+	patchFunc     func(api.ConfigPatch) error
 }
 
 func (c *fakeSetupClient) GetConfig(string) ([]byte, error) {
@@ -66,12 +93,12 @@ func (c *fakeSetupClient) GetConfig(string) ([]byte, error) {
 	return []byte(c.updatedConfig), nil
 }
 
-func (c *fakeSetupClient) PatchConfigPaths(certPath, nginxConfigPath string) error {
+func (c *fakeSetupClient) PatchConfig(payload api.ConfigPatch) error {
 	if c.patchFunc == nil {
 		return fmt.Errorf("unexpected PATCH")
 	}
 
-	return c.patchFunc(certPath, nginxConfigPath)
+	return c.patchFunc(payload)
 }
 
 func (c *fakeSetupClient) GetBaseURL() string {
@@ -191,11 +218,27 @@ func TestResolveSetupInvocationWithoutConfiguredKeyFails(t *testing.T) {
 	}
 }
 
-func TestSetupHostSkipsDiscoveryWhenPathsAlreadyConfigured(t *testing.T) {
+func TestSetupHostSkipsPathDiscoveryWhenPathsAlreadyConfigured(t *testing.T) {
 	resetSetupTestGlobals(t)
+	setupInput = strings.NewReader(strings.Repeat("\n", 5))
 
 	client := &fakeSetupClient{
 		initialConfig: `{"host":{"cert_path":"/already"}}`,
+		patchFunc: func(payload api.ConfigPatch) error {
+			if payload.Host != nil {
+				t.Fatalf("expected configured paths not to be patched: %+v", payload.Host)
+			}
+			if payload.Server == nil || payload.Server.Upstream == nil || payload.Server.Upstream.ClientIPMode != config.UpstreamClientIPModeHeaders {
+				t.Fatalf("expected headers server patch, got %+v", payload.Server)
+			}
+			if payload.Server.Protocols == nil || !payload.Server.Protocols.HTTP1 || !payload.Server.Protocols.HTTP2 || !payload.Server.Protocols.HTTP3 {
+				t.Fatalf("expected all protocols enabled, got %+v", payload.Server.Protocols)
+			}
+			if payload.Server.AdvertiseHTTP3 == nil || *payload.Server.AdvertiseHTTP3 {
+				t.Fatalf("expected HTTP/3 advertisement disabled, got %v", payload.Server.AdvertiseHTTP3)
+			}
+			return nil
+		},
 	}
 
 	if err := setupHostWithClient(client); err != nil {
@@ -216,7 +259,7 @@ func TestSetupHostForcedDiscoveryRunsDespiteExistingPaths(t *testing.T) {
 
 	root, psaConfPath := writeSetupTestPleskCertRoot(t)
 	setupPsaConfPath = psaConfPath
-	setupInput = strings.NewReader("\n")
+	setupInput = strings.NewReader(strings.Repeat("\n", 6))
 	var output bytes.Buffer
 	setupOutput = &output
 	certPath := filepath.Join(root, "var", "certificates")
@@ -226,13 +269,13 @@ func TestSetupHostForcedDiscoveryRunsDespiteExistingPaths(t *testing.T) {
 	client := &fakeSetupClient{
 		initialConfig: `{"host":{"cert_path":"/already"}}`,
 		updatedConfig: updatedConfig,
-		patchFunc: func(patchedCertPath, patchedNginxConfigPath string) error {
+		patchFunc: func(payload api.ConfigPatch) error {
 			patchCalled = true
-			if patchedCertPath != certPath {
-				t.Fatalf("unexpected cert path: %s", patchedCertPath)
+			if payload.Host == nil || payload.Host.CertPath != certPath {
+				t.Fatalf("unexpected host patch: %+v", payload.Host)
 			}
-			if patchedNginxConfigPath != "" {
-				t.Fatalf("unexpected nginx path: %s", patchedNginxConfigPath)
+			if payload.Host.NginxConfigPath != "" {
+				t.Fatalf("unexpected nginx path: %s", payload.Host.NginxConfigPath)
 			}
 			return nil
 		},
@@ -273,7 +316,7 @@ func TestSetupHostDeclinedCertificateFallsBackToNginx(t *testing.T) {
 
 	_, psaConfPath := writeSetupTestPleskCertRoot(t)
 	setupPsaConfPath = psaConfPath
-	setupInput = strings.NewReader("n\n\n")
+	setupInput = strings.NewReader("n\n" + strings.Repeat("\n", 6))
 
 	nginxConfigPath := filepath.Join(t.TempDir(), "nginx.conf")
 	if err := os.WriteFile(nginxConfigPath, []byte("events {}\nhttp {}\n"), 0o644); err != nil {
@@ -285,12 +328,15 @@ func TestSetupHostDeclinedCertificateFallsBackToNginx(t *testing.T) {
 	client := &fakeSetupClient{
 		initialConfig: `{"host":{}}`,
 		updatedConfig: updatedConfig,
-		patchFunc: func(certPath, patchedNginxConfigPath string) error {
-			if certPath != "" {
-				t.Fatalf("unexpected cert path: %s", certPath)
+		patchFunc: func(payload api.ConfigPatch) error {
+			if payload.Host == nil {
+				t.Fatal("expected host patch")
 			}
-			if patchedNginxConfigPath != nginxConfigPath {
-				t.Fatalf("unexpected nginx path: %s", patchedNginxConfigPath)
+			if payload.Host.CertPath != "" {
+				t.Fatalf("unexpected cert path: %s", payload.Host.CertPath)
+			}
+			if payload.Host.NginxConfigPath != nginxConfigPath {
+				t.Fatalf("unexpected nginx path: %s", payload.Host.NginxConfigPath)
 			}
 			return nil
 		},
@@ -332,17 +378,17 @@ func TestSetupHostPatchFailureAborts(t *testing.T) {
 
 	root, psaConfPath := writeSetupTestPleskCertRoot(t)
 	setupPsaConfPath = psaConfPath
-	setupInput = strings.NewReader("\n")
+	setupInput = strings.NewReader(strings.Repeat("\n", 6))
 	certPath := filepath.Join(root, "var", "certificates")
 
 	client := &fakeSetupClient{
 		initialConfig: `{"host":{}}`,
-		patchFunc: func(patchedCertPath, nginxConfigPath string) error {
-			if patchedCertPath != certPath {
-				t.Fatalf("unexpected cert path: %s", patchedCertPath)
+		patchFunc: func(payload api.ConfigPatch) error {
+			if payload.Host == nil || payload.Host.CertPath != certPath {
+				t.Fatalf("unexpected host patch: %+v", payload.Host)
 			}
-			if nginxConfigPath != "" {
-				t.Fatalf("unexpected nginx path: %s", nginxConfigPath)
+			if payload.Host.NginxConfigPath != "" {
+				t.Fatalf("unexpected nginx path: %s", payload.Host.NginxConfigPath)
 			}
 			return fmt.Errorf("API returned status 422: invalid path")
 		},

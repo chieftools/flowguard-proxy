@@ -143,9 +143,46 @@ key in `/etc/flowguard/config.json`, download the latest configuration, and
 repeat interactive server-configuration discovery. Use `--config` when the
 existing configuration is stored elsewhere.
 
+Interactive setup also checks whether transparent upstream networking is
+available, helps resolve ambiguous IPv4/IPv6 address pairs, and asks which HTTP
+protocols to enable. New setups prefer transparent client-IP forwarding when
+its prerequisites are ready; rediscovery defaults to the current settings.
+
+On a capable terminal, setup uses an interactive form: use the arrow keys (or
+`j`/`k`) to move, Space to toggle checkboxes, and Enter to confirm. Address-pair
+configuration always lists IPv4 addresses as the fixed bases and asks for an
+unused IPv6 counterpart for each one. Set `ACCESSIBLE=1` for screen-reader
+friendly prompts. Use the global `--no-tui` flag or set `FLOWGUARD_NO_TUI` to
+force line-oriented prompts; FlowGuard also falls back to these prompts when
+input or output is redirected or `TERM=dumb`.
+
 ### Configure your server
 
-FlowGuard supports two upstream client-IP modes. The default, `headers`, works with any HTTP backend. FlowGuard removes incoming forwarding headers and writes canonical `X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Host`, and `X-Forwarded-Proto` values from its validated client identity.
+FlowGuard sits in front of your existing backend and can pass the validated
+client IP upstream in two ways:
+
+- [Headers upstream client IP](#headers-upstream-client-ip) is the compatible
+  configuration default and works with local or remote HTTP backends. The
+  backend must be configured to trust requests received through FlowGuard.
+- [Transparent upstream client IP](#transparent-upstream-client-ip) preserves
+  the validated client as the backend connection's TCP source address. It is
+  intended for same-host Linux deployments and has additional networking
+  prerequisites.
+
+Interactive `flowguard setup` checks both modes and prefers transparent mode
+for a new setup when its prerequisites are ready. Existing installations keep
+their configured mode. You can review readiness at any time with
+`flowguard network inspect`.
+
+Whichever mode you choose, keep direct backend exposure narrow and restart
+FlowGuard after changing startup-only networking settings.
+
+#### Headers upstream client IP
+
+The `headers` mode works with any HTTP backend. FlowGuard removes incoming
+forwarding headers and writes canonical `X-Forwarded-For`, `X-Real-IP`,
+`X-Forwarded-Host`, and `X-Forwarded-Proto` values from its validated client
+identity.
 
 The backend must trust only connections that actually came through FlowGuard. Trusting a public server address is not inherently unsafe, but it becomes a spoofing risk if an attacker or another local workload can reach the backend directly while supplying its own forwarding headers. FlowGuard installs a direct-port guard for its interception listeners; you should still keep backend exposure and local workload access as narrow as possible.
 

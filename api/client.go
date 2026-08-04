@@ -56,13 +56,40 @@ func (c *Client) buildURL(path string) string {
 // ErrNotModified is returned when the API returns 304 Not Modified
 var ErrNotModified = fmt.Errorf("configuration not modified")
 
-type configPathsPatch struct {
-	Host configPathsPatchHost `json:"host"`
+type ConfigPatch struct {
+	Host   *HostConfigPatch   `json:"host,omitempty"`
+	Server *ServerConfigPatch `json:"server,omitempty"`
 }
 
-type configPathsPatchHost struct {
+type HostConfigPatch struct {
 	CertPath        string `json:"cert_path,omitempty"`
 	NginxConfigPath string `json:"nginx_config_path,omitempty"`
+}
+
+type ServerConfigPatch struct {
+	Protocols      *ProtocolsConfigPatch `json:"protocols,omitempty"`
+	AdvertiseHTTP3 *bool                 `json:"advertise_http3,omitempty"`
+	Upstream       *UpstreamConfigPatch  `json:"upstream,omitempty"`
+}
+
+type ProtocolsConfigPatch struct {
+	HTTP1 bool `json:"http1"`
+	HTTP2 bool `json:"http2"`
+	HTTP3 bool `json:"http3"`
+}
+
+type UpstreamConfigPatch struct {
+	ClientIPMode string                          `json:"client_ip_mode"`
+	Transparent  *TransparentUpstreamConfigPatch `json:"transparent,omitempty"`
+}
+
+type TransparentUpstreamConfigPatch struct {
+	AddressPairs []AddressPairConfigPatch `json:"address_pairs"`
+}
+
+type AddressPairConfigPatch struct {
+	IPv4 string `json:"ipv4"`
+	IPv6 string `json:"ipv6"`
 }
 
 // GetConfig fetches the configuration from the API
@@ -120,20 +147,13 @@ func (c *Client) GetConfig(etag string) ([]byte, error) {
 	return body, nil
 }
 
-// PatchConfigPaths updates certificate source paths in the host configuration.
-func (c *Client) PatchConfigPaths(certPath, nginxConfigPath string) error {
+// PatchConfig updates setup-managed host and server configuration.
+func (c *Client) PatchConfig(payload ConfigPatch) error {
 	if c.hostKey == "" {
 		return fmt.Errorf("host key is required")
 	}
-	if certPath == "" && nginxConfigPath == "" {
-		return fmt.Errorf("at least one configuration path is required")
-	}
-
-	payload := configPathsPatch{
-		Host: configPathsPatchHost{
-			CertPath:        certPath,
-			NginxConfigPath: nginxConfigPath,
-		},
+	if payload.Host == nil && payload.Server == nil {
+		return fmt.Errorf("at least one configuration field is required")
 	}
 
 	body, err := json.Marshal(payload)
@@ -173,6 +193,20 @@ func (c *Client) PatchConfigPaths(certPath, nginxConfigPath string) error {
 	}
 
 	return nil
+}
+
+// PatchConfigPaths updates certificate source paths in the host configuration.
+func (c *Client) PatchConfigPaths(certPath, nginxConfigPath string) error {
+	if certPath == "" && nginxConfigPath == "" {
+		return fmt.Errorf("at least one configuration path is required")
+	}
+
+	return c.PatchConfig(ConfigPatch{
+		Host: &HostConfigPatch{
+			CertPath:        certPath,
+			NginxConfigPath: nginxConfigPath,
+		},
+	})
 }
 
 // HeartbeatPayload is the data sent in each heartbeat POST

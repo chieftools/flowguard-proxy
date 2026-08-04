@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"flowguard/api"
 	"flowguard/certmanager"
@@ -28,6 +27,7 @@ var (
 	setupIsInteractive = func() bool {
 		return isTerminal(os.Stdin)
 	}
+	setupInspectNetwork = proxy.InspectNetwork
 
 	setupPsaConfPath       = "/etc/psa/psa.conf"
 	setupNginxConfigPath   = "/etc/nginx/nginx.conf"
@@ -36,7 +36,7 @@ var (
 
 type setupAPIClient interface {
 	GetConfig(etag string) ([]byte, error)
-	PatchConfigPaths(certPath, nginxConfigPath string) error
+	PatchConfig(payload api.ConfigPatch) error
 	GetBaseURL() string
 }
 
@@ -145,11 +145,9 @@ func setupHostWithClientAndDiscovery(client setupAPIClient, discover bool) error
 		return err
 	}
 
-	if shouldRunSetupDiscovery(cfg, discover) {
-		finalBody, err = runSetupDiscovery(client, body, cfg)
-		if err != nil {
-			return err
-		}
+	finalBody, err = runSetupDiscovery(client, body, cfg, discover)
+	if err != nil {
+		return err
 	}
 
 	finalConfig, err := parseSetupConfig(finalBody)
@@ -169,7 +167,7 @@ func validateSetupNetwork(cfg *config.Config) error {
 	if cfg == nil || cfg.UpstreamClientIPMode() != config.UpstreamClientIPModeTransparent {
 		return nil
 	}
-	inspection, err := proxy.InspectNetwork(cfg, nil)
+	inspection, err := setupInspectNetwork(cfg, nil)
 	if err != nil {
 		return fmt.Errorf("inspect transparent upstream networking: %w", err)
 	}
@@ -189,16 +187,7 @@ func parseSetupConfig(body []byte) (*config.Config, error) {
 	return &cfg, nil
 }
 
-func shouldRunSetupDiscovery(cfg *config.Config, discover bool) bool {
-	if discover {
-		return true
-	}
-
-	certPath, nginxConfigPath := configuredSetupPaths(cfg)
-	return certPath == "" && nginxConfigPath == ""
-}
-
-func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config) ([]byte, error) {
+func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, rediscover bool) ([]byte, error) {
 	certPath, nginxConfigPath := configuredSetupPaths(cfg)
 	if !setupIsInteractive() {
 		if certPath == "" && nginxConfigPath == "" {
@@ -209,39 +198,41 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config) (
 
 	reader := bufio.NewReader(setupInput)
 
-	var certCandidate setupDiscoveryCandidate
-	var hasCertCandidate bool
-	var nginxCandidate setupDiscoveryCandidate
-	var hasNginxCandidate bool
-	if err := runSetupStep("Looking for server configuration", "Server configuration discovery complete", func() error {
-		certCandidate, hasCertCandidate = discoverPleskCertificatePath()
-		nginxCandidate, hasNginxCandidate = discoverNginxConfigPath()
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-
 	discoveredCertPath := ""
-	if hasCertCandidate {
-		printSetupDiscoveryCandidate(certCandidate)
-		accepted, err := promptYesNo(reader, setupOutput, "Use this server configuration?", true)
-		if err != nil {
-			return nil, err
-		}
-		if accepted {
-			discoveredCertPath = certCandidate.path
-		}
-	}
-
 	discoveredNginxConfigPath := ""
-	if discoveredCertPath == "" && hasNginxCandidate {
-		printSetupDiscoveryCandidate(nginxCandidate)
-		accepted, err := promptYesNo(reader, setupOutput, "Use this server configuration?", true)
-		if err != nil {
+	if rediscover || (certPath == "" && nginxConfigPath == "") {
+		var certCandidate setupDiscoveryCandidate
+		var hasCertCandidate bool
+		var nginxCandidate setupDiscoveryCandidate
+		var hasNginxCandidate bool
+		if err := runSetupStep("Looking for server configuration", "Server configuration discovery complete", func() error {
+			certCandidate, hasCertCandidate = discoverPleskCertificatePath()
+			nginxCandidate, hasNginxCandidate = discoverNginxConfigPath()
+			return nil
+		}); err != nil {
 			return nil, err
 		}
-		if accepted {
-			discoveredNginxConfigPath = nginxCandidate.path
+
+		if hasCertCandidate {
+			printSetupDiscoveryCandidate(certCandidate)
+			accepted, err := promptYesNo(reader, setupOutput, "Use this server configuration?", true)
+			if err != nil {
+				return nil, err
+			}
+			if accepted {
+				discoveredCertPath = certCandidate.path
+			}
+		}
+
+		if discoveredCertPath == "" && hasNginxCandidate {
+			printSetupDiscoveryCandidate(nginxCandidate)
+			accepted, err := promptYesNo(reader, setupOutput, "Use this server configuration?", true)
+			if err != nil {
+				return nil, err
+			}
+			if accepted {
+				discoveredNginxConfigPath = nginxCandidate.path
+			}
 		}
 	}
 
@@ -249,13 +240,26 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config) (
 		if certPath == "" && nginxConfigPath == "" {
 			warnMissingSetupPaths()
 		}
-		return body, nil
+	} else {
+		applySetupPaths(cfg, discoveredCertPath, discoveredNginxConfigPath)
+	}
+
+	serverPatch, err := promptSetupServerConfiguration(reader, cfg, rediscover)
+	if err != nil {
+		return nil, err
+	}
+	payload := api.ConfigPatch{Server: &serverPatch}
+	if discoveredCertPath != "" || discoveredNginxConfigPath != "" {
+		payload.Host = &api.HostConfigPatch{
+			CertPath:        discoveredCertPath,
+			NginxConfigPath: discoveredNginxConfigPath,
+		}
 	}
 
 	if err := runSetupStep("Updating FlowGuard control plane", "Updated FlowGuard control plane", func() error {
-		return client.PatchConfigPaths(discoveredCertPath, discoveredNginxConfigPath)
+		return client.PatchConfig(payload)
 	}); err != nil {
-		return nil, fmt.Errorf("failed to update configuration paths: %w", err)
+		return nil, fmt.Errorf("failed to update setup configuration: %w", err)
 	}
 
 	var updatedBody []byte
@@ -264,7 +268,7 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config) (
 		updatedBody, err = client.GetConfig("")
 		return err
 	}); err != nil {
-		return nil, fmt.Errorf("failed to re-fetch configuration after path update: %w", err)
+		return nil, fmt.Errorf("failed to re-fetch configuration after setup update: %w", err)
 	}
 
 	updatedCfg, err := parseSetupConfig(updatedBody)
@@ -272,12 +276,23 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config) (
 		return nil, err
 	}
 
-	updatedCertPath, updatedNginxConfigPath := configuredSetupPaths(updatedCfg)
-	if updatedCertPath == "" && updatedNginxConfigPath == "" {
-		return nil, fmt.Errorf("configuration did not include a certificate or nginx path after update")
+	if err := validateSetupPatchResponse(updatedCfg, payload); err != nil {
+		return nil, err
 	}
 
 	return updatedBody, nil
+}
+
+func applySetupPaths(cfg *config.Config, certPath, nginxConfigPath string) {
+	if cfg.Host == nil {
+		cfg.Host = &config.HostConfig{}
+	}
+	if certPath != "" {
+		cfg.Host.CertPath = certPath
+	}
+	if nginxConfigPath != "" {
+		cfg.Host.NginxConfigPath = nginxConfigPath
+	}
 }
 
 func configuredSetupPaths(cfg *config.Config) (string, string) {
@@ -380,7 +395,7 @@ func printSetupDiscoveryCandidate(candidate setupDiscoveryCandidate) {
 	)
 }
 
-func promptYesNo(reader *bufio.Reader, output io.Writer, question string, defaultYes bool) (bool, error) {
+func promptYesNoPlain(reader *bufio.Reader, output io.Writer, question string, defaultYes bool) (bool, error) {
 	defaultLabel := "y/N"
 	if defaultYes {
 		defaultLabel = "Y/n"
@@ -417,81 +432,24 @@ func warnMissingSetupPaths() {
 }
 
 func runSetupStep(activeMessage, successMessage string, action func() error) error {
-	spinner := startSetupSpinner(activeMessage)
-	if spinner == nil {
+	if currentSetupInteractionMode() == setupInteractionPlain {
 		fmt.Fprintf(setupOutput, "%s...\n", activeMessage)
+		err := action()
+		if err != nil {
+			fmt.Fprintf(setupOutput, "✗ %s failed\n", activeMessage)
+			return err
+		}
+		fmt.Fprintf(setupOutput, "✓ %s\n", successMessage)
+		return nil
 	}
 
-	err := action()
-	if spinner != nil {
-		spinner.stop(successMessage, err)
-		return err
-	}
-
+	err := runSetupSpinner(activeMessage, action)
 	if err != nil {
 		fmt.Fprintf(setupOutput, "✗ %s failed\n", activeMessage)
 		return err
 	}
-
 	fmt.Fprintf(setupOutput, "✓ %s\n", successMessage)
 	return nil
-}
-
-type setupSpinner struct {
-	activeMessage string
-	done          chan struct{}
-	stopCh        chan struct{}
-}
-
-func startSetupSpinner(activeMessage string) *setupSpinner {
-	if !setupOutputSupportsSpinner() {
-		return nil
-	}
-
-	spinner := &setupSpinner{
-		activeMessage: activeMessage,
-		done:          make(chan struct{}),
-		stopCh:        make(chan struct{}),
-	}
-
-	go func() {
-		defer close(spinner.done)
-
-		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-
-		index := 0
-		for {
-			fmt.Fprintf(setupOutput, "\r\033[2K%s %s...", frames[index%len(frames)], activeMessage)
-			index++
-
-			select {
-			case <-ticker.C:
-			case <-spinner.stopCh:
-				return
-			}
-		}
-	}()
-
-	return spinner
-}
-
-func (s *setupSpinner) stop(successMessage string, err error) {
-	close(s.stopCh)
-	<-s.done
-
-	if err != nil {
-		fmt.Fprintf(setupOutput, "\r\033[2K✗ %s failed\n", s.activeMessage)
-		return
-	}
-
-	fmt.Fprintf(setupOutput, "\r\033[2K✓ %s\n", successMessage)
-}
-
-func setupOutputSupportsSpinner() bool {
-	file, ok := setupOutput.(*os.File)
-	return ok && isTerminal(file)
 }
 
 func plural(count int, singular, plural string) string {
