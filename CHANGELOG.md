@@ -9,6 +9,12 @@ release.
 
 ## [Unreleased]
 
+## [0.15.2]
+
+### Changed
+
+- Cleaned up interactive setup indentation and replaced the duplicate successful network-inspection report with a concise transparent-network readiness confirmation. ([e96a3da3](https://github.com/chieftools/flowguard-proxy/commit/e96a3da3cb95338d091462d6eb4240946a19d830))
+
 ## [0.15.1]
 
 ### Added
