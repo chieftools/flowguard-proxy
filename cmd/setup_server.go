@@ -23,16 +23,6 @@ const (
 
 func promptSetupServerConfiguration(reader *bufio.Reader, cfg *config.Config, rediscover bool) (api.ServerConfigPatch, error) {
 	inspection := inspectSetupNetwork(cfg)
-	if len(inspection.Pairing.Unresolved) > 0 {
-		updated, err := promptSetupAddressPairs(reader, cfg, inspection)
-		if err != nil {
-			return api.ServerConfigPatch{}, err
-		}
-		if updated {
-			inspection = inspectSetupNetwork(cfg)
-		}
-	}
-
 	printSetupNetworkOptions(inspection)
 	defaultMode := config.UpstreamClientIPModeHeaders
 	allowConfiguredTransparent := false
@@ -42,14 +32,12 @@ func promptSetupServerConfiguration(reader *bufio.Reader, cfg *config.Config, re
 		if allowConfiguredTransparent && !inspection.TransparentReady {
 			fmt.Fprintln(setupOutput, "  Transparent mode remains the default because it is already configured; resolve the requirements above before running FlowGuard.")
 		}
-	} else if !rediscover && inspection.TransparentReady {
+	} else if setupTransparentCanBeSelected(inspection, false) {
 		defaultMode = config.UpstreamClientIPModeTransparent
 	}
 
-	mode, protocols, advertiseHTTP3, err := promptSetupServerSettings(
+	mode, err := promptSetupMode(
 		reader,
-		cfg,
-		rediscover,
 		inspection,
 		defaultMode,
 		allowConfiguredTransparent,
@@ -57,6 +45,25 @@ func promptSetupServerConfiguration(reader *bufio.Reader, cfg *config.Config, re
 	if err != nil {
 		return api.ServerConfigPatch{}, err
 	}
+	if mode == config.UpstreamClientIPModeTransparent && len(inspection.Pairing.Unresolved) > 0 {
+		updated, err := promptSetupAddressPairs(reader, cfg, inspection)
+		if err != nil {
+			return api.ServerConfigPatch{}, err
+		}
+		if !updated {
+			return api.ServerConfigPatch{}, fmt.Errorf("transparent mode requires complete address pairing")
+		}
+		inspection = inspectSetupNetwork(cfg)
+		if !inspection.TransparentReady && !allowConfiguredTransparent {
+			return api.ServerConfigPatch{}, fmt.Errorf("transparent mode remains unavailable after configuring address pairs")
+		}
+	}
+
+	protocols, advertiseHTTP3, err := promptSetupServerProtocols(reader, cfg, rediscover)
+	if err != nil {
+		return api.ServerConfigPatch{}, err
+	}
+	printSetupServerSettingsSummary(mode, protocols, advertiseHTTP3)
 
 	upstream := &api.UpstreamConfigPatch{ClientIPMode: mode}
 	if mode == config.UpstreamClientIPModeTransparent {
@@ -93,20 +100,7 @@ func inspectSetupNetwork(cfg *config.Config) proxy.NetworkInspection {
 }
 
 func promptSetupAddressPairs(reader *bufio.Reader, cfg *config.Config, inspection proxy.NetworkInspection) (bool, error) {
-	var ipv4, ipv6 []string
-	for _, raw := range inspection.Pairing.Unresolved {
-		addr, err := netip.ParseAddr(raw)
-		if err != nil {
-			continue
-		}
-		if addr.Is4() {
-			ipv4 = append(ipv4, addr.String())
-		} else if addr.Is6() && !addr.Is4In6() {
-			ipv6 = append(ipv6, addr.String())
-		}
-	}
-	sort.Strings(ipv4)
-	sort.Strings(ipv6)
+	ipv4, ipv6 := setupUnresolvedAddressFamilies(inspection.Pairing.Unresolved)
 
 	fmt.Fprintln(setupOutput, "\nTransparent mode needs an IPv4/IPv6 mapping for each dual-stack bind address.")
 	fmt.Fprintf(setupOutput, "  Unpaired IPv4 addresses: %s\n", setupListOrNone(ipv4))
@@ -145,6 +139,41 @@ func promptSetupAddressPairs(reader *bufio.Reader, cfg *config.Config, inspectio
 	return true, nil
 }
 
+func setupUnresolvedAddressFamilies(unresolved []string) ([]string, []string) {
+	var ipv4, ipv6 []string
+	for _, raw := range unresolved {
+		addr, err := netip.ParseAddr(raw)
+		if err != nil {
+			continue
+		}
+		if addr.Is4() {
+			ipv4 = append(ipv4, addr.String())
+		} else if addr.Is6() && !addr.Is4In6() {
+			ipv6 = append(ipv6, addr.String())
+		}
+	}
+	sort.Strings(ipv4)
+	sort.Strings(ipv6)
+	return ipv4, ipv6
+}
+
+func setupTransparentCanBeSelected(inspection proxy.NetworkInspection, allowConfiguredTransparent bool) bool {
+	if inspection.TransparentReady || allowConfiguredTransparent {
+		return true
+	}
+	if len(inspection.Pairing.Unresolved) == 0 {
+		return false
+	}
+	for _, prerequisite := range inspection.Prerequisites {
+		if !prerequisite.Ready && prerequisite.Name != "address pairing" {
+			return false
+		}
+	}
+
+	ipv4, ipv6 := setupUnresolvedAddressFamilies(inspection.Pairing.Unresolved)
+	return len(ipv4) > 0 && len(ipv4) == len(ipv6)
+}
+
 func setSetupAddressPairs(cfg *config.Config, pairs []config.AddressPair) {
 	if cfg.Server == nil {
 		cfg.Server = &config.ServerConfig{}
@@ -166,6 +195,9 @@ func printSetupNetworkOptions(inspection proxy.NetworkInspection) {
 	transparentStatus := "available"
 	if !inspection.TransparentReady {
 		transparentStatus = "unavailable"
+		if setupTransparentCanBeSelected(inspection, false) {
+			transparentStatus = "available after address pairing"
+		}
 	}
 	fmt.Fprintf(setupOutput, "    transparent: %s\n", transparentStatus)
 	fmt.Fprintf(setupOutput, "      Documentation: %s\n", setupTransparentDocumentationURL)
@@ -190,62 +222,29 @@ func printSetupNetworkOptions(inspection proxy.NetworkInspection) {
 }
 
 func promptSetupMode(reader *bufio.Reader, inspection proxy.NetworkInspection, defaultMode string, allowConfiguredTransparent bool) (string, error) {
-	options := []string{"headers", "transparent"}
-	defaultIndex := 0
-	if defaultMode == config.UpstreamClientIPModeTransparent {
-		defaultIndex = 1
-	}
-
-	for {
-		selected, err := promptChoice(reader, setupOutput, "Choose upstream client IP mode", options, defaultIndex)
-		if err != nil {
-			return "", err
-		}
-		mode := options[selected]
-		if mode != config.UpstreamClientIPModeTransparent || inspection.TransparentReady || allowConfiguredTransparent {
-			return mode, nil
-		}
-		fmt.Fprintln(setupOutput, "  Transparent mode cannot be selected until the requirements above are met.")
-		defaultIndex = 0
-	}
-}
-
-func promptSetupServerSettings(
-	reader *bufio.Reader,
-	cfg *config.Config,
-	rediscover bool,
-	inspection proxy.NetworkInspection,
-	defaultMode string,
-	allowConfiguredTransparent bool,
-) (string, config.ProtocolSettings, bool, error) {
+	canSelectTransparent := setupTransparentCanBeSelected(inspection, allowConfiguredTransparent)
 	if currentSetupInteractionMode() == setupInteractionPlain {
-		mode, err := promptSetupMode(reader, inspection, defaultMode, allowConfiguredTransparent)
-		if err != nil {
-			return "", config.ProtocolSettings{}, false, err
+		options := []string{"headers", "transparent"}
+		defaultIndex := 0
+		if defaultMode == config.UpstreamClientIPModeTransparent {
+			defaultIndex = 1
 		}
-		protocols, err := promptSetupProtocols(reader, cfg, rediscover)
-		if err != nil {
-			return "", config.ProtocolSettings{}, false, err
-		}
-		advertiseHTTP3 := false
-		if protocols.HTTP3 {
-			defaultAdvertise := rediscover && cfg.AdvertiseHTTP3()
-			advertiseHTTP3, err = promptYesNo(reader, setupOutput, "Advertise HTTP/3 support to clients?", defaultAdvertise)
+
+		for {
+			selected, err := promptChoice(reader, setupOutput, "Choose upstream client IP mode", options, defaultIndex)
 			if err != nil {
-				return "", config.ProtocolSettings{}, false, err
+				return "", err
 			}
+			mode := options[selected]
+			if mode != config.UpstreamClientIPModeTransparent || canSelectTransparent {
+				return mode, nil
+			}
+			fmt.Fprintln(setupOutput, "  Transparent mode cannot be selected until the requirements above are met.")
+			defaultIndex = 0
 		}
-		printSetupServerSettingsSummary(mode, protocols, advertiseHTTP3)
-		return mode, protocols, advertiseHTTP3, nil
 	}
 
 	mode := defaultMode
-	protocolDefaults := config.DefaultProtocolSettings()
-	if rediscover {
-		protocolDefaults = cfg.ProtocolSettings()
-	}
-	protocols := setupEnabledProtocolNames(protocolDefaults)
-
 	modeField := huh.NewSelect[string]().
 		Title("Upstream client IP mode").
 		Description("Choose how backends receive the validated client IP.").
@@ -255,19 +254,46 @@ func promptSetupServerSettings(
 		).
 		Value(&mode).
 		Validate(func(selected string) error {
-			if selected == config.UpstreamClientIPModeTransparent && !inspection.TransparentReady && !allowConfiguredTransparent {
+			if selected == config.UpstreamClientIPModeTransparent && !canSelectTransparent {
 				return fmt.Errorf("transparent mode is unavailable; resolve the requirements shown above")
 			}
 			return nil
 		})
+	form := newSetupForm(huh.NewGroup(modeField).Title("Server settings · Client IP"))
+	if err := runSetupForm(form, reader, setupOutput); err != nil {
+		return "", err
+	}
+	return mode, nil
+}
+
+func promptSetupServerProtocols(reader *bufio.Reader, cfg *config.Config, rediscover bool) (config.ProtocolSettings, bool, error) {
+	if currentSetupInteractionMode() == setupInteractionPlain {
+		protocols, err := promptSetupProtocols(reader, cfg, rediscover)
+		if err != nil {
+			return config.ProtocolSettings{}, false, err
+		}
+		advertiseHTTP3 := false
+		if protocols.HTTP3 {
+			defaultAdvertise := rediscover && cfg.AdvertiseHTTP3()
+			advertiseHTTP3, err = promptYesNo(reader, setupOutput, "Advertise HTTP/3 support to clients?", defaultAdvertise)
+			if err != nil {
+				return config.ProtocolSettings{}, false, err
+			}
+		}
+		return protocols, advertiseHTTP3, nil
+	}
+
+	protocolDefaults := config.DefaultProtocolSettings()
+	if rediscover {
+		protocolDefaults = cfg.ProtocolSettings()
+	}
+	protocols := setupEnabledProtocolNames(protocolDefaults)
+
 	protocolField := newSetupProtocolField(&protocols)
 
-	form := newSetupForm(
-		huh.NewGroup(modeField).Title("Server settings · Client IP"),
-		huh.NewGroup(protocolField).Title("Server settings · Protocols"),
-	)
+	form := newSetupForm(huh.NewGroup(protocolField).Title("Server settings · Protocols"))
 	if err := runSetupForm(form, reader, setupOutput); err != nil {
-		return "", config.ProtocolSettings{}, false, err
+		return config.ProtocolSettings{}, false, err
 	}
 
 	selectedProtocols := config.ProtocolSettings{
@@ -281,12 +307,11 @@ func promptSetupServerSettings(
 		var err error
 		advertiseHTTP3, err = promptYesNo(reader, setupOutput, "Advertise HTTP/3 support to clients?", defaultAdvertise)
 		if err != nil {
-			return "", config.ProtocolSettings{}, false, err
+			return config.ProtocolSettings{}, false, err
 		}
 	}
 
-	printSetupServerSettingsSummary(mode, selectedProtocols, advertiseHTTP3)
-	return mode, selectedProtocols, advertiseHTTP3, nil
+	return selectedProtocols, advertiseHTTP3, nil
 }
 
 func newSetupProtocolField(protocols *[]string) *huh.MultiSelect[string] {

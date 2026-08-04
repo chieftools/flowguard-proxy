@@ -162,6 +162,8 @@ func TestPromptSetupServerConfigurationConfiguresAmbiguousAddressPairs(t *testin
 			}}},
 		}, nil
 	}
+	var output bytes.Buffer
+	setupOutput = &output
 	reader := bufio.NewReader(strings.NewReader(strings.Repeat("\n", 7)))
 	cfg := &config.Config{}
 
@@ -175,6 +177,45 @@ func TestPromptSetupServerConfigurationConfiguresAmbiguousAddressPairs(t *testin
 	pairs := patch.Upstream.Transparent.AddressPairs
 	if len(pairs) != 1 || pairs[0].IPv4 != "192.0.2.10" || pairs[0].IPv6 != "2001:db8::10" {
 		t.Fatalf("unexpected address pairs: %+v", pairs)
+	}
+	modePrompt := strings.Index(output.String(), "Choose upstream client IP mode")
+	pairPrompt := strings.Index(output.String(), "Configure address pairs now?")
+	if modePrompt == -1 || pairPrompt == -1 || modePrompt > pairPrompt {
+		t.Fatalf("expected client IP mode before address pairing, got:\n%s", output.String())
+	}
+}
+
+func TestPromptSetupServerConfigurationSkipsAddressPairingForHeaders(t *testing.T) {
+	resetSetupTestGlobals(t)
+	setupInspectNetwork = func(*config.Config, []string) (proxy.NetworkInspection, error) {
+		return proxy.NetworkInspection{
+			HeaderReady:      true,
+			TransparentReady: false,
+			Pairing: proxy.AddressPairResolution{
+				Unresolved: []string{"192.0.2.10", "2001:db8::10"},
+			},
+			Prerequisites: []proxy.NetworkPrerequisite{{
+				Name: "address pairing", Ready: false, Details: "unresolved bind addresses",
+			}},
+		}, nil
+	}
+	var output bytes.Buffer
+	setupOutput = &output
+	reader := bufio.NewReader(strings.NewReader("1\n\n\n"))
+	cfg := &config.Config{}
+
+	patch, err := promptSetupServerConfiguration(reader, cfg, false)
+	if err != nil {
+		t.Fatalf("promptSetupServerConfiguration: %v", err)
+	}
+	if patch.Upstream.ClientIPMode != config.UpstreamClientIPModeHeaders {
+		t.Fatalf("expected headers mode, got %s", patch.Upstream.ClientIPMode)
+	}
+	if len(cfg.TransparentUpstreamSettings().AddressPairs) != 0 {
+		t.Fatalf("expected no configured address pairs, got %+v", cfg.TransparentUpstreamSettings().AddressPairs)
+	}
+	if strings.Contains(output.String(), "Configure address pairs now?") || strings.Contains(output.String(), "IPv6 counterpart") {
+		t.Fatalf("expected address pairing to be skipped for headers mode, got:\n%s", output.String())
 	}
 }
 
