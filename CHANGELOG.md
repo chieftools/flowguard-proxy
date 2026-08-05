@@ -9,6 +9,12 @@ release.
 
 ## [Unreleased]
 
+## [0.16.0]
+
+### Added
+
+- Added read-only Traefik v2/v3 `acme.json` certificate loading, renewal watching, and setup discovery. ([b9f93cb2](https://github.com/chieftools/flowguard-proxy/commit/b9f93cb2d274d99e652f8a23436e00a5e122d4f7))
+
 ## [0.15.2]
 
 ### Changed
@@ -511,7 +517,11 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.16.0
+[0.15.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.15.2
+[0.15.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.15.1
+[0.15.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.15.0
 [0.14.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.14.0
 [0.13.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.13.0
 [0.12.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.12.1
