@@ -99,7 +99,7 @@ func (s *Server) firewallRules() ([]firewallRuleSpec, string, error) {
 			firewallRuleSpec{
 				command:   iptablesCmd,
 				table:     "nat",
-				setupVerb: "-A",
+				setupVerb: "-I", // Precede Docker and other published-port DNAT rules.
 				chain:     "PREROUTING",
 				args: []string{
 					"-i", iface,
@@ -143,7 +143,8 @@ func (s *Server) CheckPortRedirect() ([]firewallRuleSpec, error) {
 
 func (s *Server) RepairPortRedirect(_ []firewallRuleSpec) error {
 	// Reinstall the complete rule set so the DNAT-only ACCEPT rule is always
-	// inserted above the direct-port DROP guard, even after a partial loss.
+	// above the direct-port DROP guard and redirects return to the front of
+	// PREROUTING, even after a partial loss.
 	return s.SetupPortRedirect()
 }
 

@@ -14,10 +14,22 @@ type fakeFirewallRunner struct {
 	failures  map[string]error
 }
 
+type orderedFirewallRunner struct {
+	fallback   *fakeFirewallRunner
+	prerouting []string
+}
+
 func newFakeFirewallRunner() *fakeFirewallRunner {
 	return &fakeFirewallRunner{
 		installed: make(map[string]bool),
 		failures:  make(map[string]error),
+	}
+}
+
+func newOrderedFirewallRunner(prerouting ...string) *orderedFirewallRunner {
+	return &orderedFirewallRunner{
+		fallback:   newFakeFirewallRunner(),
+		prerouting: append([]string(nil), prerouting...),
 	}
 }
 
@@ -53,6 +65,44 @@ func (f *fakeFirewallRunner) Run(name string, args ...string) error {
 	}
 }
 
+func (f *orderedFirewallRunner) Run(name string, args ...string) error {
+	if name != "iptables" || len(args) < 4 || args[0] != "-t" || args[1] != "nat" || args[3] != "PREROUTING" {
+		return f.fallback.Run(name, args...)
+	}
+
+	verb := args[2]
+	rule := strings.Join(args[4:], " ")
+	index := -1
+	for i, installed := range f.prerouting {
+		if installed == rule {
+			index = i
+			break
+		}
+	}
+
+	switch verb {
+	case "-C":
+		if index >= 0 {
+			return nil
+		}
+		return errors.New("missing rule")
+	case "-I":
+		f.prerouting = append([]string{rule}, f.prerouting...)
+		return nil
+	case "-A":
+		f.prerouting = append(f.prerouting, rule)
+		return nil
+	case "-D":
+		if index < 0 {
+			return errors.New("missing rule")
+		}
+		f.prerouting = append(f.prerouting[:index], f.prerouting[index+1:]...)
+		return nil
+	default:
+		return nil
+	}
+}
+
 func firewallCommandKey(name string, args []string) string {
 	return strings.Join(append([]string{name}, args...), " ")
 }
@@ -79,11 +129,11 @@ func normalizeFirewallCommand(name string, args []string) string {
 	return firewallCommandKey(name, normalized)
 }
 
-func newTestServer(bindAddr string, redirPort string, runner *fakeFirewallRunner) *Server {
+func newTestServer(bindAddr string, redirPort string, runner firewallRunner) *Server {
 	return newTestServerWithScheme("http", bindAddr, redirPort, runner)
 }
 
-func newTestServerWithScheme(scheme string, bindAddr string, redirPort string, runner *fakeFirewallRunner) *Server {
+func newTestServerWithScheme(scheme string, bindAddr string, redirPort string, runner firewallRunner) *Server {
 	server := NewServer(&ServerConfig{
 		scheme:    scheme,
 		verbose:   true,
@@ -170,7 +220,7 @@ func TestServerFirewallRulesBuildConsistently(t *testing.T) {
 			dnatArgs := rules[2].commandArgs(rules[2].setupVerb)
 			expectedDNAT := []string{
 				"-t", "nat",
-				"-A", "PREROUTING",
+				"-I", "PREROUTING",
 				"-i", "eth0",
 				"-d", tt.bindAddr,
 				"-p", "tcp",
@@ -223,7 +273,7 @@ func TestServerFirewallRulesIncludeUDPForHTTPS(t *testing.T) {
 		},
 		{
 			"-t", "nat",
-			"-A", "PREROUTING",
+			"-I", "PREROUTING",
 			"-i", "eth0",
 			"-d", "203.0.113.10",
 			"-p", "tcp",
@@ -254,7 +304,7 @@ func TestServerFirewallRulesIncludeUDPForHTTPS(t *testing.T) {
 		},
 		{
 			"-t", "nat",
-			"-A", "PREROUTING",
+			"-I", "PREROUTING",
 			"-i", "eth0",
 			"-d", "203.0.113.10",
 			"-p", "udp",
@@ -298,6 +348,48 @@ func containsArgValue(args []string, key string, value string) bool {
 		}
 	}
 	return false
+}
+
+func TestServerSetupPortRedirectPrependsBeforeDocker(t *testing.T) {
+	const dockerJump = "-m addrtype --dst-type LOCAL -j DOCKER"
+	runner := newOrderedFirewallRunner(dockerJump)
+	server := newTestServer("203.0.113.10", "80", runner)
+
+	if err := server.SetupPortRedirect(); err != nil {
+		t.Fatalf("SetupPortRedirect: %v", err)
+	}
+	if len(runner.prerouting) != 2 {
+		t.Fatalf("expected FlowGuard and Docker rules, got %#v", runner.prerouting)
+	}
+	if !strings.Contains(runner.prerouting[0], "--comment FlowGuard") {
+		t.Fatalf("expected FlowGuard rule first, got %#v", runner.prerouting)
+	}
+	if runner.prerouting[1] != dockerJump {
+		t.Fatalf("expected Docker jump to remain second, got %#v", runner.prerouting)
+	}
+
+	server.CleanupPortRedirect()
+	if !reflect.DeepEqual(runner.prerouting, []string{dockerJump}) {
+		t.Fatalf("expected cleanup to preserve Docker jump, got %#v", runner.prerouting)
+	}
+}
+
+func TestManagerEvaluateFirewallRepairsRedirectAheadOfDocker(t *testing.T) {
+	const dockerJump = "-m addrtype --dst-type LOCAL -j DOCKER"
+	runner := newOrderedFirewallRunner(dockerJump)
+	server := newTestServer("203.0.113.10", "80", runner)
+	manager := &Manager{
+		config:  &Config{},
+		servers: []*Server{server},
+	}
+
+	state := manager.evaluateFirewall(true)
+	if state.Status != firewallStatusHealthy {
+		t.Fatalf("expected healthy status, got %q", state.Status)
+	}
+	if len(runner.prerouting) != 2 || !strings.Contains(runner.prerouting[0], "--comment FlowGuard") {
+		t.Fatalf("expected repaired FlowGuard rule ahead of Docker, got %#v", runner.prerouting)
+	}
 }
 
 func TestManagerSetupPortRedirectsFailsOnError(t *testing.T) {
