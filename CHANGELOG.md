@@ -9,6 +9,12 @@ release.
 
 ## [Unreleased]
 
+## [0.16.1]
+
+### Fixed
+
+- Ensured FlowGuard traffic interception takes precedence over Docker-published backend port redirects. ([3b955c91](https://github.com/chieftools/flowguard-proxy/commit/3b955c91d7930e662be00f40edf0e72e5198105b))
+
 ## [0.16.0]
 
 ### Added
@@ -517,7 +523,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.16.1...HEAD
+[0.16.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.16.1
 [0.16.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.16.0
 [0.15.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.15.2
 [0.15.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.15.1
