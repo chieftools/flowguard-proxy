@@ -96,11 +96,15 @@
                 },
                 "cert_path": {
                     "type": "string",
-                    "description": "Path to directory containing combined SSL certificate+key files. Optional - can be used alone or with nginx_config_path."
+                    "description": "Path to directory containing combined SSL certificate+key files. Optional - can be combined with other certificate sources."
+                },
+                "acme_path": {
+                    "type": "string",
+                    "description": "Path to a Traefik v2/v3 acme.json file containing bundled certificates and private keys. Optional - can be combined with other certificate sources."
                 },
                 "nginx_config_path": {
                     "type": "string",
-                    "description": "Path to NGINX configuration file to parse for SSL certificates. Optional - can be used alone or with cert_path."
+                    "description": "Path to NGINX configuration file to parse for SSL certificates. Optional - can be combined with other certificate sources."
                 },
                 "default_hostname": {
                     "type": "string",

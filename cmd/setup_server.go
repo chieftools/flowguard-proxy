@@ -519,12 +519,15 @@ func setupListOrNone(items []string) string {
 
 func validateSetupPatchResponse(cfg *config.Config, payload api.ConfigPatch) error {
 	if payload.Host != nil {
-		certPath, nginxConfigPath := configuredSetupPaths(cfg)
+		certPath, acmePath, nginxConfigPath := configuredSetupPaths(cfg)
 		if payload.Host.CertPath != "" && certPath != payload.Host.CertPath {
 			return fmt.Errorf("updated configuration did not include certificate path %s", payload.Host.CertPath)
 		}
 		if payload.Host.NginxConfigPath != "" && nginxConfigPath != payload.Host.NginxConfigPath {
 			return fmt.Errorf("updated configuration did not include nginx path %s", payload.Host.NginxConfigPath)
+		}
+		if payload.Host.ACMEPath != "" && acmePath != payload.Host.ACMEPath {
+			return fmt.Errorf("updated configuration did not include Traefik ACME path %s", payload.Host.ACMEPath)
 		}
 	}
 	if payload.Server == nil {

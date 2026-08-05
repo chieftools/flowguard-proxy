@@ -75,6 +75,53 @@ func ProbeCertificateDirectorySummary(path string) (ProbeSummary, error) {
 	return summary, nil
 }
 
+// ProbeTraefikACMEFile reports whether path is a Traefik v2/v3 acme.json file
+// containing at least one usable certificate.
+func ProbeTraefikACMEFile(path string) error {
+	_, err := ProbeTraefikACMEFileSummary(path)
+	return err
+}
+
+// ProbeTraefikACMEFileSummary validates and summarizes a Traefik ACME store.
+func ProbeTraefikACMEFileSummary(path string) (ProbeSummary, error) {
+	summary := ProbeSummary{Path: path}
+
+	if path == "" {
+		return summary, fmt.Errorf("Traefik ACME storage path is required")
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return summary, fmt.Errorf("Traefik ACME storage is not readable: %w", err)
+	}
+	if info.IsDir() {
+		return summary, fmt.Errorf("Traefik ACME storage path is not a file: %s", path)
+	}
+
+	cm := &Manager{}
+	certificates, err := cm.loadTraefikACMECertificates(path, false)
+	if err != nil {
+		return summary, err
+	}
+
+	hostnames := make(map[string]bool)
+	for _, certificate := range certificates {
+		if certificate == nil || certificate.cert == nil || certificate.cert.Leaf == nil {
+			continue
+		}
+		summary.CertificateCount++
+		for _, hostname := range cm.getCertificateHostnames(certificate.cert.Leaf) {
+			hostnames[hostname] = true
+		}
+	}
+	summary.HostnameCount = len(hostnames)
+	if summary.CertificateCount == 0 {
+		return summary, fmt.Errorf("no valid certificates found in %s", path)
+	}
+
+	return summary, nil
+}
+
 // ProbeNginxConfig reports whether path can be read and parsed as an NGINX
 // config. It does not require certificate directives to be present.
 func ProbeNginxConfig(path string) error {

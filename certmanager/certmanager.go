@@ -23,6 +23,7 @@ import (
 type Config struct {
 	Verbose         bool
 	CertPath        string
+	ACMEPath        string
 	TLSNextProtos   []string
 	NginxConfigPath string
 	DefaultHostname string
@@ -47,6 +48,7 @@ type Manager struct {
 	cacheMutex        sync.RWMutex
 	watchedDirs       map[string]bool                       // Track which directories we're watching
 	hostnameCache     map[string][]*certificateWithMetadata // Maps hostname to array of certificates
+	acmeCertificates  []*certificateWithMetadata            // Last successfully parsed Traefik ACME certificates
 	nginxCertFiles    []string                              // List of certificate files referenced in NGINX config
 	nginxConfigFiles  []string                              // List of NGINX config files to watch
 	nginxConfigLoaded bool                                  // True when the configured NGINX config was read successfully
@@ -373,6 +375,55 @@ func (cm *Manager) TestCertificates() {
 		}
 	}
 
+	// Test certificates from Traefik ACME storage if provided.
+	if cm.config.ACMEPath != "" {
+		log.Printf("\nTesting certificates from Traefik ACME storage %s...\n", cm.config.ACMEPath)
+
+		data, err := os.ReadFile(cm.config.ACMEPath)
+		if err != nil {
+			log.Printf("✗ %s: Failed to read ACME storage: %v", cm.config.ACMEPath, err)
+			failCount++
+		} else {
+			entries, err := parseTraefikACME(data)
+			if err != nil {
+				log.Printf("✗ %s: Failed to parse ACME storage: %v", cm.config.ACMEPath, err)
+				failCount++
+			} else {
+				for _, entry := range entries {
+					sourceID := traefikACMESourceID(cm.config.ACMEPath, entry)
+					if entry.DecodeError != nil {
+						log.Printf("✗ %s: Failed to decode: %v", sourceID, entry.DecodeError)
+						failCount++
+						continue
+					}
+					cert, err := parseACMECertificateBundle(entry.Certificate, entry.Key)
+					if err != nil {
+						log.Printf("✗ %s: Failed to parse: %v", sourceID, err)
+						failCount++
+						continue
+					}
+
+					hostnames := cm.getCertificateHostnames(cert.Leaf)
+					notAfter := cert.Leaf.NotAfter.Format("2006-01-02")
+					switch {
+					case time.Now().After(cert.Leaf.NotAfter):
+						log.Printf("✗ %s: EXPIRED (expired %s) - Hosts: %v", sourceID, notAfter, hostnames)
+						failCount++
+					case len(hostnames) == 0:
+						log.Printf("✗ %s: No valid hostnames", sourceID)
+						failCount++
+					case time.Now().Add(30 * 24 * time.Hour).After(cert.Leaf.NotAfter):
+						log.Printf("⚠ %s: EXPIRING SOON (expires %s) - Hosts: %v", sourceID, notAfter, hostnames)
+						successCount++
+					default:
+						log.Printf("✓ %s: Valid until %s - Hosts: %v", sourceID, notAfter, hostnames)
+						successCount++
+					}
+				}
+			}
+		}
+	}
+
 	// Test certificates from NGINX config if provided
 	if cm.config.NginxConfigPath != "" {
 		pairs, _, err := parseNginxConfig(cm.config.NginxConfigPath, cm.config.Verbose)
@@ -464,6 +515,23 @@ func (cm *Manager) Stop() {
 func (cm *Manager) setupWatches() {
 	if cm.watcher == nil {
 		return
+	}
+
+	// Watch the parent directory so both in-place writes and file replacement
+	// used by certificate renewal are detected.
+	if cm.config.ACMEPath != "" {
+		acmeDir := filepath.Dir(cm.config.ACMEPath)
+		if !cm.watchedDirs[acmeDir] {
+			err := cm.watcher.Add(acmeDir)
+			if err != nil {
+				log.Printf("[cert_manager] Warning: Failed to watch Traefik ACME directory %s: %v", acmeDir, err)
+			} else {
+				cm.watchedDirs[acmeDir] = true
+				if cm.config.Verbose {
+					log.Printf("[cert_manager] Watching Traefik ACME directory %s for changes", acmeDir)
+				}
+			}
+		}
 	}
 
 	// Watch certificate directory if provided
@@ -593,6 +661,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 
 	successCount := 0
 	fromDir := 0
+	fromACME := 0
 	fromNginx := 0
 	nginxConfigLoaded := false
 
@@ -647,6 +716,32 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 					}
 				}
 			}
+		}
+	}
+
+	// Load certificates embedded in a Traefik v2/v3 acme.json file. A
+	// transient file read or JSON error retains the last known-good entries.
+	var acmeCertificates []*certificateWithMetadata
+	if cm.config.ACMEPath != "" {
+		loaded, err := cm.loadTraefikACMECertificatesWithRetry(cm.config.ACMEPath, verbose)
+		if err != nil {
+			log.Printf("[cert_manager] Error reading Traefik ACME storage %s: %v; retaining last known-good certificates", cm.config.ACMEPath, err)
+			cm.cacheMutex.RLock()
+			acmeCertificates = slices.Clone(cm.acmeCertificates)
+			cm.cacheMutex.RUnlock()
+		} else {
+			acmeCertificates = loaded
+		}
+
+		for _, metadata := range acmeCertificates {
+			if metadata == nil || metadata.cert == nil || metadata.cert.Leaf == nil {
+				continue
+			}
+			for _, name := range cm.getCertificateHostnames(metadata.cert.Leaf) {
+				tempHostnameCache[name] = append(tempHostnameCache[name], metadata)
+			}
+			successCount++
+			fromACME++
 		}
 	}
 
@@ -734,6 +829,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	// Atomically swap the cache
 	cm.cacheMutex.Lock()
 	cm.hostnameCache = tempHostnameCache
+	cm.acmeCertificates = acmeCertificates
 	cm.nginxConfigLoaded = nginxConfigLoaded
 	cm.cacheMutex.Unlock()
 
@@ -741,6 +837,9 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	var sources []string
 	if fromDir > 0 {
 		sources = append(sources, fmt.Sprintf("%d from directory", fromDir))
+	}
+	if fromACME > 0 {
+		sources = append(sources, fmt.Sprintf("%d from Traefik ACME storage", fromACME))
 	}
 	if fromNginx > 0 {
 		sources = append(sources, fmt.Sprintf("%d from NGINX config", fromNginx))

@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -36,6 +37,7 @@ func resetSetupTestGlobals(t *testing.T) {
 	oldStreamsAreTerminal := setupStreamsAreTerminal
 	oldRunForm := setupRunForm
 	oldPsaConfPath := setupPsaConfPath
+	oldACMEPaths := setupACMEPaths
 	oldNginxConfigPath := setupNginxConfigPath
 	oldPleskRootFallback := setupPleskRootFallback
 
@@ -59,6 +61,7 @@ func resetSetupTestGlobals(t *testing.T) {
 	setupLookupEnvironment = func(string) (string, bool) { return "", false }
 	setupStreamsAreTerminal = func() bool { return false }
 	setupPsaConfPath = filepath.Join(t.TempDir(), "missing-psa.conf")
+	setupACMEPaths = nil
 	setupNginxConfigPath = filepath.Join(t.TempDir(), "missing-nginx.conf")
 	setupPleskRootFallback = nil
 
@@ -75,6 +78,7 @@ func resetSetupTestGlobals(t *testing.T) {
 		setupStreamsAreTerminal = oldStreamsAreTerminal
 		setupRunForm = oldRunForm
 		setupPsaConfPath = oldPsaConfPath
+		setupACMEPaths = oldACMEPaths
 		setupNginxConfigPath = oldNginxConfigPath
 		setupPleskRootFallback = oldPleskRootFallback
 	})
@@ -130,6 +134,16 @@ func writeSetupTestPleskCertRoot(t *testing.T) (string, string) {
 func writeSetupTestCombinedPEM(t *testing.T, path string) {
 	t.Helper()
 
+	certPEM, keyPEM := makeSetupTestCertificatePEM(t)
+	body := append(certPEM, keyPEM...)
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatalf("write combined PEM: %v", err)
+	}
+}
+
+func makeSetupTestCertificatePEM(t *testing.T) ([]byte, []byte) {
+	t.Helper()
+
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
@@ -156,9 +170,30 @@ func writeSetupTestCombinedPEM(t *testing.T, path string) {
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	body := append(certPEM, keyPEM...)
-	if err := os.WriteFile(path, body, 0o644); err != nil {
-		t.Fatalf("write combined PEM: %v", err)
+	return certPEM, keyPEM
+}
+
+func writeSetupTestACMEStore(t *testing.T, path string) {
+	t.Helper()
+
+	certPEM, keyPEM := makeSetupTestCertificatePEM(t)
+	store := map[string]any{
+		"resolver": map[string]any{
+			"Account": map[string]any{"Email": "test@example.invalid"},
+			"Certificates": []map[string]any{{
+				"domain":      map[string]any{"main": "example.com"},
+				"certificate": certPEM,
+				"key":         keyPEM,
+				"Store":       "default",
+			}},
+		},
+	}
+	data, err := json.Marshal(store)
+	if err != nil {
+		t.Fatalf("marshal ACME store: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write ACME store: %v", err)
 	}
 }
 
@@ -405,6 +440,44 @@ func TestSetupHostDeclinedCertificateFallsBackToNginx(t *testing.T) {
 
 	if err := setupHostWithClient(client); err != nil {
 		t.Fatalf("setupHostWithClient: %v", err)
+	}
+}
+
+func TestSetupHostDiscoversTraefikACMEStorage(t *testing.T) {
+	resetSetupTestGlobals(t)
+
+	acmePath := filepath.Join(t.TempDir(), "acme.json")
+	writeSetupTestACMEStore(t, acmePath)
+	setupACMEPaths = []string{filepath.Join(t.TempDir(), "missing.json"), acmePath}
+	setupInput = strings.NewReader(strings.Repeat("\n", 6))
+	var output bytes.Buffer
+	setupOutput = &output
+	updatedConfig := `{"host":{"acme_path":"` + acmePath + `"}}`
+
+	client := &fakeSetupClient{
+		initialConfig: `{"host":{}}`,
+		updatedConfig: updatedConfig,
+		patchFunc: func(payload api.ConfigPatch) error {
+			if payload.Host == nil || payload.Host.ACMEPath != acmePath {
+				t.Fatalf("unexpected host patch: %+v", payload.Host)
+			}
+			if payload.Host.CertPath != "" || payload.Host.NginxConfigPath != "" {
+				t.Fatalf("unexpected non-ACME paths: %+v", payload.Host)
+			}
+			return nil
+		},
+	}
+
+	if err := setupHostWithClient(client); err != nil {
+		t.Fatalf("setupHostWithClient: %v", err)
+	}
+	for _, want := range []string{
+		"Discovered Traefik ACME storage: " + acmePath,
+		"Found 1 usable certificate covering 1 hostname.",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, output.String())
+		}
 	}
 }
 

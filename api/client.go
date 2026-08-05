@@ -63,6 +63,7 @@ type ConfigPatch struct {
 
 type HostConfigPatch struct {
 	CertPath        string `json:"cert_path,omitempty"`
+	ACMEPath        string `json:"acme_path,omitempty"`
 	NginxConfigPath string `json:"nginx_config_path,omitempty"`
 }
 

@@ -97,12 +97,16 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 
 	// Get certificate paths from both CLI config and JSON config
 	certPath := ""
+	acmePath := ""
 	nginxConfigPath := ""
 
 	// Also check JSON config for cert/nginx paths (JSON config can override CLI)
 	if jsonCfg := configMgr.GetConfig(); jsonCfg != nil && jsonCfg.Host != nil {
 		if jsonCfg.Host.CertPath != "" {
 			certPath = jsonCfg.Host.CertPath
+		}
+		if jsonCfg.Host.ACMEPath != "" {
+			acmePath = jsonCfg.Host.ACMEPath
 		}
 		if jsonCfg.Host.NginxConfigPath != "" {
 			nginxConfigPath = jsonCfg.Host.NginxConfigPath
@@ -162,6 +166,7 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 		certManager: certmanager.New(certmanager.Config{
 			Verbose:         cfg.Verbose,
 			CertPath:        certPath,
+			ACMEPath:        acmePath,
 			TLSNextProtos:   tlsNextProtos(protocols),
 			NginxConfigPath: nginxConfigPath,
 			DefaultHostname: defaultHostname,
@@ -208,7 +213,7 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 		})
 	}
 
-	if err := pm.validateCertificateSources(certPath, nginxConfigPath); err != nil {
+	if err := pm.validateCertificateSources(certPath, acmePath, nginxConfigPath); err != nil {
 		pm.certManager.Stop()
 		pm.middlewareChain.Stop()
 		return nil, err
@@ -217,7 +222,7 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 	return pm, nil
 }
 
-func (p *Manager) validateCertificateSources(certPath, nginxConfigPath string) error {
+func (p *Manager) validateCertificateSources(certPath, acmePath, nginxConfigPath string) error {
 	if p.certManager.HostnameCount() > 0 {
 		return nil
 	}
@@ -229,6 +234,10 @@ func (p *Manager) validateCertificateSources(certPath, nginxConfigPath string) e
 
 	if certPath != "" {
 		return fmt.Errorf("no valid certificates found in cert_path=%q", certPath)
+	}
+
+	if acmePath != "" {
+		return fmt.Errorf("no valid certificates found in acme_path=%q", acmePath)
 	}
 
 	if nginxConfigPath != "" {

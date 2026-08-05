@@ -30,6 +30,7 @@ var (
 	setupInspectNetwork = proxy.InspectNetwork
 
 	setupPsaConfPath       = "/etc/psa/psa.conf"
+	setupACMEPaths         = []string{"/etc/traefik/acme.json", "/var/lib/traefik/acme.json"}
 	setupNginxConfigPath   = "/etc/nginx/nginx.conf"
 	setupPleskRootFallback = []string{"/opt/psa", "/usr/local/psa"}
 )
@@ -200,9 +201,9 @@ func parseSetupConfig(body []byte) (*config.Config, error) {
 }
 
 func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, rediscover bool) ([]byte, error) {
-	certPath, nginxConfigPath := configuredSetupPaths(cfg)
+	certPath, acmePath, nginxConfigPath := configuredSetupPaths(cfg)
 	if !setupIsInteractive() {
-		if certPath == "" && nginxConfigPath == "" {
+		if certPath == "" && acmePath == "" && nginxConfigPath == "" {
 			warnMissingSetupPaths()
 		}
 		return body, nil
@@ -211,16 +212,21 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, r
 	reader := bufio.NewReader(setupInput)
 
 	discoveredCertPath := ""
+	discoveredACMEPath := ""
 	discoveredNginxConfigPath := ""
-	if rediscover || (certPath == "" && nginxConfigPath == "") {
+	if rediscover || (certPath == "" && acmePath == "" && nginxConfigPath == "") {
 		var certCandidate setupDiscoveryCandidate
 		var hasCertCandidate bool
+		var acmeCandidate setupDiscoveryCandidate
+		var hasACMECandidate bool
 		var nginxCandidate setupDiscoveryCandidate
 		var hasNginxCandidate bool
 		var discoveryDiagnostics []string
 		if err := runSetupStep("Looking for server configuration", "Server configuration discovery complete", func() error {
 			var diagnostics []string
 			certCandidate, hasCertCandidate, diagnostics = discoverPleskCertificatePath()
+			discoveryDiagnostics = append(discoveryDiagnostics, diagnostics...)
+			acmeCandidate, hasACMECandidate, diagnostics = discoverTraefikACMEPath()
 			discoveryDiagnostics = append(discoveryDiagnostics, diagnostics...)
 			nginxCandidate, hasNginxCandidate, diagnostics = discoverNginxConfigPath()
 			discoveryDiagnostics = append(discoveryDiagnostics, diagnostics...)
@@ -246,7 +252,18 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, r
 			}
 		}
 
-		if discoveredCertPath == "" && hasNginxCandidate {
+		if discoveredCertPath == "" && hasACMECandidate {
+			printSetupDiscoveryCandidate(acmeCandidate)
+			accepted, err := promptYesNo(reader, setupOutput, "Use this server configuration?", true)
+			if err != nil {
+				return nil, err
+			}
+			if accepted {
+				discoveredACMEPath = acmeCandidate.path
+			}
+		}
+
+		if discoveredCertPath == "" && discoveredACMEPath == "" && hasNginxCandidate {
 			printSetupDiscoveryCandidate(nginxCandidate)
 			accepted, err := promptYesNo(reader, setupOutput, "Use this server configuration?", true)
 			if err != nil {
@@ -257,15 +274,15 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, r
 			}
 		}
 	} else if verbose {
-		fmt.Fprintf(setupOutput, "  Verbose server configuration detection:\n    - skipped because configured paths are being reused (certificate=%q, nginx=%q)\n", certPath, nginxConfigPath)
+		fmt.Fprintf(setupOutput, "  Verbose server configuration detection:\n    - skipped because configured paths are being reused (certificate=%q, acme=%q, nginx=%q)\n", certPath, acmePath, nginxConfigPath)
 	}
 
-	if discoveredCertPath == "" && discoveredNginxConfigPath == "" {
-		if certPath == "" && nginxConfigPath == "" {
+	if discoveredCertPath == "" && discoveredACMEPath == "" && discoveredNginxConfigPath == "" {
+		if certPath == "" && acmePath == "" && nginxConfigPath == "" {
 			warnMissingSetupPaths()
 		}
 	} else {
-		applySetupPaths(cfg, discoveredCertPath, discoveredNginxConfigPath)
+		applySetupPaths(cfg, discoveredCertPath, discoveredACMEPath, discoveredNginxConfigPath)
 	}
 
 	serverPatch, err := promptSetupServerConfiguration(reader, cfg, rediscover)
@@ -273,9 +290,10 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, r
 		return nil, err
 	}
 	payload := api.ConfigPatch{Server: &serverPatch}
-	if discoveredCertPath != "" || discoveredNginxConfigPath != "" {
+	if discoveredCertPath != "" || discoveredACMEPath != "" || discoveredNginxConfigPath != "" {
 		payload.Host = &api.HostConfigPatch{
 			CertPath:        discoveredCertPath,
+			ACMEPath:        discoveredACMEPath,
 			NginxConfigPath: discoveredNginxConfigPath,
 		}
 	}
@@ -307,24 +325,27 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, r
 	return updatedBody, nil
 }
 
-func applySetupPaths(cfg *config.Config, certPath, nginxConfigPath string) {
+func applySetupPaths(cfg *config.Config, certPath, acmePath, nginxConfigPath string) {
 	if cfg.Host == nil {
 		cfg.Host = &config.HostConfig{}
 	}
 	if certPath != "" {
 		cfg.Host.CertPath = certPath
 	}
+	if acmePath != "" {
+		cfg.Host.ACMEPath = acmePath
+	}
 	if nginxConfigPath != "" {
 		cfg.Host.NginxConfigPath = nginxConfigPath
 	}
 }
 
-func configuredSetupPaths(cfg *config.Config) (string, string) {
+func configuredSetupPaths(cfg *config.Config) (string, string, string) {
 	if cfg == nil || cfg.Host == nil {
-		return "", ""
+		return "", "", ""
 	}
 
-	return cfg.Host.CertPath, cfg.Host.NginxConfigPath
+	return cfg.Host.CertPath, cfg.Host.ACMEPath, cfg.Host.NginxConfigPath
 }
 
 func discoverPleskCertificatePath() (setupDiscoveryCandidate, bool, []string) {
@@ -394,6 +415,27 @@ func readPleskProductRoot(path string) (string, error) {
 	return "", fmt.Errorf("PRODUCT_ROOT_D not found in %s", path)
 }
 
+func discoverTraefikACMEPath() (setupDiscoveryCandidate, bool, []string) {
+	var diagnostics []string
+	for _, path := range setupACMEPaths {
+		summary, err := certmanager.ProbeTraefikACMEFileSummary(path)
+		if err == nil {
+			diagnostics = append(diagnostics, fmt.Sprintf(
+				"Traefik ACME storage: accepted %s (%d usable certificate(s), %d hostname(s))",
+				path, summary.CertificateCount, summary.HostnameCount,
+			))
+			return setupDiscoveryCandidate{
+				kind:    "acme",
+				path:    path,
+				summary: summary,
+			}, true, diagnostics
+		}
+		diagnostics = append(diagnostics, fmt.Sprintf("Traefik ACME storage: rejected %s: %v", path, err))
+	}
+
+	return setupDiscoveryCandidate{}, false, diagnostics
+}
+
 func discoverNginxConfigPath() (setupDiscoveryCandidate, bool, []string) {
 	summary, err := certmanager.ProbeNginxConfigSummary(setupNginxConfigPath)
 	if err == nil {
@@ -414,6 +456,8 @@ func printSetupDiscoveryCandidate(candidate setupDiscoveryCandidate) {
 	switch candidate.kind {
 	case "certificate":
 		fmt.Fprintf(setupOutput, "  ✓ Discovered Plesk certificate directory: %s\n", candidate.path)
+	case "acme":
+		fmt.Fprintf(setupOutput, "  ✓ Discovered Traefik ACME storage: %s\n", candidate.path)
 	case "nginx":
 		fmt.Fprintf(setupOutput, "  ✓ Discovered nginx config: %s\n", candidate.path)
 	default:
@@ -461,7 +505,7 @@ func promptYesNoPlain(reader *bufio.Reader, output io.Writer, question string, d
 }
 
 func warnMissingSetupPaths() {
-	fmt.Fprintln(setupOutput, "⚠ FlowGuard is probably unable to start without a valid host.cert_path or host.nginx_config_path")
+	fmt.Fprintln(setupOutput, "⚠ FlowGuard is probably unable to start without a valid host.cert_path, host.acme_path, or host.nginx_config_path")
 }
 
 func runSetupStep(activeMessage, successMessage string, action func() error) error {

@@ -31,6 +31,7 @@ type HostConfig struct {
 	Team            string `json:"team,omitempty"`
 	CacheDir        string `json:"cache_dir,omitempty"`
 	CertPath        string `json:"cert_path,omitempty"`
+	ACMEPath        string `json:"acme_path,omitempty"`
 	NginxConfigPath string `json:"nginx_config_path,omitempty"`
 	DefaultHostname string `json:"default_hostname,omitempty"`
 }

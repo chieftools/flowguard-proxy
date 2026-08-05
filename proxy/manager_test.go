@@ -109,6 +109,29 @@ func TestNewManagerRejectsEmptyCertificateDirectory(t *testing.T) {
 	}
 }
 
+func TestNewManagerRejectsUnreadableTraefikACMEStorage(t *testing.T) {
+	acmePath := filepath.Join(t.TempDir(), "missing-acme.json")
+	configMgr := newProxyTestConfigManager(t, config.Config{
+		Host: &config.HostConfig{
+			ACMEPath: acmePath,
+		},
+	})
+
+	manager, err := NewManager(configMgr, newProxyTestConfig())
+	if err == nil {
+		t.Cleanup(func() {
+			if shutdownErr := manager.Shutdown(); shutdownErr != nil {
+				t.Fatalf("shutdown manager: %v", shutdownErr)
+			}
+		})
+		t.Fatal("expected unreadable ACME storage to be rejected")
+	}
+	configMgr.Stop()
+	if !strings.Contains(err.Error(), "acme_path=") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestNewManagerRejectsUnreadableNginxConfigWithoutCertificates(t *testing.T) {
 	configMgr := newProxyTestConfigManager(t, config.Config{
 		Host: &config.HostConfig{

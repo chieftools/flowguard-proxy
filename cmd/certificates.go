@@ -37,14 +37,15 @@ func handleCertificatesCommand(args []string, configMgr *config.Manager) error {
 	cfg := configMgr.GetConfig()
 
 	// Check if we have any certificate sources configured
-	if cfg.Host.CertPath == "" && cfg.Host.NginxConfigPath == "" {
-		return fmt.Errorf("no certificate sources configured. Set host.cert_path or host.nginx_config_path in the configuration file")
+	if cfg.Host.CertPath == "" && cfg.Host.ACMEPath == "" && cfg.Host.NginxConfigPath == "" {
+		return fmt.Errorf("no certificate sources configured. Set host.cert_path, host.acme_path, or host.nginx_config_path in the configuration file")
 	}
 
 	// Create certificate manager
 	cm := certmanager.New(certmanager.Config{
 		Verbose:         verbose,
 		CertPath:        cfg.Host.CertPath,
+		ACMEPath:        cfg.Host.ACMEPath,
 		NginxConfigPath: cfg.Host.NginxConfigPath,
 		DefaultHostname: cfg.Host.DefaultHostname,
 	})

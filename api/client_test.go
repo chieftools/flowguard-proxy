@@ -167,7 +167,10 @@ func TestPatchConfigSendsSetupConfiguration(t *testing.T) {
 
 	advertiseHTTP3 := false
 	err := client.PatchConfig(ConfigPatch{
-		Host: &HostConfigPatch{NginxConfigPath: "/etc/nginx/nginx.conf"},
+		Host: &HostConfigPatch{
+			ACMEPath:        "/etc/traefik/acme.json",
+			NginxConfigPath: "/etc/nginx/nginx.conf",
+		},
 		Server: &ServerConfigPatch{
 			Protocols:      &ProtocolsConfigPatch{HTTP1: true, HTTP2: true, HTTP3: true},
 			AdvertiseHTTP3: &advertiseHTTP3,
@@ -185,6 +188,9 @@ func TestPatchConfigSendsSetupConfiguration(t *testing.T) {
 
 	host := received["host"].(map[string]any)
 	if host["nginx_config_path"] != "/etc/nginx/nginx.conf" {
+		t.Fatalf("unexpected host payload: %#v", host)
+	}
+	if host["acme_path"] != "/etc/traefik/acme.json" {
 		t.Fatalf("unexpected host payload: %#v", host)
 	}
 	server := received["server"].(map[string]any)
