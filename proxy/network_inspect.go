@@ -202,15 +202,24 @@ func FormatNetworkDiagnostics(inspection NetworkInspection) string {
 }
 
 func inspectMangleIdentity(family int, command string, settings config.TransparentUpstreamSettings) NetworkPrerequisite {
+	return inspectMangleIdentityWithRunner(family, command, settings, execNetworkCommandRunner{})
+}
+
+func inspectMangleIdentityWithRunner(
+	family int,
+	command string,
+	settings config.TransparentUpstreamSettings,
+	runner networkCommandRunner,
+) NetworkPrerequisite {
 	name := fmt.Sprintf("IPv%d mangle identity", family)
-	output, err := exec.Command(command, "-t", "mangle", "-S", transparentFirewallChain).CombinedOutput()
+	output, err := runner.Output(command, "-t", "mangle", "-S", transparentFirewallChain)
 	if err != nil {
-		details := strings.TrimSpace(string(output))
-		lower := strings.ToLower(details)
-		if strings.Contains(lower, "no chain") ||
-			strings.Contains(lower, "does not exist") ||
-			strings.Contains(lower, "no such file") {
+		details := commandFailureDetails(output, err)
+		if isMissingFirewallResource(string(output)) {
 			return NetworkPrerequisite{Name: name, Ready: true, Details: "dedicated chain name is available"}
+		}
+		if isNftablesCompatibilityError(string(output)) {
+			return inspectNftablesMangleIdentity(family, name, details, runner)
 		}
 		return NetworkPrerequisite{Name: name, Ready: false, Details: details}
 	}
@@ -223,9 +232,9 @@ func inspectMangleIdentity(family int, command string, settings config.Transpare
 			}
 		}
 	}
-	output, err = exec.Command(command, "-t", "mangle", "-S", "OUTPUT").CombinedOutput()
+	output, err = runner.Output(command, "-t", "mangle", "-S", "OUTPUT")
 	if err != nil {
-		return NetworkPrerequisite{Name: name, Ready: false, Details: strings.TrimSpace(string(output))}
+		return NetworkPrerequisite{Name: name, Ready: false, Details: commandFailureDetails(output, err)}
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		if strings.Contains(line, "-j "+transparentFirewallChain) && !isManagedTransparentJumpLine(line) {
@@ -236,6 +245,65 @@ func inspectMangleIdentity(family int, command string, settings config.Transpare
 		}
 	}
 	return NetworkPrerequisite{Name: name, Ready: true, Details: "existing dedicated chain is FlowGuard-compatible"}
+}
+
+func inspectNftablesMangleIdentity(
+	family int,
+	name string,
+	iptablesDetails string,
+	runner networkCommandRunner,
+) NetworkPrerequisite {
+	nftFamily := "ip"
+	if family == 6 {
+		nftFamily = "ip6"
+	}
+
+	output, err := runner.Output("nft", "list", "chain", nftFamily, "mangle", transparentFirewallChain)
+	if err == nil {
+		return NetworkPrerequisite{
+			Name: name, Ready: false,
+			Details: fmt.Sprintf("%s; native nftables confirms that the chain exists", iptablesDetails),
+		}
+	}
+	if isMissingFirewallResource(string(output)) {
+		return NetworkPrerequisite{
+			Name: name, Ready: true,
+			Details: "dedicated chain name is available (verified with nftables)",
+		}
+	}
+
+	return NetworkPrerequisite{
+		Name: name, Ready: false,
+		Details: fmt.Sprintf(
+			"%s; could not verify the chain with nft; ensure nft is installed and runnable with current privileges: %s",
+			iptablesDetails,
+			commandFailureDetails(output, err),
+		),
+	}
+}
+
+func isMissingFirewallResource(output string) bool {
+	lower := strings.ToLower(output)
+	return strings.Contains(lower, "no chain") ||
+		strings.Contains(lower, "does not exist") ||
+		strings.Contains(lower, "no such file")
+}
+
+func isNftablesCompatibilityError(output string) bool {
+	lower := strings.ToLower(output)
+	return strings.Contains(lower, "incompatible") &&
+		strings.Contains(lower, "use 'nft' tool")
+}
+
+func commandFailureDetails(output []byte, err error) string {
+	details := strings.TrimSpace(string(output))
+	if details != "" {
+		return details
+	}
+	if err != nil {
+		return err.Error()
+	}
+	return "unknown command failure"
 }
 
 func inspectRoutingIdentity(family int, settings config.TransparentUpstreamSettings) NetworkPrerequisite {
