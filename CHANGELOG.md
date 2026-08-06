@@ -9,6 +9,12 @@ release.
 
 ## [Unreleased]
 
+## [0.16.2]
+
+### Fixed
+
+- Fixed transparent-mode readiness on nftables-backed iptables 1.8.7 systems by verifying that missing FlowGuard mangle chains are actually available. ([a17d8998](https://github.com/chieftools/flowguard-proxy/commit/a17d8998259f029a45e3015a4bb513765f828289))
+
 ## [0.16.1]
 
 ### Fixed
@@ -523,7 +529,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.16.1...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.16.2...HEAD
+[0.16.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.16.2
 [0.16.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.16.1
 [0.16.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.16.0
 [0.15.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.15.2
