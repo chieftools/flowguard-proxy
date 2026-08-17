@@ -9,6 +9,17 @@ release.
 
 ## [Unreleased]
 
+## [0.17.0]
+
+### Changed
+
+- Updated dependencies. ([7bf438e9](https://github.com/chieftools/flowguard-proxy/commit/7bf438e9287f75c2f6e12a4718c0fff61563d9d3))
+
+### Fixed
+
+- Prevented source-specific transparent upstream rejections from affecting shared backend health or returning a synthetic response, while logging the aborted request with status 444. ([c026fb5d](https://github.com/chieftools/flowguard-proxy/commit/c026fb5d787eefd8b943df16243a369e94c3f55f))
+- Fell back to the configured default certificate when every exact or wildcard certificate matching the requested hostname has expired. ([43f7a476](https://github.com/chieftools/flowguard-proxy/commit/43f7a476dfedfca7531da9e08e9b6ae70f598390))
+
 ## [0.16.2]
 
 ### Fixed
@@ -529,7 +540,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.16.2...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.17.0
 [0.16.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.16.2
 [0.16.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.16.1
 [0.16.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.16.0
