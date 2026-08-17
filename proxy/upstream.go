@@ -45,6 +45,12 @@ func isUpstreamPolicyRejection(err error) bool {
 	return errors.As(err, &rejection)
 }
 
+func isNeutralUpstreamError(err error) bool {
+	return isUpstreamPolicyRejection(err) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
 type upstreamRetryTransport struct {
 	next         http.RoundTripper
 	breaker      *upstreamCircuitBreaker
@@ -98,11 +104,11 @@ func (t *upstreamRetryTransport) RoundTrip(req *http.Request) (*http.Response, e
 			t.breaker.recordFailure()
 		}
 		if !retryable {
-			// A source-specific policy rejection says nothing about backend
-			// health. Do not let one blocked client reset or poison the shared
-			// listener-wide circuit breaker.
+			// Source-specific policy rejections and request termination say
+			// nothing about backend health. Preserve breaker history while
+			// releasing any half-open probe acquired for this request.
 			if t.breaker != nil {
-				if isUpstreamPolicyRejection(err) {
+				if isNeutralUpstreamError(err) {
 					t.breaker.recordNeutral()
 				} else {
 					t.breaker.recordSuccess()

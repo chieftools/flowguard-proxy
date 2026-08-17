@@ -220,7 +220,7 @@ func TestTransparentRoundTripperClassifiesSourceSpecificRefusal(t *testing.T) {
 			if source.String() != "198.51.100.72" || destination != "192.0.2.44:80" || fwmark != 1 {
 				t.Fatalf("transparent probe source=%s destination=%q fwmark=%d", source, destination, fwmark)
 			}
-			return retryableDialError(syscall.ECONNREFUSED)
+			return context.DeadlineExceeded
 		},
 	}
 	req := httptest.NewRequest(http.MethodGet, "http://example.test/asset", nil)
@@ -274,6 +274,106 @@ func TestTransparentRoundTripperRetriesWhenBackendRecoversBeforeConfirmation(t *
 	}
 	if ordinaryProbeCalls != 1 || transparentProbeCalls != 1 {
 		t.Fatalf("probe calls ordinary=%d transparent=%d, want 1 each", ordinaryProbeCalls, transparentProbeCalls)
+	}
+}
+
+func TestTransparentRoundTripperPreservesRequestCancellationDuringConfirmation(t *testing.T) {
+	resolution, err := ResolveAddressPairs(&config.Config{}, []string{"192.0.2.48"})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	server := NewServer(&ServerConfig{scheme: "http", bindAddr: "192.0.2.48", addressPairs: resolution})
+	pool := rejectingTransparentPool(retryableDialError(syscall.ECONNREFUSED))
+	t.Cleanup(pool.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	transport := &transparentRoundTripper{
+		server: server,
+		pool:   pool,
+		ordinaryProbe: func(context.Context, string) error {
+			return nil
+		},
+		transparentProbe: func(context.Context, netip.Addr, string, uint32) error {
+			cancel()
+			return context.Canceled
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://example.test/canceled", nil)
+	req = req.WithContext(context.WithValue(ctx, middleware.ContextKeyClientIP, "198.51.100.76"))
+
+	_, gotErr := transport.RoundTrip(req)
+	if !errors.Is(gotErr, context.Canceled) {
+		t.Fatalf("RoundTrip error = %v, want context cancellation", gotErr)
+	}
+	if isUpstreamPolicyRejection(gotErr) {
+		t.Fatalf("request cancellation was classified as policy rejection: %v", gotErr)
+	}
+}
+
+func TestTransparentRoundTripperPreservesInconclusiveConfirmationErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "socket permission", err: retryableDialError(syscall.EPERM)},
+		{name: "descriptor exhaustion", err: retryableDialError(syscall.EMFILE)},
+		{name: "missing route", err: retryableDialError(syscall.ENETUNREACH)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolution, err := ResolveAddressPairs(&config.Config{}, []string{"192.0.2.49"})
+			if err != nil {
+				t.Fatalf("ResolveAddressPairs: %v", err)
+			}
+			server := NewServer(&ServerConfig{scheme: "http", bindAddr: "192.0.2.49", addressPairs: resolution})
+			refused := retryableDialError(syscall.ECONNREFUSED)
+			pool := rejectingTransparentPool(refused)
+			t.Cleanup(pool.Close)
+
+			transport := &transparentRoundTripper{
+				server: server,
+				pool:   pool,
+				ordinaryProbe: func(context.Context, string) error {
+					return nil
+				},
+				transparentProbe: func(context.Context, netip.Addr, string, uint32) error {
+					return tt.err
+				},
+			}
+			req := httptest.NewRequest(http.MethodGet, "http://example.test/inconclusive", nil)
+			req = req.WithContext(context.WithValue(req.Context(), middleware.ContextKeyClientIP, "198.51.100.77"))
+
+			_, gotErr := transport.RoundTrip(req)
+			if isUpstreamPolicyRejection(gotErr) {
+				t.Fatalf("inconclusive confirmation was classified as policy rejection: %v", gotErr)
+			}
+			if !errors.Is(gotErr, syscall.ECONNREFUSED) {
+				t.Fatalf("RoundTrip error = %v, want original refusal", gotErr)
+			}
+		})
+	}
+}
+
+func TestConfirmsSourceSpecificRejection(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "refused", err: retryableDialError(syscall.ECONNREFUSED), want: true},
+		{name: "deadline", err: context.DeadlineExceeded, want: true},
+		{name: "permission", err: retryableDialError(syscall.EPERM), want: false},
+		{name: "descriptor exhaustion", err: retryableDialError(syscall.EMFILE), want: false},
+		{name: "missing route", err: retryableDialError(syscall.ENETUNREACH), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := confirmsSourceSpecificRejection(tt.err); got != tt.want {
+				t.Fatalf("confirmsSourceSpecificRejection(%v) = %t, want %t", tt.err, got, tt.want)
+			}
+		})
 	}
 }
 

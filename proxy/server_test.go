@@ -779,6 +779,73 @@ func TestUpstreamRetryTransportDoesNotMutateBreakerForPolicyRejection(t *testing
 	}
 }
 
+func TestUpstreamRetryTransportDoesNotMutateBreakerForRequestTermination(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "canceled", err: context.Canceled},
+		{name: "deadline exceeded", err: context.DeadlineExceeded},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			breaker := newUpstreamCircuitBreaker(2, time.Second)
+			breaker.failures = 1
+			attempts := 0
+			transport := &upstreamRetryTransport{
+				next: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					attempts++
+					return nil, tt.err
+				}),
+				breaker:      breaker,
+				recoveryWait: 5 * time.Second,
+			}
+
+			_, err := transport.RoundTrip(mustNewRequest(t, http.MethodGet, "https://example.test/", nil))
+			if !errors.Is(err, tt.err) {
+				t.Fatalf("RoundTrip error = %v, want %v", err, tt.err)
+			}
+			if attempts != 1 {
+				t.Fatalf("upstream attempts = %d, want 1", attempts)
+			}
+			if breaker.failures != 1 || !breaker.openUntil.IsZero() {
+				t.Fatalf("breaker changed after request termination: failures=%d openUntil=%v",
+					breaker.failures, breaker.openUntil)
+			}
+		})
+	}
+}
+
+func TestUpstreamRetryTransportReleasesHalfOpenProbeAfterCancellation(t *testing.T) {
+	now := time.Unix(250, 0)
+	breaker := newUpstreamCircuitBreaker(1, time.Second)
+	breaker.now = func() time.Time { return now }
+	breaker.recordFailure()
+	openUntil := breaker.openUntil
+	now = openUntil.Add(time.Nanosecond)
+
+	transport := &upstreamRetryTransport{
+		next: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, context.Canceled
+		}),
+		breaker:      breaker,
+		recoveryWait: 5 * time.Second,
+	}
+
+	_, err := transport.RoundTrip(mustNewRequest(t, http.MethodGet, "https://example.test/canceled", nil))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RoundTrip error = %v, want context cancellation", err)
+	}
+	if breaker.probing {
+		t.Fatal("request cancellation left the half-open probe occupied")
+	}
+	if breaker.failures != 1 || !breaker.openUntil.Equal(openUntil) {
+		t.Fatalf("neutral cancellation changed breaker history: failures=%d openUntil=%v",
+			breaker.failures, breaker.openUntil)
+	}
+}
+
 func TestUpstreamRetryTransportReleasesHalfOpenProbeAfterPolicyRejection(t *testing.T) {
 	now := time.Unix(200, 0)
 	breaker := newUpstreamCircuitBreaker(1, time.Second)

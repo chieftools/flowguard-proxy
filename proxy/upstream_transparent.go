@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -256,14 +257,38 @@ func (t *transparentRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 		transparentProbe = probeTransparentUpstream
 	}
 	probeErr := transparentProbe(req.Context(), clientIP, route.destination, t.pool.fwmark)
-	if !isConnectionRefused(probeErr) {
-		// The backend may have recovered between the original refusal and the
-		// ordinary control probe. Preserve the retryable error unless the same
-		// transparent source is still actively refused.
+	if probeErr == nil {
+		// The backend recovered between the original refusal and the control
+		// probe. Preserve the retryable error so the request can be attempted
+		// again through the normal upstream recovery path.
+		return nil, err
+	}
+	if contextErr := req.Context().Err(); contextErr != nil {
+		return nil, contextErr
+	}
+	if !confirmsSourceSpecificRejection(probeErr) {
+		// Local socket setup, resource, and routing failures do not establish
+		// that the backend rejected this source. Keep the original refusal
+		// retryable and let the normal breaker handling decide the outcome.
 		return nil, err
 	}
 
+	// The ordinary path is healthy while the same client-specific path remains
+	// unavailable. Confirmation failures can differ from the original refusal
+	// (for example, a firewall may silently drop a repeated probe), but together
+	// these observations identify a source-specific rejection.
 	return nil, &upstreamPolicyRejectionError{cause: err}
+}
+
+func confirmsSourceSpecificRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isConnectionRefused(err) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func probeOrdinaryLocalUpstream(ctx context.Context, destination string) error {
