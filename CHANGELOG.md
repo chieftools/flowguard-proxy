@@ -9,6 +9,12 @@ release.
 
 ## [Unreleased]
 
+## [0.17.1]
+
+### Fixed
+
+- Corrected source-specific transparent upstream rejection detection to preserve retries when the backend recovers or confirmation is inconclusive, while keeping canceled requests neutral to shared backend health. ([f2eafae0](https://github.com/chieftools/flowguard-proxy/commit/f2eafae0064549c0969a8babc17a1c2a75ddc808))
+
 ## [0.17.0]
 
 ### Changed
@@ -540,7 +546,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.17.1...HEAD
+[0.17.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.17.1
 [0.17.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.17.0
 [0.16.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.16.2
 [0.16.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.16.1
