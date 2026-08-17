@@ -34,20 +34,31 @@ jobs:
 
       - name: Get version
         id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            VERSION="${REQUESTED_VERSION}"
           else
-            VERSION="${GITHUB_REF#refs/tags/v}"
+            VERSION="${GITHUB_REF_NAME#v}"
           fi
-          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release version must use numeric X.Y.Z format."
+            exit 1
+          fi
+
+          printf 'RELEASE_VERSION=%s\n' "${VERSION}" >> "${GITHUB_ENV}"
+          printf 'VERSION=%s\n' "${VERSION}" >> "${GITHUB_OUTPUT}"
           echo "Building version: ${VERSION}"
 
       - name: Prepare release notes
         if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_NOTES_PATH: ${{ runner.temp }}/release-notes.md
         run: |
-          ./bin/changelog-section.sh "${{ steps.version.outputs.VERSION }}" > "${{ runner.temp }}/release-notes.md"
-          printf '\n\n---\n\n%s\n' 'More information: [installation instructions](https://github.com/chieftools/flowguard-proxy#quick-install) &middot; [upgrade instructions](https://github.com/chieftools/flowguard-proxy#upgrading) &middot; [configuration instructions](https://github.com/chieftools/flowguard-proxy#configure-your-server)' >> "${{ runner.temp }}/release-notes.md"
+          ./bin/changelog-section.sh "${RELEASE_VERSION}" > "${RELEASE_NOTES_PATH}"
+          printf '\n\n---\n\n%s\n' 'More information: [installation instructions](https://github.com/chieftools/flowguard-proxy#quick-install) &middot; [upgrade instructions](https://github.com/chieftools/flowguard-proxy#upgrading) &middot; [configuration instructions](https://github.com/chieftools/flowguard-proxy#configure-your-server)' >> "${RELEASE_NOTES_PATH}"
 
       - name: Install build dependencies
         run: |
@@ -55,57 +66,68 @@ jobs:
           sudo apt-get install -y apt-utils createrepo-c rpm gpg rsync
 
       - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
-          echo "${{ secrets.GPG_PASSPHRASE }}" > /tmp/gpg-passphrase
+          printf '%s\n' "${GPG_PRIVATE_KEY}" | gpg --batch --import
+          printf '%s' "${GPG_PASSPHRASE}" > /tmp/gpg-passphrase
 
       - name: Build DEB packages
         run: |
           chmod +x ./bin/build-deb.sh
-          ./bin/build-deb.sh ${{ steps.version.outputs.VERSION }} amd64
-          ./bin/build-deb.sh ${{ steps.version.outputs.VERSION }} arm64
+          ./bin/build-deb.sh "${RELEASE_VERSION}" amd64
+          ./bin/build-deb.sh "${RELEASE_VERSION}" arm64
 
       - name: Build RPM packages
         run: |
           chmod +x ./bin/build-rpm.sh
-          ./bin/build-rpm.sh ${{ steps.version.outputs.VERSION }} 1 x86_64
-          ./bin/build-rpm.sh ${{ steps.version.outputs.VERSION }} 1 aarch64
+          ./bin/build-rpm.sh "${RELEASE_VERSION}" 1 x86_64
+          ./bin/build-rpm.sh "${RELEASE_VERSION}" 1 aarch64
 
       - name: Setup SSH
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          printf '%s\n' "${SSH_PRIVATE_KEY}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H $(echo "${{ secrets.SSH_HOST }}" | cut -d@ -f2) >> ~/.ssh/known_hosts
+          SSH_HOSTNAME="${SSH_HOST#*@}"
+          ssh-keyscan -H "${SSH_HOSTNAME}" >> ~/.ssh/known_hosts
 
       - name: Download existing repository metadata
+        env:
+          REBUILD_RPM_REPO: ${{ inputs.rebuild_rpm_repo }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PATH: ${{ secrets.SSH_PATH }}
         run: |
           SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
 
           # Download only DEB metadata (not the pool with all .deb archives)
           mkdir -p repo-sync/deb/dists
           rsync -avz -e "${SSH_CMD}" \
-            ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/deb/dists/ repo-sync/deb/dists/ || true
+            "${SSH_HOST}:${SSH_PATH}/deb/dists/" repo-sync/deb/dists/ || true
 
           # Download RPM repositories
           for RPM_ARCH in x86_64 aarch64; do
             mkdir -p repo-sync/rpm/stable/${RPM_ARCH}
-            if [ "${{ inputs.rebuild_rpm_repo }}" = "true" ]; then
+            if [ "${REBUILD_RPM_REPO}" = "true" ]; then
               echo "Rebuilding RPM ${RPM_ARCH} repo: downloading all packages..."
               rsync -avz -e "${SSH_CMD}" \
-                ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/${RPM_ARCH}/ \
+                "${SSH_HOST}:${SSH_PATH}/rpm/stable/${RPM_ARCH}/" \
                 repo-sync/rpm/stable/${RPM_ARCH}/ || true
             else
               mkdir -p repo-sync/rpm/stable/${RPM_ARCH}/repodata
               rsync -avz -e "${SSH_CMD}" \
-                ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/${RPM_ARCH}/repodata/ \
+                "${SSH_HOST}:${SSH_PATH}/rpm/stable/${RPM_ARCH}/repodata/" \
                 repo-sync/rpm/stable/${RPM_ARCH}/repodata/ || true
             fi
           done
 
       - name: Update DEB repository
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
+          VERSION="${RELEASE_VERSION}"
           POOL_DIR="repo-sync/deb/pool/main/f/flowguard"
           mkdir -p "${POOL_DIR}"
 
@@ -170,8 +192,10 @@ jobs:
           cd ../..
 
       - name: Setup RPM repository
+        env:
+          REBUILD_RPM_REPO: ${{ inputs.rebuild_rpm_repo }}
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
+          VERSION="${RELEASE_VERSION}"
 
           # RPM signing macros with explicit passphrase handling
           echo "%_gpg_name FlowGuard Team <hello@flowguard.network>" > ~/.rpmmacros
@@ -190,7 +214,7 @@ jobs:
             mkdir -p "${REPO_DIR}"
             cp "${RPM_FILE}" "${REPO_DIR}/"
 
-            if [ "${{ inputs.rebuild_rpm_repo }}" = "true" ]; then
+            if [ "${REBUILD_RPM_REPO}" = "true" ]; then
               # Full rebuild: all RPM files are present, generate fresh metadata
               createrepo_c "${REPO_DIR}"
             else
@@ -326,34 +350,37 @@ jobs:
           cp config.schema.json repo-sync/config.schema.json
 
       - name: Upload to server
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PATH: ${{ secrets.SSH_PATH }}
         run: |
           SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
 
           # Upload new .deb to pool (additive only, old packages remain on server)
           rsync -avz -e "${SSH_CMD}" \
-            repo-sync/deb/pool/ ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/deb/pool/
+            repo-sync/deb/pool/ "${SSH_HOST}:${SSH_PATH}/deb/pool/"
 
           # Upload updated DEB metadata
           rsync -avz --delete -e "${SSH_CMD}" \
-            repo-sync/deb/dists/ ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/deb/dists/
+            repo-sync/deb/dists/ "${SSH_HOST}:${SSH_PATH}/deb/dists/"
 
           # Upload RPM packages and metadata for each architecture
           for RPM_ARCH in x86_64 aarch64; do
             # Upload new RPM package (additive only, old packages remain on server)
             rsync -avz -e "${SSH_CMD}" \
-              "repo-sync/rpm/stable/${RPM_ARCH}/flowguard-${{ steps.version.outputs.VERSION }}-1.${RPM_ARCH}.rpm" \
-              ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/${RPM_ARCH}/
+              "repo-sync/rpm/stable/${RPM_ARCH}/flowguard-${RELEASE_VERSION}-1.${RPM_ARCH}.rpm" \
+              "${SSH_HOST}:${SSH_PATH}/rpm/stable/${RPM_ARCH}/"
 
             # Upload updated RPM metadata
             rsync -avz --delete -e "${SSH_CMD}" \
               repo-sync/rpm/stable/${RPM_ARCH}/repodata/ \
-              ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/rpm/stable/${RPM_ARCH}/repodata/
+              "${SSH_HOST}:${SSH_PATH}/rpm/stable/${RPM_ARCH}/repodata/"
           done
 
           # Upload root config files
           rsync -avz -e "${SSH_CMD}" \
             repo-sync/install.sh repo-sync/gpg.key repo-sync/config.schema.json \
-            ${{ secrets.SSH_HOST }}:${{ secrets.SSH_PATH }}/
+            "${SSH_HOST}:${SSH_PATH}/"
 
       - name: Clean up
         if: always()
