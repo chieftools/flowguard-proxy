@@ -153,9 +153,12 @@ func (cm *Manager) GetCertificateForHostname(hostname string) *tls.Certificate {
 		}
 	}
 
-	// If we have candidates, select the best one
+	// If we have candidates, select the best valid one. If every matching
+	// certificate has expired, continue to the configured default certificate.
 	if len(allCandidates) > 0 {
-		return selectBestCertificate(allCandidates)
+		if cert := selectBestCertificate(allCandidates); cert != nil {
+			return cert
+		}
 	}
 
 	// Finally, try to find any default certificate in cache if we were given a default hostname

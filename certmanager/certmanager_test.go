@@ -286,6 +286,87 @@ func createWildcardCert(t *testing.T, domain string, notAfter time.Time, selfSig
 	return &tlsCert
 }
 
+func TestGetCertificateForHostnameFallsBackWhenMatchesAreExpired(t *testing.T) {
+	now := time.Now()
+	defaultCert := createSelfSignedRSACert(t, "fallback.test", now.Add(24*time.Hour))
+	expiredExactCert := createSelfSignedRSACert(t, "retired.test", now.Add(-time.Hour))
+	expiredWildcardCert := createWildcardCert(t, "legacy.test", now.Add(-time.Hour), true)
+	validExactCert := createSelfSignedRSACert(t, "active.test", now.Add(24*time.Hour))
+	expiredDefaultCert := createSelfSignedRSACert(t, "expired-fallback.test", now.Add(-time.Hour))
+
+	metadata := func(cert *tls.Certificate, path string) *certificateWithMetadata {
+		return &certificateWithMetadata{
+			cert:      cert,
+			filePath:  path,
+			notAfter:  cert.Leaf.NotAfter,
+			isTrusted: isTrustedCertificate(cert.Leaf),
+			keyType:   getKeyType(cert),
+		}
+	}
+
+	tests := []struct {
+		name            string
+		hostname        string
+		defaultHostname string
+		hostnameCache   map[string][]*certificateWithMetadata
+		want            *tls.Certificate
+	}{
+		{
+			name:            "expired exact match uses default",
+			hostname:        "retired.test",
+			defaultHostname: "fallback.test",
+			hostnameCache: map[string][]*certificateWithMetadata{
+				"retired.test":  {metadata(expiredExactCert, "/certs/retired.pem")},
+				"fallback.test": {metadata(defaultCert, "/certs/fallback.pem")},
+			},
+			want: defaultCert,
+		},
+		{
+			name:            "expired wildcard match uses default",
+			hostname:        "app.legacy.test",
+			defaultHostname: "fallback.test",
+			hostnameCache: map[string][]*certificateWithMetadata{
+				"*.legacy.test": {metadata(expiredWildcardCert, "/certs/legacy.pem")},
+				"fallback.test": {metadata(defaultCert, "/certs/fallback.pem")},
+			},
+			want: defaultCert,
+		},
+		{
+			name:            "valid exact match remains preferred",
+			hostname:        "active.test",
+			defaultHostname: "fallback.test",
+			hostnameCache: map[string][]*certificateWithMetadata{
+				"active.test":   {metadata(validExactCert, "/certs/active.pem")},
+				"fallback.test": {metadata(defaultCert, "/certs/fallback.pem")},
+			},
+			want: validExactCert,
+		},
+		{
+			name:            "expired match and expired default return nil",
+			hostname:        "retired.test",
+			defaultHostname: "expired-fallback.test",
+			hostnameCache: map[string][]*certificateWithMetadata{
+				"retired.test":          {metadata(expiredExactCert, "/certs/retired.pem")},
+				"expired-fallback.test": {metadata(expiredDefaultCert, "/certs/expired-fallback.pem")},
+			},
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := &Manager{
+				config:        Config{DefaultHostname: tt.defaultHostname},
+				hostnameCache: tt.hostnameCache,
+			}
+
+			if got := manager.GetCertificateForHostname(tt.hostname); got != tt.want {
+				t.Fatalf("GetCertificateForHostname(%q) returned %p, want %p", tt.hostname, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsTrustedCertificate(t *testing.T) {
 	tests := []struct {
 		name     string
