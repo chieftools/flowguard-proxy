@@ -24,7 +24,10 @@ import (
 	"github.com/quic-go/quic-go/http3"
 )
 
-const statusClientClosedRequest = 499
+const (
+	statusClientClosedRequest   = 499
+	statusRequestClosedByPolicy = 444
+)
 
 type Server struct {
 	config               *ServerConfig
@@ -172,6 +175,19 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 	}
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		if isUpstreamPolicyRejection(err) {
+			if s.config.verbose {
+				log.Printf("[upstream] [%s:%s] aborting request after source-specific rejection for %s: %v",
+					s.config.bindAddr, s.config.bindPort, proxyHost, err)
+			}
+			middleware.RecordResponseStatus(r, statusRequestClosedByPolicy)
+			// ErrAbortHandler closes HTTP/1 connections and resets only the
+			// current HTTP/2 or HTTP/3 stream. This avoids disrupting unrelated
+			// clients multiplexed through a trusted upstream proxy. quic-go uses
+			// a non-retryable internal-error stream reset for this abort.
+			panic(http.ErrAbortHandler)
+		}
+
 		if isClientAbortedProxyError(r, err) {
 			if s.config.verbose {
 				log.Printf("[proxy] [%s:%s] client aborted proxy request for %s: %v", s.config.bindAddr, s.config.bindPort, proxyHost, err)

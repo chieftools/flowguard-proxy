@@ -14,6 +14,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -284,6 +285,74 @@ func TestReverseProxyClientAbortRecords499InsteadOfSynthetic502(t *testing.T) {
 	}
 	if w.Body.Len() != 0 {
 		t.Fatalf("expected no synthetic error body for client abort, got %q", w.Body.String())
+	}
+}
+
+func TestReverseProxyPolicyRejectionAbortsWithoutResponse(t *testing.T) {
+	server := NewServer(&ServerConfig{
+		scheme:   "https",
+		bindAddr: "192.0.2.60",
+		bindPort: "11443",
+	})
+	proxy := server.createReverseProxyWithHost(&url.URL{Scheme: "https", Host: "example.test"}, "example.test")
+
+	req := httptest.NewRequest(http.MethodGet, "https://example.test/private", nil)
+	w := httptest.NewRecorder()
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		proxy.ErrorHandler(w, req, &upstreamPolicyRejectionError{cause: retryableDialError(syscall.ECONNREFUSED)})
+	}()
+
+	if recovered != http.ErrAbortHandler {
+		t.Fatalf("recovered panic = %v, want http.ErrAbortHandler", recovered)
+	}
+	if w.Body.Len() != 0 || len(w.Header()) != 0 {
+		t.Fatalf("unexpected HTTP response: headers=%v body=%q", w.Header(), w.Body.String())
+	}
+}
+
+func TestPolicyRejectionKeepsHTTP2ConnectionAvailable(t *testing.T) {
+	server := NewServer(&ServerConfig{
+		scheme:   "https",
+		bindAddr: "192.0.2.61",
+		bindPort: "11443",
+	})
+	proxy := server.createReverseProxyWithHost(&url.URL{Scheme: "https", Host: "example.test"}, "example.test")
+
+	var connectionCount atomic.Int32
+	testServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rejected" {
+			proxy.ErrorHandler(w, r, &upstreamPolicyRejectionError{cause: retryableDialError(syscall.ECONNREFUSED)})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	testServer.EnableHTTP2 = true
+	testServer.Config.ConnContext = func(ctx context.Context, _ net.Conn) context.Context {
+		connectionCount.Add(1)
+		return ctx
+	}
+	testServer.StartTLS()
+	t.Cleanup(testServer.Close)
+
+	client := testServer.Client()
+	if resp, err := client.Get(testServer.URL + "/rejected"); err == nil {
+		resp.Body.Close()
+		t.Fatalf("policy-rejected HTTP/2 stream unexpectedly returned status %d", resp.StatusCode)
+	}
+
+	resp, err := client.Get(testServer.URL + "/healthy")
+	if err != nil {
+		t.Fatalf("healthy request after rejected stream: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent || resp.ProtoMajor != 2 {
+		t.Fatalf("healthy response status=%d protocol=%s", resp.StatusCode, resp.Proto)
+	}
+	if got := connectionCount.Load(); got != 1 {
+		t.Fatalf("HTTP/2 connection count = %d, want rejected and healthy streams on one connection", got)
 	}
 }
 
@@ -677,6 +746,86 @@ func TestUpstreamRetryTransportDoesNotRetryUnsafeOrBodyRequests(t *testing.T) {
 				t.Fatalf("expected 1 attempt, got %d", attempts)
 			}
 		})
+	}
+}
+
+func TestUpstreamRetryTransportDoesNotMutateBreakerForPolicyRejection(t *testing.T) {
+	breaker := newUpstreamCircuitBreaker(2, time.Second)
+	breaker.failures = 1
+	attempts := 0
+	transport := &upstreamRetryTransport{
+		next: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			attempts++
+			return nil, &upstreamPolicyRejectionError{cause: retryableDialError(syscall.ECONNREFUSED)}
+		}),
+		breaker:      breaker,
+		recoveryWait: 5 * time.Second,
+		retryDelay:   func() time.Duration { return 0 },
+		sleep: func(context.Context, time.Duration) error {
+			t.Fatal("policy rejection should not sleep or retry")
+			return nil
+		},
+	}
+
+	_, err := transport.RoundTrip(mustNewRequest(t, http.MethodGet, "https://example.test/", nil))
+	if !isUpstreamPolicyRejection(err) {
+		t.Fatalf("RoundTrip error = %v, want policy rejection", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("upstream attempts = %d, want 1", attempts)
+	}
+	if breaker.failures != 1 || !breaker.openUntil.IsZero() {
+		t.Fatalf("breaker changed after policy rejection: failures=%d openUntil=%v", breaker.failures, breaker.openUntil)
+	}
+}
+
+func TestUpstreamRetryTransportReleasesHalfOpenProbeAfterPolicyRejection(t *testing.T) {
+	now := time.Unix(200, 0)
+	breaker := newUpstreamCircuitBreaker(1, time.Second)
+	breaker.now = func() time.Time { return now }
+	breaker.recordFailure()
+	openUntil := breaker.openUntil
+	now = openUntil.Add(time.Nanosecond)
+
+	attempts := 0
+	transport := &upstreamRetryTransport{
+		next: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			if attempts == 1 {
+				return nil, &upstreamPolicyRejectionError{cause: retryableDialError(syscall.ECONNREFUSED)}
+			}
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Header:     http.Header{},
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		}),
+		breaker:      breaker,
+		recoveryWait: 5 * time.Second,
+	}
+
+	_, err := transport.RoundTrip(mustNewRequest(t, http.MethodGet, "https://example.test/blocked", nil))
+	if !isUpstreamPolicyRejection(err) {
+		t.Fatalf("first RoundTrip error = %v, want policy rejection", err)
+	}
+	if breaker.probing {
+		t.Fatal("policy rejection left the half-open probe occupied")
+	}
+	if breaker.failures != 1 || !breaker.openUntil.Equal(openUntil) {
+		t.Fatalf("neutral result changed breaker history: failures=%d openUntil=%v", breaker.failures, breaker.openUntil)
+	}
+
+	resp, err := transport.RoundTrip(mustNewRequest(t, http.MethodGet, "https://example.test/recovery", nil))
+	if err != nil {
+		t.Fatalf("second RoundTrip: %v", err)
+	}
+	if resp.StatusCode != http.StatusNoContent || attempts != 2 {
+		t.Fatalf("recovery response status=%d attempts=%d", resp.StatusCode, attempts)
+	}
+	if breaker.failures != 0 || breaker.probing || !breaker.openUntil.IsZero() {
+		t.Fatalf("successful follow-up did not close breaker: failures=%d probing=%v openUntil=%v",
+			breaker.failures, breaker.probing, breaker.openUntil)
 	}
 }
 

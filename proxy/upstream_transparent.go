@@ -17,6 +17,7 @@ import (
 const (
 	transparentMaxIdleConnsPerPool = 4
 	transparentMaxIdleConnsPerHost = 2
+	upstreamPolicyProbeTimeout     = 250 * time.Millisecond
 )
 
 type transparentTransportKey struct {
@@ -201,9 +202,11 @@ func (p *transparentTransportPool) Close() {
 }
 
 type transparentRoundTripper struct {
-	server   *Server
-	pool     *transparentTransportPool
-	fallback http.RoundTripper
+	server           *Server
+	pool             *transparentTransportPool
+	fallback         http.RoundTripper
+	ordinaryProbe    func(context.Context, string) error
+	transparentProbe func(context.Context, netip.Addr, string, uint32) error
 }
 
 func (t *transparentRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -229,11 +232,82 @@ func (t *transparentRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 		}
 		return t.fallback.RoundTrip(req)
 	}
-	return t.pool.RoundTrip(req, transparentTransportKey{
+	resp, err := t.pool.RoundTrip(req, transparentTransportKey{
 		source:      clientIP,
 		destination: route.destination,
 		scheme:      t.server.config.scheme,
 	})
+	if err == nil || !isConnectionRefused(err) {
+		return resp, err
+	}
+
+	ordinaryProbe := t.ordinaryProbe
+	if ordinaryProbe == nil {
+		ordinaryProbe = probeOrdinaryLocalUpstream
+	}
+	if probeErr := ordinaryProbe(req.Context(), route.destination); probeErr != nil {
+		// A failed or inconclusive control probe cannot distinguish a
+		// source-specific firewall rejection from a real backend outage.
+		return nil, err
+	}
+
+	transparentProbe := t.transparentProbe
+	if transparentProbe == nil {
+		transparentProbe = probeTransparentUpstream
+	}
+	probeErr := transparentProbe(req.Context(), clientIP, route.destination, t.pool.fwmark)
+	if !isConnectionRefused(probeErr) {
+		// The backend may have recovered between the original refusal and the
+		// ordinary control probe. Preserve the retryable error unless the same
+		// transparent source is still actively refused.
+		return nil, err
+	}
+
+	return nil, &upstreamPolicyRejectionError{cause: err}
+}
+
+func probeOrdinaryLocalUpstream(ctx context.Context, destination string) error {
+	host, _, err := net.SplitHostPort(destination)
+	if err != nil {
+		return err
+	}
+	source, err := netip.ParseAddr(host)
+	if err != nil {
+		return err
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, upstreamPolicyProbeTimeout)
+	defer cancel()
+
+	dialer := &net.Dialer{
+		Timeout: upstreamPolicyProbeTimeout,
+		LocalAddr: &net.TCPAddr{
+			IP: source.AsSlice(),
+		},
+	}
+	conn, err := dialer.DialContext(probeCtx, "tcp", destination)
+	if err != nil {
+		return err
+	}
+	_ = conn.Close()
+	return nil
+}
+
+func probeTransparentUpstream(ctx context.Context, source netip.Addr, destination string, fwmark uint32) error {
+	dialContext, err := transparentDialContext(source, fwmark)
+	if err != nil {
+		return err
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, upstreamPolicyProbeTimeout)
+	defer cancel()
+
+	conn, err := dialContext(probeCtx, "tcp", destination)
+	if err != nil {
+		return err
+	}
+	_ = conn.Close()
+	return nil
 }
 
 func (t *transparentRoundTripper) CloseIdleConnections() {

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"syscall"
 	"testing"
 	"time"
 
@@ -192,6 +193,150 @@ func TestTransparentRoundTripperDoesNotFallbackAfterTransparentFailure(t *testin
 	}
 }
 
+func TestTransparentRoundTripperClassifiesSourceSpecificRefusal(t *testing.T) {
+	resolution, err := ResolveAddressPairs(&config.Config{}, []string{"192.0.2.44"})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	server := NewServer(&ServerConfig{scheme: "http", bindAddr: "192.0.2.44", addressPairs: resolution})
+	refused := retryableDialError(syscall.ECONNREFUSED)
+	pool := rejectingTransparentPool(refused)
+	t.Cleanup(pool.Close)
+
+	ordinaryProbeCalls := 0
+	transparentProbeCalls := 0
+	transport := &transparentRoundTripper{
+		server: server,
+		pool:   pool,
+		ordinaryProbe: func(_ context.Context, destination string) error {
+			ordinaryProbeCalls++
+			if destination != "192.0.2.44:80" {
+				t.Fatalf("ordinary probe destination = %q", destination)
+			}
+			return nil
+		},
+		transparentProbe: func(_ context.Context, source netip.Addr, destination string, fwmark uint32) error {
+			transparentProbeCalls++
+			if source.String() != "198.51.100.72" || destination != "192.0.2.44:80" || fwmark != 1 {
+				t.Fatalf("transparent probe source=%s destination=%q fwmark=%d", source, destination, fwmark)
+			}
+			return retryableDialError(syscall.ECONNREFUSED)
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://example.test/asset", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ContextKeyClientIP, "198.51.100.72"))
+
+	_, gotErr := transport.RoundTrip(req)
+	if !isUpstreamPolicyRejection(gotErr) {
+		t.Fatalf("expected policy rejection, got %v", gotErr)
+	}
+	if !errors.Is(gotErr, refused) {
+		t.Fatalf("policy rejection does not wrap refusal: %v", gotErr)
+	}
+	if ordinaryProbeCalls != 1 || transparentProbeCalls != 1 {
+		t.Fatalf("probe calls ordinary=%d transparent=%d, want 1 each", ordinaryProbeCalls, transparentProbeCalls)
+	}
+}
+
+func TestTransparentRoundTripperRetriesWhenBackendRecoversBeforeConfirmation(t *testing.T) {
+	resolution, err := ResolveAddressPairs(&config.Config{}, []string{"192.0.2.47"})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	server := NewServer(&ServerConfig{scheme: "http", bindAddr: "192.0.2.47", addressPairs: resolution})
+	refused := retryableDialError(syscall.ECONNREFUSED)
+	pool := rejectingTransparentPool(refused)
+	t.Cleanup(pool.Close)
+
+	ordinaryProbeCalls := 0
+	transparentProbeCalls := 0
+	transport := &transparentRoundTripper{
+		server: server,
+		pool:   pool,
+		ordinaryProbe: func(context.Context, string) error {
+			ordinaryProbeCalls++
+			return nil
+		},
+		transparentProbe: func(context.Context, netip.Addr, string, uint32) error {
+			transparentProbeCalls++
+			return nil
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://example.test/recovered", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ContextKeyClientIP, "198.51.100.75"))
+
+	_, gotErr := transport.RoundTrip(req)
+	if isUpstreamPolicyRejection(gotErr) {
+		t.Fatalf("recovered backend was classified as policy rejection: %v", gotErr)
+	}
+	if !errors.Is(gotErr, refused) {
+		t.Fatalf("RoundTrip error = %v, want retryable original refusal", gotErr)
+	}
+	if ordinaryProbeCalls != 1 || transparentProbeCalls != 1 {
+		t.Fatalf("probe calls ordinary=%d transparent=%d, want 1 each", ordinaryProbeCalls, transparentProbeCalls)
+	}
+}
+
+func TestTransparentRoundTripperKeepsRefusalWhenControlProbeFails(t *testing.T) {
+	resolution, err := ResolveAddressPairs(&config.Config{}, []string{"192.0.2.45"})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	server := NewServer(&ServerConfig{scheme: "http", bindAddr: "192.0.2.45", addressPairs: resolution})
+	refused := retryableDialError(syscall.ECONNREFUSED)
+	pool := rejectingTransparentPool(refused)
+	t.Cleanup(pool.Close)
+
+	transport := &transparentRoundTripper{
+		server: server,
+		pool:   pool,
+		ordinaryProbe: func(context.Context, string) error {
+			return errors.New("control path unavailable")
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://example.test/health", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ContextKeyClientIP, "198.51.100.73"))
+
+	_, gotErr := transport.RoundTrip(req)
+	if isUpstreamPolicyRejection(gotErr) {
+		t.Fatalf("inconclusive probe was classified as policy rejection: %v", gotErr)
+	}
+	if !errors.Is(gotErr, refused) {
+		t.Fatalf("RoundTrip error = %v, want refusal", gotErr)
+	}
+}
+
+func TestTransparentRoundTripperDoesNotProbeOtherFailures(t *testing.T) {
+	resolution, err := ResolveAddressPairs(&config.Config{}, []string{"192.0.2.46"})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	server := NewServer(&ServerConfig{scheme: "http", bindAddr: "192.0.2.46", addressPairs: resolution})
+	wantErr := retryableDialError(syscall.ECONNRESET)
+	pool := rejectingTransparentPool(wantErr)
+	t.Cleanup(pool.Close)
+
+	probeCalled := false
+	transport := &transparentRoundTripper{
+		server: server,
+		pool:   pool,
+		ordinaryProbe: func(context.Context, string) error {
+			probeCalled = true
+			return nil
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://example.test/api", nil)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ContextKeyClientIP, "198.51.100.74"))
+
+	_, gotErr := transport.RoundTrip(req)
+	if !errors.Is(gotErr, wantErr) {
+		t.Fatalf("RoundTrip error = %v, want reset", gotErr)
+	}
+	if probeCalled {
+		t.Fatal("control probe called for non-refusal failure")
+	}
+}
+
 func TestFallbackDialerPinsConfiguredBindAddress(t *testing.T) {
 	for _, source := range []string{"192.0.2.10", "2001:db8::10"} {
 		dialer := newUpstreamDialer(source, true)
@@ -272,4 +417,17 @@ func transparentTestKey(source string) transparentTransportKey {
 		destination: "192.0.2.10:80",
 		scheme:      "http",
 	}
+}
+
+func rejectingTransparentPool(roundTripErr error) *transparentTransportPool {
+	pool := newTransparentTransportPool(1, time.Minute, 1)
+	pool.newTransport = func(_ transparentTransportKey, disableKeepAlives bool) (*http.Transport, error) {
+		return &http.Transport{
+			DisableKeepAlives: disableKeepAlives,
+			DialContext: func(context.Context, string, string) (net.Conn, error) {
+				return nil, roundTripErr
+			},
+		}, nil
+	}
+	return pool
 }

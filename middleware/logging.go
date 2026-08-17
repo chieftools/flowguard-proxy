@@ -138,6 +138,36 @@ type LoggingMiddleware struct {
 	mu              sync.RWMutex
 }
 
+type recordedResponseStatus struct {
+	status int
+}
+
+type recordedResponseStatusContextKey struct{}
+
+// RecordResponseStatus records an internal response outcome without writing an
+// HTTP status to the client. The logging middleware uses this for deliberately
+// aborted requests such as source-specific upstream policy rejections.
+func RecordResponseStatus(r *http.Request, status int) {
+	if r == nil {
+		return
+	}
+	recorded, _ := r.Context().Value(recordedResponseStatusContextKey{}).(*recordedResponseStatus)
+	if recorded != nil {
+		recorded.status = status
+	}
+}
+
+func responseStatusRecordedFor(r *http.Request) (int, bool) {
+	if r == nil {
+		return 0, false
+	}
+	recorded, _ := r.Context().Value(recordedResponseStatusContextKey{}).(*recordedResponseStatus)
+	if recorded == nil || recorded.status == 0 {
+		return 0, false
+	}
+	return recorded.status, true
+}
+
 func NewLoggingMiddleware(configMgr *config.Manager) *LoggingMiddleware {
 	m := &LoggingMiddleware{
 		configMgr:     configMgr,
@@ -168,11 +198,24 @@ func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 		ResponseWriter: w,
 		StatusCode:     http.StatusOK,
 	}
+	recorded := &recordedResponseStatus{}
+	r = r.WithContext(context.WithValue(r.Context(), recordedResponseStatusContextKey{}, recorded))
 
-	// Process the request through the next handler
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if status, ok := responseStatusRecordedFor(r); ok {
+				wrapper.StatusCode = status
+				lm.logRequest(r, wrapper)
+			}
+			panic(recovered)
+		}
+		lm.logRequest(r, wrapper)
+	}()
+
+	// Process the request through the next handler. Deliberately aborted
+	// requests are logged by the deferred path above before the abort is
+	// propagated to the HTTP server.
 	next.ServeHTTP(wrapper, r)
-
-	lm.logRequest(r, wrapper)
 }
 
 func (lm *LoggingMiddleware) Stop() {

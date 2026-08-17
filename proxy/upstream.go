@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -26,6 +27,23 @@ const (
 )
 
 var errUpstreamCircuitOpen = errors.New("upstream temporarily unavailable")
+
+type upstreamPolicyRejectionError struct {
+	cause error
+}
+
+func (e *upstreamPolicyRejectionError) Error() string {
+	return fmt.Sprintf("upstream rejected client source: %v", e.cause)
+}
+
+func (e *upstreamPolicyRejectionError) Unwrap() error {
+	return e.cause
+}
+
+func isUpstreamPolicyRejection(err error) bool {
+	var rejection *upstreamPolicyRejectionError
+	return errors.As(err, &rejection)
+}
 
 type upstreamRetryTransport struct {
 	next         http.RoundTripper
@@ -80,8 +98,15 @@ func (t *upstreamRetryTransport) RoundTrip(req *http.Request) (*http.Response, e
 			t.breaker.recordFailure()
 		}
 		if !retryable {
+			// A source-specific policy rejection says nothing about backend
+			// health. Do not let one blocked client reset or poison the shared
+			// listener-wide circuit breaker.
 			if t.breaker != nil {
-				t.breaker.recordSuccess()
+				if isUpstreamPolicyRejection(err) {
+					t.breaker.recordNeutral()
+				} else {
+					t.breaker.recordSuccess()
+				}
 			}
 			return nil, err
 		}
@@ -261,6 +286,16 @@ func (b *upstreamCircuitBreaker) recordSuccess() {
 
 	b.failures = 0
 	b.openUntil = time.Time{}
+	b.probing = false
+}
+
+func (b *upstreamCircuitBreaker) recordNeutral() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// A neutral result cannot establish backend health, but it must release a
+	// half-open probe so another request can test the backend. Preserve the
+	// failure count and cooldown history.
 	b.probing = false
 }
 
@@ -548,11 +583,17 @@ func isDefiniteUpstreamDialFailure(err error) bool {
 		strings.Contains(msg, "no route to host")
 }
 
+func isConnectionRefused(err error) bool {
+	return err != nil && (errors.Is(err, syscall.ECONNREFUSED) ||
+		strings.Contains(strings.ToLower(err.Error()), "connection refused"))
+}
+
 func isRetryableUpstreamError(err error) bool {
 	if err == nil ||
 		errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, errUpstreamCircuitOpen) {
+		errors.Is(err, errUpstreamCircuitOpen) ||
+		isUpstreamPolicyRejection(err) {
 		return false
 	}
 
