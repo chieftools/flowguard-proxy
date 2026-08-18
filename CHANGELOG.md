@@ -9,6 +9,16 @@ release.
 
 ## [Unreleased]
 
+## [0.18.0]
+
+### Added
+
+- Added optional Linux Fail2Ban synchronization with immediate runtime ban events, authoritative snapshot reconciliation, hot-reloadable configuration, interactive setup support, standard 403 block responses with Stream IDs, and startup synchronization before proxy listeners open. ([f36cbbc2](https://github.com/chieftools/flowguard-proxy/commit/f36cbbc23b8a6008f19698966c2de6ffe064e7d8))
+
+### Changed
+
+- Increased the packaged systemd service stop timeout from 30 to 60 seconds so Fail2Ban runtime-action cleanup can finish during shutdown. ([3b79d341](https://github.com/chieftools/flowguard-proxy/commit/3b79d341cb5e07ee19eb2a49d835b3d62e435d2a))
+
 ## [0.17.1]
 
 ### Fixed
