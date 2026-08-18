@@ -817,21 +817,24 @@ func TestManagerRetriesRuntimeEventServerCreation(t *testing.T) {
 	}
 	waitFor(t, func() bool { return len(manager.MatchingJails("203.0.113.167")) == 1 })
 
-	previousSocket, err := os.Lstat(eventPath)
-	if err != nil {
-		t.Fatalf("inspect runtime event socket: %v", err)
-	}
 	if err := os.Remove(eventPath); err != nil {
 		t.Fatalf("remove runtime event socket path: %v", err)
 	}
-	waitFor(t, func() bool {
-		currentSocket, statErr := os.Lstat(eventPath)
-		return statErr == nil && currentSocket.Mode()&os.ModeSocket != 0 && !os.SameFile(previousSocket, currentSocket)
-	})
-	if err := SendEvent(eventPath, Event{Operation: "ban", Jail: "request-limit", Address: "192.0.2.173"}); err != nil {
-		t.Fatalf("send event after socket recreation: %v", err)
-	}
+	sendEventEventually(t, eventPath, Event{Operation: "ban", Jail: "request-limit", Address: "192.0.2.173"})
 	waitFor(t, func() bool { return len(manager.MatchingJails("192.0.2.173")) == 1 })
+}
+
+func sendEventEventually(t *testing.T, socketPath string, event Event) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var err error
+	for time.Now().Before(deadline) {
+		if err = SendEvent(socketPath, event); err == nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("event was not accepted before timeout: %v", err)
 }
 
 func waitFor(t *testing.T, condition func() bool) {
