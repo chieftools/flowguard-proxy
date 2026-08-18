@@ -57,8 +57,13 @@ func (c *Client) buildURL(path string) string {
 var ErrNotModified = fmt.Errorf("configuration not modified")
 
 type ConfigPatch struct {
-	Host   *HostConfigPatch   `json:"host,omitempty"`
-	Server *ServerConfigPatch `json:"server,omitempty"`
+	Host     *HostConfigPatch     `json:"host,omitempty"`
+	Server   *ServerConfigPatch   `json:"server,omitempty"`
+	Fail2Ban *Fail2BanConfigPatch `json:"fail2ban,omitempty"`
+}
+
+type Fail2BanConfigPatch struct {
+	Enabled bool `json:"enabled"`
 }
 
 type HostConfigPatch struct {
@@ -148,12 +153,12 @@ func (c *Client) GetConfig(etag string) ([]byte, error) {
 	return body, nil
 }
 
-// PatchConfig updates setup-managed host and server configuration.
+// PatchConfig updates setup-managed host, server, and integration configuration.
 func (c *Client) PatchConfig(payload ConfigPatch) error {
 	if c.hostKey == "" {
 		return fmt.Errorf("host key is required")
 	}
-	if payload.Host == nil && payload.Server == nil {
+	if payload.Host == nil && payload.Server == nil && payload.Fail2Ban == nil {
 		return fmt.Errorf("at least one configuration field is required")
 	}
 

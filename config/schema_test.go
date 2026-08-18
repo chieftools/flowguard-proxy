@@ -24,6 +24,23 @@ func TestSchemaIncludesRequestFieldMatchers(t *testing.T) {
 	}
 }
 
+func TestSchemaIncludesOptInFail2BanConfiguration(t *testing.T) {
+	schema := readConfigSchema(t)
+	properties := schema["properties"].(map[string]any)
+	fail2banProperty := properties["fail2ban"].(map[string]any)
+	if fail2banProperty["$ref"] != "#/definitions/fail2ban_config" {
+		t.Fatalf("unexpected Fail2Ban property: %#v", fail2banProperty)
+	}
+	fail2banDefinition := schema["definitions"].(map[string]any)["fail2ban_config"].(map[string]any)
+	enabled := fail2banDefinition["properties"].(map[string]any)["enabled"].(map[string]any)
+	if enabled["type"] != "boolean" {
+		t.Fatalf("unexpected enabled schema: %#v", enabled)
+	}
+	if !schemaStringListContains(fail2banDefinition["required"].([]any), "enabled") {
+		t.Fatal("Fail2Ban enabled field must be required when the object is present")
+	}
+}
+
 func readConfigSchema(t *testing.T) map[string]any {
 	t.Helper()
 

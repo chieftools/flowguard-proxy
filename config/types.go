@@ -17,6 +17,7 @@ type Config struct {
 	IPLists        *IPListsConfig         `json:"ip_lists,omitempty"`
 	Updates        *UpdatesConfig         `json:"updates,omitempty"`
 	Firewall       *FirewallConfig        `json:"firewall,omitempty"`
+	Fail2Ban       *Fail2BanConfig        `json:"fail2ban,omitempty"`
 	Realtime       *pusher.Config         `json:"realtime,omitempty"`
 	Heartbeat      *HeartbeatConfig       `json:"heartbeat,omitempty"`
 	Challenges     *ChallengesConfig      `json:"challenges,omitempty"`
@@ -86,6 +87,10 @@ type FirewallConfig struct {
 	MonitorEnabled       *bool `json:"monitor_enabled,omitempty"`
 	AutoRepair           *bool `json:"auto_repair,omitempty"`
 	CheckIntervalSeconds int   `json:"check_interval_seconds,omitempty"`
+}
+
+type Fail2BanConfig struct {
+	Enabled bool `json:"enabled"`
 }
 
 type HeartbeatConfig struct {

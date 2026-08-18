@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,10 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"flowguard/api"
 	"flowguard/certmanager"
 	"flowguard/config"
+	"flowguard/fail2ban"
 	"flowguard/proxy"
 
 	"github.com/spf13/cobra"
@@ -27,7 +30,8 @@ var (
 	setupIsInteractive = func() bool {
 		return isTerminal(os.Stdin)
 	}
-	setupInspectNetwork = proxy.InspectNetwork
+	setupInspectNetwork  = proxy.InspectNetwork
+	setupInspectFail2Ban = fail2ban.Inspect
 
 	setupPsaConfPath       = "/etc/psa/psa.conf"
 	setupACMEPaths         = []string{"/etc/traefik/acme.json", "/var/lib/traefik/acme.json"}
@@ -289,7 +293,11 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, r
 	if err != nil {
 		return nil, err
 	}
-	payload := api.ConfigPatch{Server: &serverPatch}
+	fail2banPatch, err := promptSetupFail2Ban(reader, cfg)
+	if err != nil {
+		return nil, err
+	}
+	payload := api.ConfigPatch{Server: &serverPatch, Fail2Ban: fail2banPatch}
 	if discoveredCertPath != "" || discoveredACMEPath != "" || discoveredNginxConfigPath != "" {
 		payload.Host = &api.HostConfigPatch{
 			CertPath:        discoveredCertPath,
@@ -323,6 +331,29 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, r
 	}
 
 	return updatedBody, nil
+}
+
+func promptSetupFail2Ban(reader *bufio.Reader, cfg *config.Config) (*api.Fail2BanConfigPatch, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	inspection := setupInspectFail2Ban(ctx)
+	current := cfg.Fail2BanEnabled()
+	if !inspection.Available {
+		if current {
+			fmt.Fprintf(setupOutput, "⚠ Fail2Ban integration remains enabled, but availability could not be verified: %s\n", inspection.Reason)
+		} else if verbose && inspection.Reason != "" {
+			fmt.Fprintf(setupOutput, "  Fail2Ban integration not offered: %s\n", inspection.Reason)
+		}
+		return nil, nil
+	}
+
+	fmt.Fprintf(setupOutput, "  ✓ Detected Fail2Ban with %d active jail(s): %s\n", len(inspection.Jails), setupListOrNone(inspection.Jails))
+	fmt.Fprintln(setupOutput, "  FlowGuard can silently block HTTP requests from addresses banned by any active jail.")
+	enabled, err := promptYesNo(reader, setupOutput, "Enable Fail2Ban integration?", current)
+	if err != nil {
+		return nil, err
+	}
+	return &api.Fail2BanConfigPatch{Enabled: enabled}, nil
 }
 
 func applySetupPaths(cfg *config.Config, certPath, acmePath, nginxConfigPath string) {

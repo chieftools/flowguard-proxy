@@ -49,6 +49,9 @@
         "firewall": {
             "$ref": "#/definitions/firewall_config"
         },
+        "fail2ban": {
+            "$ref": "#/definitions/fail2ban_config"
+        },
         "ip_lists": {
             "$ref": "#/definitions/ip_lists_config"
         },
@@ -700,6 +703,20 @@
                     "description": "How often to verify redirect rules in seconds. Default: 30"
                 }
             },
+            "additionalProperties": false
+        },
+        "fail2ban_config": {
+            "type": "object",
+            "description": "Optional synchronization with the local Fail2Ban daemon",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Mirror all active Fail2Ban jail bans into FlowGuard. Default: false"
+                }
+            },
+            "required": [
+                "enabled"
+            ],
             "additionalProperties": false
         },
         "ip_lists_config": {

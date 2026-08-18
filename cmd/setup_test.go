@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -19,6 +21,7 @@ import (
 
 	"flowguard/api"
 	"flowguard/config"
+	"flowguard/fail2ban"
 	"flowguard/proxy"
 )
 
@@ -33,6 +36,7 @@ func resetSetupTestGlobals(t *testing.T) {
 	oldOutput := setupOutput
 	oldIsInteractive := setupIsInteractive
 	oldInspectNetwork := setupInspectNetwork
+	oldInspectFail2Ban := setupInspectFail2Ban
 	oldLookupEnvironment := setupLookupEnvironment
 	oldStreamsAreTerminal := setupStreamsAreTerminal
 	oldRunForm := setupRunForm
@@ -58,6 +62,9 @@ func resetSetupTestGlobals(t *testing.T) {
 			}},
 		}, nil
 	}
+	setupInspectFail2Ban = func(context.Context) fail2ban.Inspection {
+		return fail2ban.Inspection{Reason: "not available in unit tests"}
+	}
 	setupLookupEnvironment = func(string) (string, bool) { return "", false }
 	setupStreamsAreTerminal = func() bool { return false }
 	setupPsaConfPath = filepath.Join(t.TempDir(), "missing-psa.conf")
@@ -74,6 +81,7 @@ func resetSetupTestGlobals(t *testing.T) {
 		setupOutput = oldOutput
 		setupIsInteractive = oldIsInteractive
 		setupInspectNetwork = oldInspectNetwork
+		setupInspectFail2Ban = oldInspectFail2Ban
 		setupLookupEnvironment = oldLookupEnvironment
 		setupStreamsAreTerminal = oldStreamsAreTerminal
 		setupRunForm = oldRunForm
@@ -504,6 +512,41 @@ func TestSetupHostNonInteractiveNeverPatches(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte(`"host":{}`)) {
 		t.Fatalf("expected original config to be saved, got %s", string(body))
+	}
+}
+
+func TestPromptSetupFail2BanIsOptInAndPreservesExplicitEnablement(t *testing.T) {
+	resetSetupTestGlobals(t)
+	setupInspectFail2Ban = func(context.Context) fail2ban.Inspection {
+		return fail2ban.Inspection{Available: true, Jails: []string{"web-scan", "repeat-offender"}}
+	}
+
+	patch, err := promptSetupFail2Ban(bufio.NewReader(strings.NewReader("\n")), &config.Config{})
+	if err != nil {
+		t.Fatalf("prompt disabled Fail2Ban: %v", err)
+	}
+	if patch == nil || patch.Enabled {
+		t.Fatalf("new integration should default to disabled: %+v", patch)
+	}
+
+	patch, err = promptSetupFail2Ban(bufio.NewReader(strings.NewReader("\n")), &config.Config{
+		Fail2Ban: &config.Fail2BanConfig{Enabled: true},
+	})
+	if err != nil {
+		t.Fatalf("prompt enabled Fail2Ban: %v", err)
+	}
+	if patch == nil || !patch.Enabled {
+		t.Fatalf("explicit enablement should be preserved: %+v", patch)
+	}
+}
+
+func TestValidateSetupPatchResponseChecksFail2Ban(t *testing.T) {
+	payload := api.ConfigPatch{Fail2Ban: &api.Fail2BanConfigPatch{Enabled: true}}
+	if err := validateSetupPatchResponse(&config.Config{}, payload); err == nil {
+		t.Fatal("expected missing Fail2Ban enablement to fail validation")
+	}
+	if err := validateSetupPatchResponse(&config.Config{Fail2Ban: &config.Fail2BanConfig{Enabled: true}}, payload); err != nil {
+		t.Fatalf("validate enabled Fail2Ban response: %v", err)
 	}
 }
 

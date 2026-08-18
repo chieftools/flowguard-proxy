@@ -530,6 +530,9 @@ func validateSetupPatchResponse(cfg *config.Config, payload api.ConfigPatch) err
 			return fmt.Errorf("updated configuration did not include Traefik ACME path %s", payload.Host.ACMEPath)
 		}
 	}
+	if payload.Fail2Ban != nil && cfg.Fail2BanEnabled() != payload.Fail2Ban.Enabled {
+		return fmt.Errorf("updated configuration did not include fail2ban.enabled=%t", payload.Fail2Ban.Enabled)
+	}
 	if payload.Server == nil {
 		return nil
 	}

@@ -652,12 +652,6 @@ func blockRequest(w http.ResponseWriter, r *http.Request, action *config.RuleAct
 	// Set rule match information in context for logging
 	SetRuleMatch(r, rule, action, action.Action)
 
-	streamID := GetStreamID(r)
-
-	// Add Via header to blocked responses to match proxied responses and our stream ID
-	w.Header().Add("Via", fmt.Sprintf("%d.%d flowguard", r.ProtoMajor, r.ProtoMinor))
-	w.Header().Add("FG-Stream", streamID)
-
 	// Use configured status and message, or defaults
 	message := action.Message
 	if message == "" {
@@ -678,6 +672,19 @@ func blockRequest(w http.ResponseWriter, r *http.Request, action *config.RuleAct
 			status = http.StatusForbidden
 		}
 	}
+
+	writeBlockedResponse(w, r, status, message)
+}
+
+// writeBlockedResponse renders the standard FlowGuard block response without
+// attaching rule metadata. Callers are responsible for setting their own log
+// context before invoking it.
+func writeBlockedResponse(w http.ResponseWriter, r *http.Request, status int, message string) {
+	streamID := GetStreamID(r)
+
+	// Add Via header to blocked responses to match proxied responses and our stream ID
+	w.Header().Add("Via", fmt.Sprintf("%d.%d flowguard", r.ProtoMajor, r.ProtoMinor))
+	w.Header().Add("FG-Stream", streamID)
 
 	if acceptsHTML(r) {
 		// Replace placeholders in the HTML template

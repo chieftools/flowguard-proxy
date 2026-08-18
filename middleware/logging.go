@@ -30,6 +30,7 @@ const (
 	ContextKeyChallengeMatched  contextKey = "challenge_matched"
 	ContextKeyRateLimitApplied  contextKey = "rate_limit_applied"
 	ContextKeyMiddlewareEndTime contextKey = "middleware_end_time"
+	ContextKeyFail2BanInfo      contextKey = "fail2ban_info"
 )
 
 type RequestLogEntryIPInfo struct {
@@ -126,6 +127,10 @@ type RequestLogEntryFingerprintInfo struct {
 
 type RequestLogEntryCloudflareInfo struct {
 	RayID string `json:"ray_id,omitempty"`
+}
+
+type RequestLogEntryFail2BanInfo struct {
+	Jails []string `json:"jails"`
 }
 
 type LoggingMiddleware struct {
@@ -250,6 +255,10 @@ func (lm *LoggingMiddleware) logRequest(r *http.Request, wrapper *ResponseWriter
 		entry.Data["challenge"] = challenge
 	}
 
+	if fail2banInfo := GetFail2BanInfo(r); fail2banInfo != nil {
+		entry.Data["fail2ban"] = fail2banInfo
+	}
+
 	if proxy := getProxyInfo(r); proxy != nil {
 		entry.Data["proxy"] = proxy
 	}
@@ -342,6 +351,23 @@ func SetRuleMatch(r *http.Request, rule *config.Rule, action *config.RuleAction,
 	ctx = context.WithValue(ctx, ContextKeyAction, action)
 	ctx = context.WithValue(ctx, ContextKeyRuleResult, result)
 	*r = *r.WithContext(ctx)
+}
+
+func SetRuleResult(r *http.Request, result string) {
+	ctx := context.WithValue(r.Context(), ContextKeyRuleResult, result)
+	*r = *r.WithContext(ctx)
+}
+
+func SetFail2BanInfo(r *http.Request, info RequestLogEntryFail2BanInfo) {
+	ctx := context.WithValue(r.Context(), ContextKeyFail2BanInfo, info)
+	*r = *r.WithContext(ctx)
+}
+
+func GetFail2BanInfo(r *http.Request) *RequestLogEntryFail2BanInfo {
+	if info, ok := r.Context().Value(ContextKeyFail2BanInfo).(RequestLogEntryFail2BanInfo); ok {
+		return &info
+	}
+	return nil
 }
 
 func GetRuleResult(r *http.Request) string {

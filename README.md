@@ -28,6 +28,7 @@ It features an (optional) [control panel](https://flowguard.network/) for easy m
 
 ### Advanced Features
 - **Structured Logging**: Sink-based logging to files, Loki, or OpenObserve with hot-reload support
+- **Fail2Ban Synchronization**: Optional near-real-time enforcement of local Fail2Ban jail bans
 - **Efficient connection handling**: Minimal overhead with optimized middleware chain
 - **Certificate caching**: Automatic refresh for seamless rotation
 - **Network interface binding**: Support for multi-homed systems
@@ -147,6 +148,8 @@ Interactive setup also checks whether transparent upstream networking is
 available, helps resolve ambiguous IPv4/IPv6 address pairs, and asks which HTTP
 protocols to enable. New setups prefer transparent client-IP forwarding when
 its prerequisites are ready; rediscovery defaults to the current settings.
+When a running Fail2Ban installation with active jails is detected, setup also
+offers to synchronize its bans. This integration is opt-in and defaults to No.
 Run `flowguard setup -v` to show each server-source, bind-address, and
 address-pair detection decision, including why NGINX listeners or pairing
 heuristics were rejected.
@@ -285,6 +288,47 @@ For dual-stack servers, FlowGuard must know which IPv4 and IPv6 addresses repres
 }
 ```
 
+## Fail2Ban Integration
+
+On Linux hosts, FlowGuard can mirror the addresses currently banned by every
+active Fail2Ban jail and reject their HTTP requests before evaluating FlowGuard
+rules or connecting upstream. This works in both headers and transparent
+client-IP modes. Because all active jails are included, an address banned by an
+SSH, mail, or recidivist jail is also blocked from proxied HTTP traffic.
+
+The integration is disabled unless explicitly enabled during interactive setup
+or in configuration:
+
+```json
+{
+  "fail2ban": {
+    "enabled": true
+  }
+}
+```
+
+When enabled during startup, FlowGuard waits for the initial Fail2Ban
+reconciliation attempt before opening its proxy listeners. A temporarily
+unavailable Fail2Ban daemon does not permanently prevent startup; FlowGuard
+continues with the normal retry schedule after the first attempt finishes.
+
+FlowGuard adds a temporary `flowguard-runtime` action to active jails so ban and
+unban events normally arrive immediately. It audits active jails and runtime
+actions every minute, and reloads the authoritative banned-IP lists every five
+minutes to recover from missed events. Newly discovered or reattached jails are
+loaded immediately. If the runtime event socket cannot be created or is later
+lost, snapshot enforcement continues while FlowGuard recreates the socket and
+attaches or verifies runtime actions when it becomes available. No files under
+`/etc/fail2ban` are created or changed, and the runtime action is removed during
+a clean FlowGuard shutdown. If the Fail2Ban daemon is confirmed unavailable,
+FlowGuard clears its synchronized state and continues running.
+
+Blocked requests receive the standard FlowGuard `403 Forbidden` response. HTML
+clients see the normal block page with a Stream ID, while other clients receive
+the Stream ID in the `FG-Stream` response header. Structured request logs record
+response status `403`, `rule.result` as `block`, and the matching jails under
+`fail2ban.jails`.
+
 ## Certificate Management
 
 The proxy expects combined certificate files (cert + key) in the specified certificate path. Files should be named by hostname and contain both the certificate chain and private key.
@@ -306,6 +350,10 @@ FlowGuard provides structured logging with multiple simultaneous destinations (s
 - **OpenObserve**: OpenObserve with automatic field flattening
 
 Challenge activity is logged in a top-level `challenge` object. The `rule.result` field remains the final request disposition such as `proxy`, `block`, or `rate_limit`; challenge outcomes such as `issued_html`, `issued_non_html`, `passed`, `verify_success`, and `verify_failed` are recorded under `challenge.outcome`. Challenge logs include `challenge.rule.id/name` and `challenge.action.id/name`, captured from the challenge token when verification or clearance events are logged.
+
+Fail2Ban blocks add a top-level `fail2ban` object containing the matching jail
+names, set `rule.result` to `block`, and record response status `403`. The Stream
+ID shown to the client is also available as `stream_id` in the request log.
 
 ### Configuration
 
@@ -370,6 +418,7 @@ FlowGuard uses a JSON configuration file for advanced filtering rules. The confi
 - **Upstream Client IP**: Choose canonical forwarding headers or same-host Linux transparent source sockets
 - **IP Lists**: Configure in-memory IP lists for high-performance matching
 - **Challenges**: Configure FlowGuard-owned challenge defaults and clearance cookies
+- **Fail2Ban**: Optionally mirror all active local jail bans before rule evaluation
 - **Logging**: Configure structured logging sinks (file, Loki, OpenObserve)
 
 #### JSON Schema Support

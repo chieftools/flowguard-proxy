@@ -181,6 +181,7 @@ func TestPatchConfigSendsSetupConfiguration(t *testing.T) {
 				},
 			},
 		},
+		Fail2Ban: &Fail2BanConfigPatch{Enabled: true},
 	})
 	if err != nil {
 		t.Fatalf("PatchConfig: %v", err)
@@ -209,6 +210,46 @@ func TestPatchConfigSendsSetupConfiguration(t *testing.T) {
 	pairs := transparent["address_pairs"].([]any)
 	if len(pairs) != 1 {
 		t.Fatalf("unexpected address pairs: %#v", pairs)
+	}
+	fail2banConfig := received["fail2ban"].(map[string]any)
+	if fail2banConfig["enabled"] != true {
+		t.Fatalf("unexpected Fail2Ban payload: %#v", fail2banConfig)
+	}
+}
+
+func TestPatchConfigAcceptsFail2BanOnlyPayload(t *testing.T) {
+	var received map[string]any
+	client := NewClient("host-key", "flowguard-test")
+	client.baseURL = "https://flowguard.test"
+	client.httpClient = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read request body: %v", err)
+			}
+			if err := json.Unmarshal(body, &received); err != nil {
+				t.Fatalf("decode patch payload: %v", err)
+			}
+			return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(bytes.NewReader(nil)), Header: make(http.Header)}, nil
+		}),
+	}
+
+	if err := client.PatchConfig(ConfigPatch{Fail2Ban: &Fail2BanConfigPatch{Enabled: false}}); err != nil {
+		t.Fatalf("PatchConfig: %v", err)
+	}
+	if len(received) != 1 {
+		t.Fatalf("unexpected payload: %#v", received)
+	}
+	fail2banConfig, ok := received["fail2ban"].(map[string]any)
+	if !ok || fail2banConfig["enabled"] != false {
+		t.Fatalf("unexpected Fail2Ban payload: %#v", received)
+	}
+}
+
+func TestPatchConfigRejectsEmptyPayload(t *testing.T) {
+	client := NewClient("host-key", "flowguard-test")
+	if err := client.PatchConfig(ConfigPatch{}); err == nil || !strings.Contains(err.Error(), "at least one configuration field") {
+		t.Fatalf("unexpected empty-payload error: %v", err)
 	}
 }
 
