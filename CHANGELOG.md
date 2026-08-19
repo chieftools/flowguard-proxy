@@ -9,6 +9,14 @@ release.
 
 ## [Unreleased]
 
+## [0.19.0]
+
+### Changed
+
+- Updated the Go runtime and dependencies. ([fe96a1fa](https://github.com/chieftools/flowguard-proxy/commit/fe96a1fa82b457c90f0ad7ba04a16fb4f652718b))
+- Improved heartbeat and private realtime channel authorization reliability by reusing outbound connections and limiting response cleanup work. ([dc41bd08](https://github.com/chieftools/flowguard-proxy/commit/dc41bd08cc1ecfd5c8bb5aa90c651f40f0ffcd7f))
+- Hardened HTTP request handling by rejecting requests with excessive header values before they reach FlowGuard middleware. ([fe96a1fa](https://github.com/chieftools/flowguard-proxy/commit/fe96a1fa82b457c90f0ad7ba04a16fb4f652718b), [2693ec74](https://github.com/chieftools/flowguard-proxy/commit/2693ec749470a380a2ceb99bc024ed66cd90c65a))
+
 ## [0.18.0]
 
 ### Added
@@ -556,7 +564,9 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.17.1...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.19.0
+[0.18.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.18.0
 [0.17.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.17.1
 [0.17.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.17.0
 [0.16.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.16.2
