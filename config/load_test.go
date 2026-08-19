@@ -114,6 +114,37 @@ func TestLoadHydratesIDsAndSortsRules(t *testing.T) {
 	}
 }
 
+func TestLoadIgnoresUnknownConfigFields(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "$schema": "https://schemas.example.test/flowguard-preview.json",
+  "id": "cfg-forward-compatible",
+  "future_policy": {
+    "mode": "observe"
+  },
+  "server": {
+    "advertise_http3": false,
+    "future_listener": {
+      "enabled": true
+    }
+  }
+}`)
+
+	manager, err := loadTestManager(configPath)
+	if err != nil {
+		t.Fatalf("load manager: %v", err)
+	}
+
+	if manager.config.ID != "cfg-forward-compatible" {
+		t.Fatalf("expected known config id to load, got %q", manager.config.ID)
+	}
+	if manager.config.Server == nil || manager.config.Server.AdvertiseHTTP3 == nil {
+		t.Fatal("expected known nested server setting to load")
+	}
+	if *manager.config.Server.AdvertiseHTTP3 {
+		t.Fatal("expected advertise_http3 to remain false")
+	}
+}
+
 func sortOrderPtr(v int) *int {
 	return &v
 }

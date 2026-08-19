@@ -216,6 +216,48 @@ func TestRefreshFromAPI(t *testing.T) {
 		}
 	})
 
+	t.Run("future fields remain loadable after refresh", func(t *testing.T) {
+		configPath := writeTestConfig(t, `{"id":"cfg-before"}`)
+		responseBody := `{
+  "$schema": "https://schemas.example.test/flowguard-edge.json",
+  "id": "cfg-after",
+  "future_rollout": {"cohort": "preview"},
+  "server": {
+    "advertise_http3": true,
+    "future_transport": {"enabled": true}
+  }
+}`
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(responseBody))
+		}))
+		defer server.Close()
+
+		t.Setenv("API_BASE", server.URL)
+		manager := &Manager{
+			configPath:      configPath,
+			apiClient:       api.NewClient("host-key", "FlowGuard/test"),
+			currentConfigID: "cfg-before",
+			config: &Config{
+				Host: &HostConfig{Key: "host-key"},
+			},
+		}
+
+		if err := manager.RefreshFromAPI(false); err != nil {
+			t.Fatalf("refresh config: %v", err)
+		}
+		if err := manager.Load(); err != nil {
+			t.Fatalf("load refreshed config: %v", err)
+		}
+
+		if manager.config.ID != "cfg-after" {
+			t.Fatalf("expected refreshed config id, got %q", manager.config.ID)
+		}
+		if manager.config.Server == nil || manager.config.Server.AdvertiseHTTP3 == nil || !*manager.config.Server.AdvertiseHTTP3 {
+			t.Fatal("expected known nested server setting from refreshed config")
+		}
+	})
+
 	t.Run("write failure is returned", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
