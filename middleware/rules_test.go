@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"flowguard/config"
@@ -112,7 +113,11 @@ func TestRateLimiter_IsAllowed(t *testing.T) {
 }
 
 func TestRateLimiter_SlidingWindow(t *testing.T) {
-	rl := NewRateLimiter(time.Millisecond * 10)
+	synctest.Test(t, testRateLimiterSlidingWindow)
+}
+
+func testRateLimiterSlidingWindow(t *testing.T) {
+	rl := NewRateLimiter(time.Minute)
 	defer rl.Stop()
 
 	// Fill up the rate limit
@@ -130,7 +135,7 @@ func TestRateLimiter_SlidingWindow(t *testing.T) {
 	}
 
 	// Wait for window to slide
-	time.Sleep(time.Second + 100*time.Millisecond)
+	synctest.Sleep(time.Second + 100*time.Millisecond)
 
 	// Should be allowed again
 	allowed, remaining, _ := rl.IsAllowed("sliding_test", 3, 1)
@@ -454,7 +459,11 @@ func TestRulesMiddleware_BlockAndRateLimit_Integration(t *testing.T) {
 }
 
 func TestRateLimiter_Cleanup(t *testing.T) {
-	rl := NewRateLimiter(time.Millisecond * 10) // Very frequent cleanup
+	synctest.Test(t, testRateLimiterCleanup)
+}
+
+func testRateLimiterCleanup(t *testing.T) {
+	rl := NewRateLimiter(time.Hour + time.Millisecond)
 	defer rl.Stop()
 
 	// Add some entries
@@ -467,14 +476,14 @@ func TestRateLimiter_Cleanup(t *testing.T) {
 		t.Errorf("Expected 2 total keys, got %d", totalKeys)
 	}
 
-	// Wait for entries to expire and cleanup to run
-	time.Sleep(time.Second + 100*time.Millisecond)
+	// Wait for entries to expire and cleanup to run.
+	synctest.Sleep(time.Hour + 2*time.Millisecond)
 
-	// Force cleanup by accessing stats
 	stats = rl.GetStats()
 	totalKeys = stats["total_keys"].(int)
-	// Note: Stop might not have run yet due to timing, so we don't assert specific values
-	// but the test verifies the cleanup mechanism exists and runs
+	if totalKeys != 0 {
+		t.Errorf("Expected cleanup to remove expired keys, got %d", totalKeys)
+	}
 }
 
 func TestStringMatcher(t *testing.T) {

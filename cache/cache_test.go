@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -31,6 +32,10 @@ func TestWithHTTPClient(t *testing.T) {
 }
 
 func TestCacheBasics(t *testing.T) {
+	synctest.Test(t, testCacheBasics)
+}
+
+func testCacheBasics(t *testing.T) {
 	// Create temp directory for cache
 	tempDir := t.TempDir()
 
@@ -79,7 +84,7 @@ func TestCacheBasics(t *testing.T) {
 	}
 
 	// Third fetch with expired cache should hit server again
-	time.Sleep(2 * time.Millisecond) // Ensure cache is expired
+	synctest.Sleep(2 * time.Millisecond) // Ensure cache is expired
 	data3, updated3, err := cache.FetchWithCache(ts.URL, 1*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Third fetch failed: %v", err)
@@ -105,6 +110,10 @@ func TestCacheBasics(t *testing.T) {
 }
 
 func TestCacheETag(t *testing.T) {
+	synctest.Test(t, testCacheETag)
+}
+
+func testCacheETag(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Create test server that supports ETag
@@ -144,7 +153,7 @@ func TestCacheETag(t *testing.T) {
 
 	// Force re-fetch (with very short max age)
 	// Server should return 304 Not Modified
-	time.Sleep(2 * time.Millisecond) // Ensure cache is expired
+	synctest.Sleep(2 * time.Millisecond) // Ensure cache is expired
 	data2, updated2, err := cache.FetchWithCache(ts.URL, 1*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Second fetch failed: %v", err)
@@ -231,6 +240,10 @@ func TestCacheClearOperations(t *testing.T) {
 }
 
 func TestCacheFailover(t *testing.T) {
+	synctest.Test(t, testCacheFailover)
+}
+
+func testCacheFailover(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Create test server that fails after first request
@@ -262,7 +275,7 @@ func TestCacheFailover(t *testing.T) {
 	}
 
 	// Second fetch with expired cache should try server, fail, but return stale cache
-	time.Sleep(2 * time.Millisecond) // Ensure cache is expired
+	synctest.Sleep(2 * time.Millisecond) // Ensure cache is expired
 	data2, updated2, err := cache.FetchWithCache(ts.URL, 1*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Second fetch failed: %v", err)

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"flowguard/cache"
@@ -91,6 +92,10 @@ func TestRefreshTrustedProxiesUpdatesURLSource(t *testing.T) {
 }
 
 func TestTrustedProxyRefreshLoopUpdatesURLSource(t *testing.T) {
+	synctest.Test(t, testTrustedProxyRefreshLoopUpdatesURLSource)
+}
+
+func testTrustedProxyRefreshLoopUpdatesURLSource(t *testing.T) {
 	var body atomic.Value
 	body.Store("192.0.2.0/24\n")
 	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -104,15 +109,12 @@ func TestTrustedProxyRefreshLoopUpdatesURLSource(t *testing.T) {
 	body.Store("198.51.100.0/24\n")
 
 	manager.StartTrustedProxyRefresh()
-	t.Cleanup(func() {
+	defer func() {
 		close(manager.stopTrustedProxyRefresh)
 		manager.trustedProxyRefreshWG.Wait()
-	})
+	}()
 
-	deadline := time.Now().Add(3 * time.Second)
-	for !manager.IsTrustedProxy("198.51.100.1") && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
+	synctest.Sleep(time.Second)
 	if !manager.IsTrustedProxy("198.51.100.1") || manager.IsTrustedProxy("192.0.2.1") {
 		t.Fatal("periodic refresh did not atomically replace the URL source")
 	}
