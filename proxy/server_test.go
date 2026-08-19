@@ -3,11 +3,16 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +26,75 @@ import (
 
 	"flowguard/config"
 	"flowguard/middleware"
+
+	"github.com/quic-go/quic-go/http3"
 )
+
+type protocolCaptureMiddleware struct {
+	requests atomic.Int32
+}
+
+func (m *protocolCaptureMiddleware) Handle(w http.ResponseWriter, r *http.Request, _ http.Handler) {
+	m.requests.Add(1)
+	if ja4 := middleware.GetJA4Fingerprint(r); ja4 != "" {
+		w.Header().Set("X-Test-JA4", ja4)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (*protocolCaptureMiddleware) Stop() {}
+
+func startProtocolTestServer(t *testing.T, protocols config.ProtocolSettings, tlsConfig *tls.Config, terminal middleware.Middleware) *Server {
+	t.Helper()
+
+	chain := middleware.NewChain()
+	chain.Add(terminal)
+	scheme := "http"
+	if tlsConfig != nil {
+		scheme = "https"
+	}
+	server := NewServer(&ServerConfig{
+		scheme:     scheme,
+		bindAddr:   "127.0.0.1",
+		bindPort:   "0",
+		middleware: chain,
+		protocols:  &protocols,
+	})
+	if err := server.Start(tlsConfig, make(chan error, 1)); err != nil {
+		t.Fatalf("start protocol test server: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		server.Shutdown(ctx)
+	})
+	return server
+}
+
+func testServerTLSConfig(t *testing.T) *tls.Config {
+	t.Helper()
+
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate private key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	certificate, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+
+	return &tls.Config{Certificates: []tls.Certificate{{
+		Certificate: [][]byte{certificate},
+		PrivateKey:  privateKey,
+	}}}
+}
 
 func TestServerStartReturnsBindErrorsSynchronously(t *testing.T) {
 	occupied, err := net.Listen("tcp", "127.0.0.1:0")
@@ -108,6 +181,76 @@ func TestServerStartHTTPSSkipsHTTP3WhenDisabled(t *testing.T) {
 	case err := <-errChan:
 		t.Fatalf("unexpected serve error: %v", err)
 	default:
+	}
+}
+
+func TestServerUsesDefaultHeaderValueLimit(t *testing.T) {
+	terminal := &protocolCaptureMiddleware{}
+	server := startProtocolTestServer(t, config.ProtocolSettings{HTTP1: true}, nil, terminal)
+	endpoint := "http://" + server.listener.Addr().String() + "/headers"
+
+	normalRequest, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		t.Fatalf("create normal request: %v", err)
+	}
+	for range 3 {
+		normalRequest.Header.Add("X-Forwarded-Sample", "present")
+	}
+	normalResponse, err := http.DefaultClient.Do(normalRequest)
+	if err != nil {
+		t.Fatalf("send normal request: %v", err)
+	}
+	normalResponse.Body.Close()
+	if normalResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("normal request status = %d, want %d", normalResponse.StatusCode, http.StatusNoContent)
+	}
+
+	excessiveRequest, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		t.Fatalf("create excessive request: %v", err)
+	}
+	for range http.DefaultMaxHeaderValueCount + 1 {
+		excessiveRequest.Header.Add("X-Forwarded-Sample", "present")
+	}
+	excessiveResponse, err := http.DefaultClient.Do(excessiveRequest)
+	if err != nil {
+		t.Fatalf("send excessive request: %v", err)
+	}
+	excessiveResponse.Body.Close()
+	if excessiveResponse.StatusCode != http.StatusRequestHeaderFieldsTooLarge {
+		t.Fatalf("excessive request status = %d, want %d", excessiveResponse.StatusCode, http.StatusRequestHeaderFieldsTooLarge)
+	}
+	if got := terminal.requests.Load(); got != 1 {
+		t.Fatalf("middleware handled %d requests, want only the normal request", got)
+	}
+}
+
+func TestHTTP3HandshakeAttachesJA4Fingerprint(t *testing.T) {
+	terminal := &protocolCaptureMiddleware{}
+	server := startProtocolTestServer(t, config.ProtocolSettings{HTTP3: true}, testServerTLSConfig(t), terminal)
+	endpoint := "https://" + server.udpConn.LocalAddr().String() + "/ja4"
+
+	transport := &http3.Transport{TLSClientConfig: &tls.Config{
+		InsecureSkipVerify: true, // The server uses a generated test certificate.
+		ServerName:         "edge.example.test",
+	}}
+	t.Cleanup(func() {
+		if err := transport.Close(); err != nil {
+			t.Errorf("close HTTP/3 transport: %v", err)
+		}
+	})
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+
+	response, err := client.Get(endpoint)
+	if err != nil {
+		t.Fatalf("perform HTTP/3 request: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent || response.ProtoMajor != 3 {
+		t.Fatalf("HTTP/3 response status=%d protocol=%s", response.StatusCode, response.Proto)
+	}
+	if ja4 := response.Header.Get("X-Test-JA4"); !strings.HasPrefix(ja4, "q") {
+		t.Fatalf("expected QUIC JA4 fingerprint in middleware, got %q", ja4)
 	}
 }
 
