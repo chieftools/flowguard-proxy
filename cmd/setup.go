@@ -471,13 +471,13 @@ func discoverNginxConfigPath() (setupDiscoveryCandidate, bool, []string) {
 	summary, err := certmanager.ProbeNginxConfigSummary(setupNginxConfigPath)
 	if err == nil {
 		return setupDiscoveryCandidate{
-				kind:    "nginx",
-				path:    setupNginxConfigPath,
-				summary: summary,
-			}, true, []string{fmt.Sprintf(
-				"NGINX configuration: accepted %s (%d usable certificate(s), %d hostname(s))",
-				setupNginxConfigPath, summary.CertificateCount, summary.HostnameCount,
-			)}
+			kind:    "nginx",
+			path:    setupNginxConfigPath,
+			summary: summary,
+		}, true, []string{fmt.Sprintf(
+			"NGINX configuration: accepted %s (%d usable certificate(s), %d hostname(s))",
+			setupNginxConfigPath, summary.CertificateCount, summary.HostnameCount,
+		)}
 	}
 
 	return setupDiscoveryCandidate{}, false, []string{fmt.Sprintf("NGINX configuration: rejected %s: %v", setupNginxConfigPath, err)}
