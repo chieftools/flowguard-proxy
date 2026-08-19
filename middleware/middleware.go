@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"net"
 	"net/http"
+	"slices"
 )
 
 // Middleware represents middleware that can wrap the entire HTTP request/response cycle
@@ -47,8 +48,7 @@ func (mc *Chain) ServeHTTPWithHandler(w http.ResponseWriter, r *http.Request, fi
 	// Build the middleware chain by wrapping handlers
 	// We iterate backwards so that the first middleware added becomes the outermost wrapper
 	// This means the first added middleware executes first and completes last (wrap pattern)
-	for i := len(mc.middlewares) - 1; i >= 0; i-- {
-		middleware := mc.middlewares[i]
+	for _, middleware := range slices.Backward(mc.middlewares) {
 		currentHandler := handler
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			middleware.Handle(w, r, currentHandler)

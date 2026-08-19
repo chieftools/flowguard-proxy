@@ -25,8 +25,8 @@ type LokiSink struct {
 	channel       chan *LogEntry
 	cancelFunc    context.CancelFunc
 	configHash    string
-	channelDrops  uint64
-	channelResets uint64
+	channelDrops  atomic.Uint64
+	channelResets atomic.Uint64
 	wg            sync.WaitGroup
 }
 
@@ -126,8 +126,8 @@ func (s *LokiSink) Write(entry *LogEntry) error {
 	case s.channel <- entry:
 		return nil
 	default:
-		atomic.AddUint64(&s.channelDrops, 1)
-		drops := atomic.LoadUint64(&s.channelDrops)
+		s.channelDrops.Add(1)
+		drops := s.channelDrops.Load()
 		if drops%100 == 1 {
 			log.Printf("[logger:loki] Sink %s channel is full, total drops: %d", s.name, drops)
 		}
@@ -274,7 +274,7 @@ func (s *LokiSink) runIngestion(ctx context.Context) {
 
 		// Check for excessive drops and recreate channel if needed
 		if time.Since(lastChannelCheck) > channelCheckPeriod {
-			currentDrops := atomic.LoadUint64(&s.channelDrops)
+			currentDrops := s.channelDrops.Load()
 			dropsInPeriod := currentDrops - lastDropCount
 
 			if dropsInPeriod > maxDropsBeforeReset {
@@ -282,7 +282,7 @@ func (s *LokiSink) runIngestion(ctx context.Context) {
 					s.name, dropsInPeriod, channelCheckPeriod)
 
 				s.recreateChannel()
-				atomic.AddUint64(&s.channelResets, 1)
+				s.channelResets.Add(1)
 			}
 
 			lastDropCount = currentDrops

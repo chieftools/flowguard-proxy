@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -183,8 +184,7 @@ func (m *IPLookupMiddleware) extractIPs(r *http.Request) (clientIP string, proxy
 			}
 
 			// Traverse from right to left to find the first non-trusted IP
-			for i := len(parsedIPs) - 1; i >= 0; i-- {
-				ip := parsedIPs[i]
+			for _, ip := range slices.Backward(parsedIPs) {
 				if !m.configMgr.IsTrustedProxy(ip) {
 					clientIP = ip
 					return clientIP, proxyIP

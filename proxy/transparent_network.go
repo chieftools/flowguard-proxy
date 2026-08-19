@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -171,8 +172,8 @@ func (m *transparentNetworkManager) Repair() error {
 }
 
 func (m *transparentNetworkManager) rollbackLocked() {
-	for i := len(m.cleanupActions) - 1; i >= 0; i-- {
-		m.cleanupActions[i]()
+	for _, cleanup := range slices.Backward(m.cleanupActions) {
+		cleanup()
 	}
 	m.cleanupActions = nil
 	m.cleanupKeys = make(map[string]bool)

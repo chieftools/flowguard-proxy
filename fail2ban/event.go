@@ -129,11 +129,9 @@ func (s *eventServer) serve() {
 }
 
 func (s *eventServer) startHandler(conn net.Conn) {
-	s.handlers.Add(1)
-	go func() {
-		defer s.handlers.Done()
+	s.handlers.Go(func() {
 		s.handle(conn)
-	}()
+	})
 }
 
 func (s *eventServer) handle(conn net.Conn) {
