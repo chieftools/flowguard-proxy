@@ -67,6 +67,7 @@ type Client struct {
 	hostKey        string
 	userAgent      string
 	verbose        bool
+	httpClient     *http.Client
 	conn           *websocket.Conn
 	socketID       string
 	isConnected    bool
@@ -93,6 +94,7 @@ func NewClient(cfg *Config, userAgent, hostKey string, verbose bool) *Client {
 		hostKey:       hostKey,
 		userAgent:     userAgent,
 		verbose:       verbose,
+		httpClient:    &http.Client{Timeout: websocketWriteTimeout},
 		stopChan:      make(chan struct{}),
 		eventHandlers: make(map[string]MessageHandler),
 	}
@@ -601,8 +603,6 @@ func (c *Client) generateChannelAuth(socketID, channel, authURL, hostKey, userAg
 	authData.Set("socket_id", socketID)
 	authData.Set("channel_name", channel)
 
-	// Create HTTP client and request
-	client := &http.Client{Timeout: websocketWriteTimeout}
 	req, err := http.NewRequest("POST", authURL, strings.NewReader(authData.Encode()))
 	if err != nil {
 		return "", fmt.Errorf("failed to create auth request: %w", err)
@@ -618,7 +618,7 @@ func (c *Client) generateChannelAuth(socketID, channel, authURL, hostKey, userAg
 	}
 
 	// Execute the request
-	resp, err := client.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("auth request failed: %w", err)
 	}

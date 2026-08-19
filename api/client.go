@@ -246,10 +246,7 @@ func (c *Client) SendHeartbeat(payload HeartbeatPayload) error {
 	if err != nil {
 		return fmt.Errorf("failed to send heartbeat: %w", err)
 	}
-	defer func() {
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-	}()
+	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("heartbeat returned status %d", resp.StatusCode)

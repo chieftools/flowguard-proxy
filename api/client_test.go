@@ -15,6 +15,21 @@ func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return fn(req)
 }
 
+type trackingResponseBody struct {
+	reads  int
+	closes int
+}
+
+func (b *trackingResponseBody) Read([]byte) (int, error) {
+	b.reads++
+	return 0, io.EOF
+}
+
+func (b *trackingResponseBody) Close() error {
+	b.closes++
+	return nil
+}
+
 func TestPatchConfigPathsSendsNestedHostPayload(t *testing.T) {
 	var received struct {
 		Host struct {
@@ -354,5 +369,30 @@ func TestSendHeartbeatIncludesFirewallPayload(t *testing.T) {
 				t.Fatalf("unexpected bind addresses: %#v", received.BindAddresses)
 			}
 		})
+	}
+}
+
+func TestSendHeartbeatClosesResponseWithoutExplicitDrain(t *testing.T) {
+	body := &trackingResponseBody{}
+	client := NewClient("host-key", "flowguard-test")
+	client.baseURL = "https://flowguard.test"
+	client.httpClient = &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Body:       body,
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	if err := client.SendHeartbeat(HeartbeatPayload{}); err != nil {
+		t.Fatalf("SendHeartbeat: %v", err)
+	}
+	if body.reads != 0 {
+		t.Fatalf("expected no explicit response drain, got %d reads", body.reads)
+	}
+	if body.closes != 1 {
+		t.Fatalf("expected response body to close once, got %d", body.closes)
 	}
 }

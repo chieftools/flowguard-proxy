@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +23,12 @@ type realtimeTestServer struct {
 	sendEstablished bool
 	accepts         atomic.Int32
 	closeCodes      chan int
+}
+
+type pusherRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn pusherRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
 }
 
 func newRealtimeTestServer(t *testing.T, sendEstablished bool) *realtimeTestServer {
@@ -102,6 +110,42 @@ func connectionEstablishedMessage(socketID string) Message {
 	return Message{
 		Event: "pusher:connection_established",
 		Data:  data,
+	}
+}
+
+func TestGenerateChannelAuthReusesHTTPClient(t *testing.T) {
+	client := NewClient(&Config{}, "flowguard-test", "host-key", false)
+	var requests atomic.Int32
+	sharedClient := &http.Client{
+		Transport: pusherRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			requests.Add(1)
+			if got := req.Header.Get("Authorization"); got != "Bearer host-key" {
+				t.Fatalf("unexpected authorization header: %q", got)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"auth":"signed-token"}`)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+	client.httpClient = sharedClient
+
+	for range 2 {
+		auth, err := client.generateChannelAuth("socket-42", "private-events", "https://flowguard.test/auth", "host-key", "flowguard-test")
+		if err != nil {
+			t.Fatalf("generate channel auth: %v", err)
+		}
+		if auth != "signed-token" {
+			t.Fatalf("unexpected auth token: %q", auth)
+		}
+	}
+
+	if client.httpClient != sharedClient {
+		t.Fatal("expected the shared HTTP client to remain configured")
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("expected two requests through the shared client, got %d", got)
 	}
 }
 
