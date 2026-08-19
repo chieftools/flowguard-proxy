@@ -30,6 +30,19 @@ func (b *trackingResponseBody) Close() error {
 	return nil
 }
 
+func TestWithHTTPClient(t *testing.T) {
+	sharedClient := &http.Client{}
+	client := NewClient("host-key", "flowguard-test", WithHTTPClient(sharedClient))
+	if client.httpClient != sharedClient {
+		t.Fatal("expected configured HTTP client")
+	}
+
+	defaultClient := NewClient("host-key", "flowguard-test", WithHTTPClient(nil))
+	if defaultClient.httpClient == nil {
+		t.Fatal("expected nil option to retain the default HTTP client")
+	}
+}
+
 func TestPatchConfigPathsSendsNestedHostPayload(t *testing.T) {
 	var received struct {
 		Host struct {

@@ -100,13 +100,12 @@ func TestGetIPDatabasePathFallbacksAndSuccess(t *testing.T) {
 		tempDir := t.TempDir()
 		t.Chdir(tempDir)
 
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("binary-db"))
 		}))
-		defer server.Close()
 
 		cacheDir := filepath.Join(tempDir, "cache")
-		c, err := cache.NewCache(cacheDir, "FlowGuard/test", false)
+		c, err := cache.NewCache(cacheDir, "FlowGuard/test", false, cache.WithHTTPClient(server.Client()))
 		if err != nil {
 			t.Fatalf("new cache: %v", err)
 		}

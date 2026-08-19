@@ -6,9 +6,29 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestWithHTTPClient(t *testing.T) {
+	sharedClient := &http.Client{}
+	cache, err := NewCache(t.TempDir(), "test-agent", false, WithHTTPClient(sharedClient))
+	if err != nil {
+		t.Fatalf("NewCache: %v", err)
+	}
+	if cache.httpClient != sharedClient {
+		t.Fatal("expected configured HTTP client")
+	}
+
+	defaultCache, err := NewCache(t.TempDir(), "test-agent", false, WithHTTPClient(nil))
+	if err != nil {
+		t.Fatalf("NewCache with nil client: %v", err)
+	}
+	if defaultCache.httpClient == nil {
+		t.Fatal("expected nil option to retain the default HTTP client")
+	}
+}
 
 func TestCacheBasics(t *testing.T) {
 	// Create temp directory for cache
@@ -16,15 +36,14 @@ func TestCacheBasics(t *testing.T) {
 
 	// Create test server that counts requests
 	requestCount := 0
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 		w.Header().Set("ETag", fmt.Sprintf("etag-%d", requestCount))
 		fmt.Fprintf(w, "Response #%d", requestCount)
 	}))
-	defer ts.Close()
 
 	// Create cache
-	cache, err := NewCache(tempDir, "test-agent", false)
+	cache, err := NewCache(tempDir, "test-agent", false, WithHTTPClient(ts.Client()))
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
@@ -90,7 +109,7 @@ func TestCacheETag(t *testing.T) {
 
 	// Create test server that supports ETag
 	requestCount := 0
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 
 		// Check for If-None-Match header
@@ -102,9 +121,8 @@ func TestCacheETag(t *testing.T) {
 		w.Header().Set("ETag", "stable-etag")
 		fmt.Fprint(w, "Stable content")
 	}))
-	defer ts.Close()
 
-	cache, err := NewCache(tempDir, "test-agent", false)
+	cache, err := NewCache(tempDir, "test-agent", false, WithHTTPClient(ts.Client()))
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
@@ -145,12 +163,11 @@ func TestCacheETag(t *testing.T) {
 func TestCacheClearOperations(t *testing.T) {
 	tempDir := t.TempDir()
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "Test content")
 	}))
-	defer ts.Close()
 
-	cache, err := NewCache(tempDir, "test-agent", false)
+	cache, err := NewCache(tempDir, "test-agent", false, WithHTTPClient(ts.Client()))
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
@@ -218,7 +235,7 @@ func TestCacheFailover(t *testing.T) {
 
 	// Create test server that fails after first request
 	requestCount := 0
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 		if requestCount == 1 {
 			fmt.Fprint(w, "First response")
@@ -226,9 +243,8 @@ func TestCacheFailover(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}))
-	defer ts.Close()
 
-	cache, err := NewCache(tempDir, "test-agent", false)
+	cache, err := NewCache(tempDir, "test-agent", false, WithHTTPClient(ts.Client()))
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
@@ -265,37 +281,34 @@ func TestCacheFailover(t *testing.T) {
 func TestAPIKeyAutomatic(t *testing.T) {
 	tempDir := t.TempDir()
 
-	// Create test API server that checks for auth header
 	apiRequestCount := 0
 	var receivedAuthHeader string
-	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		apiRequestCount++
-		receivedAuthHeader = r.Header.Get("Authorization")
-		fmt.Fprint(w, "API response")
-	}))
-	defer apiServer.Close()
-
-	// Create test public server that should NOT receive auth
 	publicRequestCount := 0
 	var publicAuthHeader string
-	publicServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			apiRequestCount++
+			receivedAuthHeader = r.Header.Get("Authorization")
+			fmt.Fprint(w, "API response")
+			return
+		}
+
 		publicRequestCount++
 		publicAuthHeader = r.Header.Get("Authorization")
 		fmt.Fprint(w, "Public response")
 	}))
-	defer publicServer.Close()
 
-	cache, err := NewCache(tempDir, "test-agent", false)
+	cache, err := NewCache(tempDir, "test-agent", false, WithHTTPClient(server.Client()))
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}
 
 	// Configure API credentials
-	cache.SetAPICredentials(apiServer.URL, "test-api-key-12345")
+	cache.SetAPICredentials(server.URL+"/api", "test-api-key-12345")
 
 	// Test 1: URL starting with API base should get automatic auth
 	receivedAuthHeader = ""
-	_, _, err = cache.FetchWithCache(apiServer.URL+"/database.mmdb", 1*time.Hour)
+	_, _, err = cache.FetchWithCache(server.URL+"/api/database.mmdb", 1*time.Hour)
 	if err != nil {
 		t.Fatalf("API fetch failed: %v", err)
 	}
@@ -308,7 +321,7 @@ func TestAPIKeyAutomatic(t *testing.T) {
 
 	// Test 2: Public URL should NOT get auth header
 	publicAuthHeader = ""
-	_, _, err = cache.FetchWithCache(publicServer.URL+"/public.txt", 1*time.Hour)
+	_, _, err = cache.FetchWithCache(server.URL+"/public.txt", 1*time.Hour)
 	if err != nil {
 		t.Fatalf("Public fetch failed: %v", err)
 	}
@@ -322,7 +335,7 @@ func TestAPIKeyAutomatic(t *testing.T) {
 	// Test 3: Explicit bearer token should override automatic
 	receivedAuthHeader = ""
 	apiRequestCount = 0
-	_, _, err = cache.FetchWithCache(apiServer.URL+"/override", 1*time.Hour, "explicit-token")
+	_, _, err = cache.FetchWithCache(server.URL+"/api/override", 1*time.Hour, "explicit-token")
 	if err != nil {
 		t.Fatalf("API fetch with explicit token failed: %v", err)
 	}
@@ -336,13 +349,12 @@ func TestAPIKeyAutomaticFileCache(t *testing.T) {
 
 	// Create test API server
 	var receivedAuthHeader string
-	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	apiServer := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedAuthHeader = r.Header.Get("Authorization")
 		fmt.Fprint(w, "Binary file content")
 	}))
-	defer apiServer.Close()
 
-	cache, err := NewCache(tempDir, "test-agent", false)
+	cache, err := NewCache(tempDir, "test-agent", false, WithHTTPClient(apiServer.Client()))
 	if err != nil {
 		t.Fatalf("Failed to create cache: %v", err)
 	}

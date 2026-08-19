@@ -69,12 +69,11 @@ func TestRefreshTrustedProxiesRejectsInvalidEntry(t *testing.T) {
 func TestRefreshTrustedProxiesUpdatesURLSource(t *testing.T) {
 	var body atomic.Value
 	body.Store("192.0.2.0/24\n")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(body.Load().(string)))
 	}))
-	defer server.Close()
 
-	manager := newTrustedProxyTestManager(t, server.URL)
+	manager := newTrustedProxyTestManager(t, server, "")
 	if err := manager.RefreshTrustedProxies(); err != nil {
 		t.Fatalf("initial refresh: %v", err)
 	}
@@ -94,12 +93,11 @@ func TestRefreshTrustedProxiesUpdatesURLSource(t *testing.T) {
 func TestTrustedProxyRefreshLoopUpdatesURLSource(t *testing.T) {
 	var body atomic.Value
 	body.Store("192.0.2.0/24\n")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(body.Load().(string)))
 	}))
-	defer server.Close()
 
-	manager := newTrustedProxyTestManager(t, server.URL)
+	manager := newTrustedProxyTestManager(t, server, "")
 	if err := manager.RefreshTrustedProxies(); err != nil {
 		t.Fatalf("initial refresh: %v", err)
 	}
@@ -121,12 +119,11 @@ func TestTrustedProxyRefreshLoopUpdatesURLSource(t *testing.T) {
 }
 
 func TestRefreshTrustedProxiesRetainsLastKnownGoodSource(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("192.0.2.0/24\n"))
 	}))
-	defer server.Close()
 
-	manager := newTrustedProxyTestManager(t, server.URL)
+	manager := newTrustedProxyTestManager(t, server, "")
 	if err := manager.RefreshTrustedProxies(); err != nil {
 		t.Fatalf("initial refresh: %v", err)
 	}
@@ -142,17 +139,17 @@ func TestRefreshTrustedProxiesRetainsLastKnownGoodSource(t *testing.T) {
 }
 
 func TestRefreshTrustedProxiesRetainsOnlyFailedSource(t *testing.T) {
-	liveServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("198.51.100.0/24\n"))
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/live" {
+			_, _ = w.Write([]byte("198.51.100.0/24\n"))
+			return
+		}
+		http.Error(w, "source unavailable", http.StatusServiceUnavailable)
 	}))
-	defer liveServer.Close()
 
-	failedServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	failedURL := failedServer.URL
-	failedServer.Close()
-
-	manager := newTrustedProxyTestManager(t, liveServer.URL)
-	manager.config.TrustedProxies.IPNets = []string{liveServer.URL, failedURL}
+	manager := newTrustedProxyTestManager(t, server, "/live")
+	failedURL := server.URL + "/failed"
+	manager.config.TrustedProxies.IPNets = []string{server.URL + "/live", failedURL}
 	lastGood := iplist.NewSet([]netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")})
 	manager.trustedProxySources[failedURL] = lastGood
 	manager.trustedProxySet = lastGood
@@ -166,12 +163,11 @@ func TestRefreshTrustedProxiesRetainsOnlyFailedSource(t *testing.T) {
 }
 
 func TestRefreshTrustedProxiesAcceptsSuccessfulEmptySource(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("# intentionally empty\n"))
 	}))
-	defer server.Close()
 
-	manager := newTrustedProxyTestManager(t, server.URL)
+	manager := newTrustedProxyTestManager(t, server, "")
 	lastGood := iplist.NewSet([]netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
 	manager.trustedProxySources[server.URL] = lastGood
 	manager.trustedProxySet = lastGood
@@ -188,12 +184,11 @@ func TestRefreshTrustedProxiesAcceptsSuccessfulEmptySource(t *testing.T) {
 }
 
 func TestTrustedProxyURLFailureOnColdStartIsFailClosed(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
-	defer server.Close()
 
-	manager := newTrustedProxyTestManager(t, server.URL)
+	manager := newTrustedProxyTestManager(t, server, "")
 	set, sources, err := manager.buildTrustedProxySet(manager.config.TrustedProxies, false)
 	if err != nil {
 		t.Fatalf("cold-start build: %v", err)
@@ -204,12 +199,11 @@ func TestTrustedProxyURLFailureOnColdStartIsFailClosed(t *testing.T) {
 }
 
 func TestTrustedProxyRemovedURLDoesNotRetainOldSource(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("192.0.2.0/24\n"))
 	}))
-	defer server.Close()
 
-	manager := newTrustedProxyTestManager(t, server.URL)
+	manager := newTrustedProxyTestManager(t, server, "")
 	if err := manager.RefreshTrustedProxies(); err != nil {
 		t.Fatalf("initial refresh: %v", err)
 	}
@@ -228,12 +222,14 @@ func TestTrustedProxyRemovedURLDoesNotRetainOldSource(t *testing.T) {
 	}
 }
 
-func newTrustedProxyTestManager(t *testing.T, source string) *Manager {
+func newTrustedProxyTestManager(t *testing.T, server *httptest.Server, sourcePath string) *Manager {
 	t.Helper()
-	c, err := cache.NewCache(t.TempDir(), "FlowGuard/test", false)
+	httpClient := server.Client()
+	c, err := cache.NewCache(t.TempDir(), "FlowGuard/test", false, cache.WithHTTPClient(httpClient))
 	if err != nil {
 		t.Fatalf("new cache: %v", err)
 	}
+	source := server.URL + sourcePath
 	return &Manager{
 		cache:                   c,
 		stopTrustedProxyRefresh: make(chan struct{}),

@@ -19,6 +19,19 @@ type Client struct {
 	httpClient *http.Client
 }
 
+// ClientOption configures an API client.
+type ClientOption func(*Client)
+
+// WithHTTPClient configures the HTTP client used for API requests.
+// A nil client leaves the default client unchanged.
+func WithHTTPClient(httpClient *http.Client) ClientOption {
+	return func(client *Client) {
+		if httpClient != nil {
+			client.httpClient = httpClient
+		}
+	}
+}
+
 type FirewallHeartbeat struct {
 	Status           string `json:"status"`
 	LastError        string `json:"last_error,omitempty"`
@@ -28,7 +41,7 @@ type FirewallHeartbeat struct {
 }
 
 // NewClient creates a new FlowGuard API client
-func NewClient(hostKey, userAgent string) *Client {
+func NewClient(hostKey, userAgent string, options ...ClientOption) *Client {
 	// Get base URL from environment variable, default to production
 	baseURL := os.Getenv("API_BASE")
 	if baseURL == "" {
@@ -38,7 +51,7 @@ func NewClient(hostKey, userAgent string) *Client {
 	// Ensure base URL doesn't end with slash
 	baseURL = strings.TrimSuffix(baseURL, "/")
 
-	return &Client{
+	client := &Client{
 		baseURL:   baseURL,
 		hostKey:   hostKey,
 		userAgent: userAgent,
@@ -46,6 +59,11 @@ func NewClient(hostKey, userAgent string) *Client {
 			Timeout: 30 * time.Second,
 		},
 	}
+	for _, option := range options {
+		option(client)
+	}
+
+	return client
 }
 
 // buildURL constructs the full API URL for a given path

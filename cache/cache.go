@@ -24,6 +24,19 @@ type Cache struct {
 	httpClient *http.Client
 }
 
+// CacheOption configures a Cache.
+type CacheOption func(*Cache)
+
+// WithHTTPClient configures the HTTP client used for cache fetches.
+// A nil client leaves the default client unchanged.
+func WithHTTPClient(httpClient *http.Client) CacheOption {
+	return func(cache *Cache) {
+		if httpClient != nil {
+			cache.httpClient = httpClient
+		}
+	}
+}
+
 // Entry represents a cached item with metadata
 type Entry struct {
 	Data      []byte    `json:"data"`
@@ -32,19 +45,24 @@ type Entry struct {
 }
 
 // NewCache creates a new cache instance
-func NewCache(cacheDir string, userAgent string, verbose bool) (*Cache, error) {
+func NewCache(cacheDir string, userAgent string, verbose bool, options ...CacheOption) (*Cache, error) {
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
-	return &Cache{
+	cache := &Cache{
 		cacheDir:  cacheDir,
 		userAgent: userAgent,
 		verbose:   verbose,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-	}, nil
+	}
+	for _, option := range options {
+		option(cache)
+	}
+
+	return cache, nil
 }
 
 // SetAPICredentials configures the API base URL and key for automatic authentication

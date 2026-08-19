@@ -120,7 +120,7 @@ func TestRefreshFromAPI(t *testing.T) {
 
 	t.Run("not modified returns nil and leaves file unchanged", func(t *testing.T) {
 		configPath := writeTestConfig(t, `{"id":"cfg-1"}`)
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if got := r.Header.Get("If-None-Match"); got != "cfg-1" {
 				t.Fatalf("expected etag cfg-1, got %s", got)
 			}
@@ -129,12 +129,12 @@ func TestRefreshFromAPI(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusNotModified)
 		}))
-		defer server.Close()
+		httpClient := server.Client()
 
 		t.Setenv("API_BASE", server.URL)
 		manager := &Manager{
 			configPath:      configPath,
-			apiClient:       api.NewClient("host-key", "FlowGuard/test"),
+			apiClient:       api.NewClient("host-key", "FlowGuard/test", api.WithHTTPClient(httpClient)),
 			currentConfigID: "cfg-1",
 			config: &Config{
 				Host: &HostConfig{Key: "host-key"},
@@ -156,16 +156,16 @@ func TestRefreshFromAPI(t *testing.T) {
 
 	t.Run("same id skips file update", func(t *testing.T) {
 		configPath := writeTestConfig(t, `{"id":"cfg-1"}`)
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"id":"cfg-1","rules":{},"actions":{}}`))
 		}))
-		defer server.Close()
+		httpClient := server.Client()
 
 		t.Setenv("API_BASE", server.URL)
 		manager := &Manager{
 			configPath:      configPath,
-			apiClient:       api.NewClient("host-key", "FlowGuard/test"),
+			apiClient:       api.NewClient("host-key", "FlowGuard/test", api.WithHTTPClient(httpClient)),
 			currentConfigID: "cfg-1",
 			config: &Config{
 				Host: &HostConfig{Key: "host-key"},
@@ -187,16 +187,16 @@ func TestRefreshFromAPI(t *testing.T) {
 
 	t.Run("successful refresh writes new config", func(t *testing.T) {
 		configPath := writeTestConfig(t, `{"id":"cfg-1"}`)
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"id":"cfg-2","rules":{},"actions":{}}`))
 		}))
-		defer server.Close()
+		httpClient := server.Client()
 
 		t.Setenv("API_BASE", server.URL)
 		manager := &Manager{
 			configPath:      configPath,
-			apiClient:       api.NewClient("host-key", "FlowGuard/test"),
+			apiClient:       api.NewClient("host-key", "FlowGuard/test", api.WithHTTPClient(httpClient)),
 			currentConfigID: "cfg-1",
 			config: &Config{
 				Host: &HostConfig{Key: "host-key"},
@@ -227,16 +227,16 @@ func TestRefreshFromAPI(t *testing.T) {
     "future_transport": {"enabled": true}
   }
 }`
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(responseBody))
 		}))
-		defer server.Close()
+		httpClient := server.Client()
 
 		t.Setenv("API_BASE", server.URL)
 		manager := &Manager{
 			configPath:      configPath,
-			apiClient:       api.NewClient("host-key", "FlowGuard/test"),
+			apiClient:       api.NewClient("host-key", "FlowGuard/test", api.WithHTTPClient(httpClient)),
 			currentConfigID: "cfg-before",
 			config: &Config{
 				Host: &HostConfig{Key: "host-key"},
@@ -259,16 +259,16 @@ func TestRefreshFromAPI(t *testing.T) {
 	})
 
 	t.Run("write failure is returned", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"id":"cfg-2","rules":{},"actions":{}}`))
 		}))
-		defer server.Close()
+		httpClient := server.Client()
 
 		t.Setenv("API_BASE", server.URL)
 		manager := &Manager{
 			configPath:      filepath.Join(t.TempDir(), "missing", "config.json"),
-			apiClient:       api.NewClient("host-key", "FlowGuard/test"),
+			apiClient:       api.NewClient("host-key", "FlowGuard/test", api.WithHTTPClient(httpClient)),
 			currentConfigID: "cfg-1",
 			config: &Config{
 				Host: &HostConfig{Key: "host-key"},
