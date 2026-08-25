@@ -1,49 +1,61 @@
 # FlowGuard Proxy
 
-A high-performance Go-based reverse proxy with advanced security features, designed to transparently intercept and filter HTTP/HTTPS traffic with dynamic rule-based filtering and minimal disruption.
+FlowGuard Proxy is a Go reverse proxy for Linux. It redirects inbound HTTP and
+HTTPS traffic through configurable security rules before forwarding requests to
+an existing backend. It can pass the validated client IP through canonical
+headers or preserve it as the source address on supported same-host setups.
 
-It features an (optional) [control panel](https://flowguard.network/) for easy management, configuration, and monitoring. The control panel will allow for realtime and centralized management of multiple FlowGuard instances in addition to providing access to GeoIP databases and AbuseIPDB IP lists.
+The optional [FlowGuard control panel](https://flowguard.network/) manages setup,
+configuration, logs, GeoIP data, and managed IP reputation lists. Proxy traffic
+and request filtering stay on the FlowGuard host.
 
-> [!IMPORTANT]  
-> FlowGuard is intended for use by experienced system administrators and security professionals. Improper configuration may lead to service disruption. Always test configurations in a safe environment before deploying to production.
+> [!IMPORTANT]
+> FlowGuard changes firewall and routing state. Test those changes before using
+> them on a production host.
 
 > [!CAUTION]
-> FlowGuard is a new project in active development and may have undiscovered bugs or security vulnerabilities. Use at your own risk and always keep software up to date.
+> FlowGuard is under active development. Keep it updated and review configuration
+> changes before deployment.
 
 ## Features
 
-### Core Functionality
-- **Transparent Traffic Interception**: Redirects traffic from ports 80 and 443 to proxy ports using iptables
-- **HTTPS Decryption**: Dynamically loads and manages SSL certificates for transparent HTTPS inspection
-- **Automatic Certificate Management**: Monitors and reloads certificates from the filesystem for seamless rotation
-- **Graceful Shutdown**: Automatically removes iptables rules on shutdown to restore original traffic flow
+### Proxy and networking
 
-### Security Middleware
-- **Dynamic Rule-Based Filtering**: Flexible rule engine with conditions for path, method, domain, IP/CIDR, ASN, user-agent, headers, query parameters, cookies, and iplist matching
-- **IP Database Integration**: ASN and geolocation lookups using configurable IP databases (MaxMind format)
-- **IP List System**: Built-in high-performance in-memory IP lists with automatic URL refresh (10M+ lookups/sec)
-- **Trusted Proxy Support**: Properly handles X-Forwarded-For headers from configurable trusted proxies
-- **Real Client IP Detection**: Extracts actual client IPs through proxy chains for accurate filtering
-- **Hot Configuration Reload**: Automatic configuration file monitoring and reloading without restart
+- Redirects ports 80 and 443 to FlowGuard with `iptables` or `ip6tables`.
+- Serves HTTP/1.1, HTTP/2, and HTTP/3 according to the configured protocol set.
+- Terminates TLS with certificates loaded from a directory, Traefik `acme.json`,
+  or NGINX configuration.
+- Supports canonical forwarding headers and same-host transparent client source
+  addresses.
+- Binds to multiple IPv4 and IPv6 addresses.
+- Removes FlowGuard-owned firewall and routing state during a clean shutdown.
 
-### Advanced Features
-- **Structured Logging**: Sink-based logging to files, Loki, or OpenObserve with hot-reload support
-- **Fail2Ban Synchronization**: Optional near-real-time enforcement of local Fail2Ban jail bans
-- **Efficient connection handling**: Minimal overhead with optimized middleware chain
-- **Certificate caching**: Automatic refresh for seamless rotation
-- **Network interface binding**: Support for multi-homed systems
-- **Smart caching**: ETag-aware HTTP caching for external resources with stale-while-revalidate
-- **Regex optimization**: Compiled pattern caching for rule matching
+### Request filtering
+
+- Evaluates ordered rules against request fields, client and proxy addresses,
+  ASN and GeoIP data, JA4 fingerprints, and named IP lists.
+- Supports log, allow, block, rate-limit, and browser challenge actions.
+- Resolves trusted proxy chains before rules evaluate the client identity.
+- Keeps URL-backed IP lists current with conditional requests and stale-cache
+  fallback when a source is temporarily unavailable.
+- Compiles regular expressions when configuration loads.
+
+### Operations
+
+- Reloads configuration and certificates after file changes.
+- Writes structured request logs to files, Loki, or OpenObserve.
+- Can synchronize bans from active local Fail2Ban jails.
+- Monitors FlowGuard-owned firewall state and repairs missing rules by default.
 
 ## Installation
 
-### Prerequisites (for building from source)
+### Prerequisites for source builds
 
-- Go 1.25 or later
-- Linux system with iptables support
-- Root/sudo access for port redirection
+- Go 1.27 or later
+- Linux with `iptables`; IPv6 and transparent mode have extra requirements
+- Root access for firewall, routing, and privileged service configuration
 
-### Building from Source
+### Build from source
 
 ```bash
 # Clone the repository
@@ -54,13 +66,16 @@ cd flowguard-proxy
 go build -o flowguard .
 ```
 
-### Quick Install
+### Quick install
 
 ```bash
-curl -sS https://pkg.flowguard.network/install.sh | sudo bash
+curl -fsSL https://pkg.flowguard.network/install.sh | sudo bash
 ```
 
-### Install on Debian/Ubuntu
+The installer supports Debian, Ubuntu, RHEL, CentOS, Rocky Linux, AlmaLinux, and
+Fedora on amd64 or arm64 systems.
+
+### Install on Debian or Ubuntu
 
 ```bash
 # Create a dedicated keyring directory
@@ -87,28 +102,26 @@ EOF
 sudo apt update
 sudo apt install flowguard
 
-# Setup initial configuration (optional - use FlowGuard control panel or create manually)
-# Alternatively create the /etc/flowguard/config.json manually
-flowguard setup fgsvr_...
+# Configure with a host key from the FlowGuard control panel
+sudo flowguard setup fgsvr_...
 
-# Ensure certificates are properly detected
-flowguard certificates
+# Check the detected certificates
+sudo flowguard certificates
 
-# Start the FlowGuard service
-sudo systemctl start flowguard
-
-# Enable FlowGuard to start on boot
-sudo systemctl enable flowguard
+# Start FlowGuard now and on boot
+sudo systemctl enable --now flowguard
 ```
 
-### Install on RHEL/CentOS/Rocky/Alma
+You can edit `/etc/flowguard/config.json` instead of using the control panel.
+
+### Install on RHEL, CentOS, Rocky Linux, AlmaLinux, or Fedora
 
 ```bash
 # Add FlowGuard repository
 sudo tee /etc/yum.repos.d/flowguard.repo << 'EOF'
 [flowguard]
 name=FlowGuard Repository
-baseurl=https://pkg.flowguard.network/rpm/stable/x86_64
+baseurl=https://pkg.flowguard.network/rpm/stable/$basearch
 enabled=1
 gpgcheck=1
 gpgkey=https://pkg.flowguard.network/gpg.key
@@ -117,32 +130,33 @@ EOF
 # Install FlowGuard
 sudo yum install flowguard
 
-# Setup initial configuration (optional - use FlowGuard control panel or create manually)
-flowguard setup fgsvr_...
+# Configure with a host key from the FlowGuard control panel
+sudo flowguard setup fgsvr_...
 
-# Start the FlowGuard service
-sudo systemctl start flowguard
-
-# Enable FlowGuard to start on boot
-sudo systemctl enable flowguard
+# Start FlowGuard now and on boot
+sudo systemctl enable --now flowguard
 ```
 
-### Upgrading
+You can edit `/etc/flowguard/config.json` instead of using the control panel.
+
+### Upgrade
 
 ```bash
 # Debian/Ubuntu
 sudo apt update
 sudo apt install --only-upgrade flowguard
 
-# RHEL/CentOS/Rocky/Alma
+# RHEL/CentOS/Rocky/Alma/Fedora
 sudo yum clean expire-cache --disablerepo=* --enablerepo=flowguard
 sudo yum update flowguard
 ```
 
-After the initial setup, run `flowguard setup` without a host key to reuse the
-key in `/etc/flowguard/config.json`, download the latest configuration, and
-repeat interactive server-configuration discovery. Use `--config` when the
-existing configuration is stored elsewhere.
+### Initial setup
+
+Run `sudo flowguard setup` without a host key to reuse the key in
+`/etc/flowguard/config.json`, download the latest configuration, and repeat
+interactive server discovery. Use `--config` when the configuration is stored
+elsewhere.
 
 Interactive setup also checks whether transparent upstream networking is
 available, helps resolve ambiguous IPv4/IPv6 address pairs, and asks which HTTP
@@ -150,7 +164,7 @@ protocols to enable. New setups prefer transparent client-IP forwarding when
 its prerequisites are ready; rediscovery defaults to the current settings.
 When a running Fail2Ban installation with active jails is detected, setup also
 offers to synchronize its bans. This integration is opt-in and defaults to No.
-Run `flowguard setup -v` to show each server-source, bind-address, and
+Run `sudo flowguard setup -v` to show each server-source, bind-address, and
 address-pair detection decision, including why NGINX listeners or pairing
 heuristics were rejected.
 
@@ -162,7 +176,7 @@ friendly prompts. Use the global `--no-tui` flag or set `FLOWGUARD_NO_TUI` to
 force line-oriented prompts; FlowGuard also falls back to these prompts when
 input or output is redirected or `TERM=dumb`.
 
-### Configure your server
+## Backend client IP
 
 FlowGuard sits in front of your existing backend and can pass the validated
 client IP upstream in two ways:
@@ -183,18 +197,27 @@ their configured mode. You can review readiness at any time with
 Whichever mode you choose, keep direct backend exposure narrow and restart
 FlowGuard after changing startup-only networking settings.
 
-#### Headers upstream client IP
+### Headers upstream client IP
 
 The `headers` mode works with any HTTP backend. FlowGuard removes incoming
 forwarding headers and writes canonical `X-Forwarded-For`, `X-Real-IP`,
 `X-Forwarded-Host`, and `X-Forwarded-Proto` values from its validated client
 identity.
 
-The backend must trust only connections that actually came through FlowGuard. Trusting a public server address is not inherently unsafe, but it becomes a spoofing risk if an attacker or another local workload can reach the backend directly while supplying its own forwarding headers. FlowGuard installs a direct-port guard for its interception listeners; you should still keep backend exposure and local workload access as narrow as possible.
+The backend must trust only connections that came through FlowGuard. An attacker
+can spoof forwarding headers if they can reach the backend directly from a
+trusted address. FlowGuard guards its own interception ports, but you must also
+restrict access to the backend.
 
-`set_real_ip_from` matches the TCP source address of the peer sending the forwarding header; it does not trust every request sent to that public destination. When FlowGuard is disabled, a direct client's source address does not match the server's own public address, so NGINX ignores client-supplied forwarding headers. If a CDN or another trusted proxy may connect directly while FlowGuard is disabled, keep that proxy's ranges in the trusted set as well.
+`set_real_ip_from` matches the TCP source address of the peer that sends the
+forwarding header. It does not trust every request sent to that public address.
+When FlowGuard is disabled, a direct client's source address does not match the
+server's own public address, so NGINX ignores client-supplied forwarding
+headers. Add the address ranges of any CDN or other proxy that may connect
+directly while FlowGuard is disabled.
 
-For NGINX, replace the example addresses with every address on which FlowGuard accepts traffic:
+For NGINX, replace the example addresses with every address on which FlowGuard
+accepts traffic:
 
 ```nginx
 real_ip_header X-Forwarded-For;
@@ -203,28 +226,33 @@ set_real_ip_from <public v4 address>;
 set_real_ip_from <public v6 address>;
 ```
 
-You can generate this configuration from the server's public addresses:
+Save the configuration and test it before reloading NGINX:
 
 ```bash
-NGINX_CONF=/etc/nginx/conf.d/flowguard.conf
-
-echo "real_ip_header X-Forwarded-For;" > "${NGINX_CONF}"
-echo "real_ip_recursive on;" >> "${NGINX_CONF}"
-echo "set_real_ip_from $(curl -sS ipv4.chief.tools);" >> "${NGINX_CONF}"
-echo "set_real_ip_from $(curl -sS ipv6.chief.tools);" >> "${NGINX_CONF}"
-cat "${NGINX_CONF}"
-nginx -t
-# systemctl reload nginx
+sudoedit /etc/nginx/conf.d/flowguard.conf
+sudo nginx -t
+sudo systemctl reload nginx
 ```
 
-#### Transparent upstream client IP
+### Transparent upstream client IP
 
-On a same-host Linux deployment, the opt-in `transparent` mode makes the validated client IP the TCP source address seen by the backend. NGINX, Apache, and other HTTP servers can then use their ordinary remote address without real-IP header configuration.
+On a same-host Linux deployment, `transparent` mode uses the validated client IP
+as the source address of the backend connection. NGINX, Apache, and other HTTP
+servers can then use the ordinary remote address without real-IP header
+configuration.
 
 > [!WARNING]
-> Transparent source preservation is per address family. On an IPv4-only server, a validated IPv6 client cannot be the source of an IPv4 TCP connection, and the inverse is also true. FlowGuard therefore uses canonical `X-Forwarded-For` and `X-Real-IP` header fallback only for opposite-family clients on genuinely single-stack servers. The fallback connection is pinned to the corresponding FlowGuard bind address, which the backend must trust with `real_ip` or equivalent handling. Matching-family requests remain fully transparent. Configure complete IPv4/IPv6 address pairs when both families must be preserved as the backend TCP source.
+> Transparent source preservation works within one address family. An IPv6
+> client cannot be the source of an IPv4 backend connection, nor can an IPv4
+> client be the source of an IPv6 connection. On a single-stack server,
+> FlowGuard falls back to canonical `X-Forwarded-For` and `X-Real-IP` headers for
+> opposite-family clients. The backend must trust the FlowGuard bind address
+> used by that fallback. Configure IPv4 and IPv6 address pairs when both
+> families must reach the backend with a transparent source address.
 
-For a quick test, override the configured mode for this process only. Transparent settings still come from the configuration, with the defaults below used when they are omitted:
+For a quick test, override the mode for one FlowGuard process. The other
+transparent settings still come from configuration and use these defaults when
+omitted:
 
 ```bash
 sudo flowguard run --upstream-client-ip-mode transparent --bind 192.0.2.10
@@ -247,7 +275,8 @@ sudo flowguard run --upstream-client-ip-mode transparent --bind 192.0.2.10
 }
 ```
 
-Before restarting FlowGuard, inspect the selected addresses, pairing, commands, sysctl access, and routing identifiers:
+Before restarting FlowGuard, inspect the selected addresses, pairings, commands,
+sysctl access, and routing identifiers:
 
 ```bash
 sudo flowguard network inspect
@@ -255,20 +284,34 @@ sudo flowguard network inspect
 sudo flowguard network inspect --bind 192.0.2.10,2001:db8::10
 ```
 
-The report always includes both header-mode and transparent-mode readiness, regardless of the configured mode. The configured mode is marked in the report and determines the command's exit status.
+The report covers both upstream modes and marks the configured mode. Its exit
+status reflects whether the configured mode is ready.
 
 Transparent mode:
 
-- Requires Linux, root privileges, `ip`, `iptables`, and `ip6tables` when IPv6 is active.
-- Supports same-host HTTP and HTTPS backends. It is not a remote-backend routing feature.
-- Creates a dedicated `FLOWGUARD_UPSTREAM` mangle chain and dedicated policy rule/table, adopts exact stale FlowGuard-owned resources after a crash, and removes them on clean shutdown.
-- Temporarily enables `net.ipv4.conf.all.src_valid_mark` when needed and restores the previous value on shutdown.
-- Performs a real source-address round trip before opening public listeners. Startup fails if interception cannot be proven.
-- Uses the validated client as the TCP source for matching or paired address families. A single-stack family mismatch uses canonical header fallback from the endpoint's bind address; it never falls back because a transparent dial or route failed.
-- Bounds per-client connection pools with an LRU limit; overflow requests use non-persistent connections rather than growing the pool without limit.
-- Treats all upstream mode, mark, table, pool, and address-pair settings as startup-only. Restart FlowGuard after changing them.
+- Requires Linux, root privileges, `ip`, `iptables`, and `ip6tables` when IPv6
+  is active.
+- Supports same-host HTTP and HTTPS backends. It is not a remote-backend routing
+  feature.
+- Creates a dedicated `FLOWGUARD_UPSTREAM` mangle chain and policy routing
+  state. It adopts exact stale FlowGuard-owned resources after a crash and
+  removes them on clean shutdown.
+- Temporarily enables `net.ipv4.conf.all.src_valid_mark` when needed and restores
+  the previous value on shutdown.
+- Tests the source address before opening public listeners. Startup fails if
+  interception cannot be proven.
+- Uses canonical header fallback only for a single-stack family mismatch. A
+  failed transparent dial or route does not fall back to headers.
+- Limits per-client connection pools with an LRU. Overflow requests use
+  non-persistent connections.
+- Treats upstream mode, mark, table, pool, and address-pair settings as
+  startup-only. Restart FlowGuard after changing them.
 
-For dual-stack servers, FlowGuard must know which IPv4 and IPv6 addresses represent the same backend. Resolution is deliberately conservative: explicit `address_pairs` win, followed by IPv4 and IPv6 addresses co-listed in a single NGINX `server` block, unique IPv6 addresses whose final four hextets repeat the decimal IPv4 octets (for example, `10.20.30.14` and `fd12:3456:789a:1:10:20:30:14`), and finally a single unambiguous remaining pair. FlowGuard refuses to start transparent mode if multiple candidates match or addresses otherwise remain ambiguous:
+For dual-stack servers, FlowGuard must know which IPv4 and IPv6 addresses reach
+the same backend. Explicit `address_pairs` take precedence. FlowGuard then
+checks addresses listed together in one NGINX `server` block, its embedded-IPv4
+heuristic, and a single unambiguous remaining pair. It refuses to start
+transparent mode if more than one pairing remains possible:
 
 ```json
 {
@@ -288,7 +331,7 @@ For dual-stack servers, FlowGuard must know which IPv4 and IPv6 addresses repres
 }
 ```
 
-## Fail2Ban Integration
+## Fail2Ban integration
 
 On Linux hosts, FlowGuard can mirror the addresses currently banned by every
 active Fail2Ban jail and reject their HTTP requests before evaluating FlowGuard
@@ -329,33 +372,58 @@ the Stream ID in the `FG-Stream` response header. Structured request logs record
 response status `403`, `rule.result` as `block`, and the matching jails under
 `fail2ban.jails`.
 
-## Certificate Management
+## Certificate management
 
-The proxy expects combined certificate files (cert + key) in the specified certificate path. Files should be named by hostname and contain both the certificate chain and private key.
+FlowGuard can load certificates from any combination of these sources:
 
-Certificate files are:
-- Loaded on-demand when first requested
-- Cached in memory for performance
-- Automatically refreshed periodically to support rotation
-- Validated on load to ensure proper format
+- `host.cert_path` points to a directory of combined PEM files. Each file must
+  contain a certificate chain and its private key. FlowGuard reads hostnames
+  from the certificate, so filenames do not need to match them.
+- `host.acme_path` points to a Traefik v2 or v3 `acme.json` file. FlowGuard reads
+  this file without changing it.
+- `host.nginx_config_path` points to an NGINX configuration. FlowGuard follows
+  its includes and loads referenced `ssl_certificate` and
+  `ssl_certificate_key` pairs.
+
+FlowGuard loads certificates at startup, skips expired certificates, and indexes
+valid certificates by DNS name and wildcard. It watches the source directories
+and reloads after file replacements or writes. If a Traefik renewal briefly
+leaves `acme.json` unreadable or incomplete, FlowGuard keeps the last valid ACME
+certificates.
+
+Use `sudo flowguard certificates` to inspect all configured sources, or pass a
+hostname to see which certificate FlowGuard will serve:
+
+```bash
+sudo flowguard certificates
+sudo flowguard certificates www.example.test
+```
+
+FlowGuard accepts TLS 1.2 and TLS 1.3. TLS 1.2 is limited to ECDHE suites with
+AES-GCM or ChaCha20-Poly1305; Go manages the TLS 1.3 cipher suites.
 
 ## Logging
 
-FlowGuard provides structured logging with multiple simultaneous destinations (sinks). Each sink can be independently configured and supports hot-reload.
+FlowGuard can write each structured request log to multiple sinks. Configuration
+reloads can add, remove, or update sinks while the proxy is running.
 
-### Supported Sinks
+### Supported sinks
 
-- **File**: Local file logging
-- **Loki**: Grafana Loki with JSON flattening
-- **OpenObserve**: OpenObserve with automatic field flattening
+- Local JSON files
+- Grafana Loki
+- OpenObserve
 
-Challenge activity is logged in a top-level `challenge` object. The `rule.result` field remains the final request disposition such as `proxy`, `block`, or `rate_limit`; challenge outcomes such as `issued_html`, `issued_non_html`, `passed`, `verify_success`, and `verify_failed` are recorded under `challenge.outcome`. Challenge logs include `challenge.rule.id/name` and `challenge.action.id/name`, captured from the challenge token when verification or clearance events are logged.
+Challenge activity appears in a top-level `challenge` object. `rule.result`
+records the final request disposition. `challenge.outcome` records challenge
+events such as `issued_html`, `issued_non_html`, `passed`, `verify_success`, and
+`verify_failed`. Verification and clearance entries also identify the rule and
+action stored in the challenge token.
 
 Fail2Ban blocks add a top-level `fail2ban` object containing the matching jail
 names, set `rule.result` to `block`, and record response status `403`. The Stream
 ID shown to the client is also available as `stream_id` in the request log.
 
-### Configuration
+### Sink configuration
 
 ```json
 {
@@ -387,55 +455,48 @@ ID shown to the client is also available as `stream_id` in the request log.
 }
 ```
 
-### Log Entry Format
+### Log entry format
 
-Each log entry includes:
-- Request details (method, URL, headers, TLS info, JA4 fingerprint when available)
-- Client information (IP, country, ASN)
-- Rule matching results (which rule matched, action taken)
-- Response details (status, timing, headers)
-- Host metadata (server ID, hostname, version)
+Each log entry contains request and response details, client and proxy identity,
+rule results, timing, and host metadata. HTTPS and HTTP/3 entries include a JA4
+fingerprint when one is available.
 
-### Smart Config Updates
+### Sink updates
 
-Sinks are only restarted when their specific configuration changes. Adding, removing, or modifying one sink doesn't affect others.
+On configuration reload, FlowGuard recreates only the sinks whose settings
+changed. Other sinks keep running.
 
 ## Configuration
 
-### Configuration File
+### Main sections
 
-FlowGuard uses a JSON configuration file for advanced filtering rules. The configuration supports:
+FlowGuard uses a JSON configuration file. Its main sections are:
 
-- **Rules**: Define matching conditions and associated actions
-- **Actions**: Specify what to do when rules match:
-  - `log`: Log request and continue processing (can be overridden by later rules)
-  - `allow`: Allow request and stop rule processing
-  - `block`: Block request with custom status/message
-  - `rate_limit`: Rate limit requests based on defined thresholds
-  - `challenge`: Require a first-party proof-of-work browser challenge before continuing
-- **IP Database**: Configure IP geolocation database source and refresh interval
-- **Trusted Proxies**: Configure trusted proxy networks for proper client IP detection
-- **Upstream Client IP**: Choose canonical forwarding headers or same-host Linux transparent source sockets
-- **IP Lists**: Configure in-memory IP lists for high-performance matching
-- **Challenges**: Configure FlowGuard-owned challenge defaults and clearance cookies
-- **Fail2Ban**: Optionally mirror all active local jail bans before rule evaluation
-- **Logging**: Configure structured logging sinks (file, Loki, OpenObserve)
+- `rules` defines matching conditions and associated actions.
+- `actions` defines what happens when a rule matches.
+- `ip_database` configures the MaxMind database source and refresh interval.
+- `trusted_proxies` defines trusted proxy networks and optional header
+  authentication.
+- `server` selects protocols and the upstream client-IP mode.
+- `ip_lists` defines URL-backed or local IP and CIDR lists.
+- `challenges` sets proof-of-work and clearance-cookie defaults.
+- `fail2ban` enables local jail synchronization.
+- `logging` configures file, Loki, and OpenObserve sinks.
 
-#### JSON Schema Support
+### JSON schema
 
-The repository includes a `config.schema.json` file that provides:
-- **IDE Autocomplete**: IntelliSense support in VS Code, IntelliJ, and other modern IDEs
-- **Validation**: Real-time error checking as you edit
-- **Documentation**: Inline descriptions for all properties
+The repository includes [config.schema.json](config.schema.json) for editor
+completion, validation, and field descriptions.
 
-To use the schema, add this line to your config.json:
+Add the schema URL to your configuration:
+
 ```json
 {
   "$schema": "https://raw.githubusercontent.com/chieftools/flowguard-proxy/main/config.schema.json"
 }
 ```
 
-Example configuration structure:
+### Example configuration
 
 ```json
 {
@@ -445,7 +506,7 @@ Example configuration structure:
       "conditions": {
         "matches": [
           {
-            "type": "agent",
+            "type": "user-agent",
             "match": "contains",
             "value": "bot"
           }
@@ -458,7 +519,7 @@ Example configuration structure:
         "operator": "OR",
         "matches": [
           {
-            "type": "agent",
+            "type": "user-agent",
             "match": "contains",
             "value": "scanner"
           }
@@ -494,46 +555,65 @@ Example configuration structure:
 }
 ```
 
-When using `trusted_proxies.header_auth`, FlowGuard defaults to the `FG-Trusted-Proxy-Secret` header. Configure the upstream proxy to strip any client-supplied copy of that header and set its own high-entropy value. Set `header_auth.header` only when you need a custom header name.
+`trusted_proxies.header_auth` uses `FG-Trusted-Proxy-Secret` by default. The
+upstream proxy must strip client-supplied copies and set its own high-entropy
+value. Use `header_auth.header` only for a custom header name.
 
-### Rule Conditions
+### Actions
 
-Rules support complex conditions with logical operators:
+| Action | Behavior |
+| --- | --- |
+| `log` | Records the match and continues to later rules. |
+| `allow` | Allows the request and stops rule evaluation. |
+| `block` | Returns the configured status and message. |
+| `rate_limit` | Applies the configured request limit and time window. |
+| `challenge` | Requires a first-party browser challenge before continuing. |
 
-- **Operators**: `AND`, `OR`, `NAND`, `NOR`
-- Unsupported operator values are rejected when the configuration is loaded.
-- **Match Types**:
-  - `path`: URL path matching
-  - `method`: HTTP method matching
-  - `domain`: Host header matching
-  - `user-agent`: User-Agent header matching
-  - `header`: Arbitrary header matching
-  - `query-param`: Query parameter matching
-  - `cookie`: Request cookie matching
-  - `ip`: Client IP matching, including optional inline CIDR ranges
-  - `proxy-ip`: Immediate trusted proxy IP matching, including optional inline CIDR ranges
-  - `asn`: Autonomous System Number matching
-  - `proxy-asn`: Immediate trusted proxy Autonomous System Number matching
-  - `as-name`: ASN organization name matching
-  - `as-domain`: ASN domain matching
-  - `country`: Country code matching (from GeoIP database)
-  - `continent`: Continent code matching (from GeoIP database)
-  - `iplist`: In-memory IP list matching (built-in, no dependencies)
-  - `proxy-iplist`: Immediate trusted proxy IP-list matching
-  - `fingerprint-ja4`: JA4 TLS client fingerprint matching (HTTPS and HTTP/3 requests)
-- **Match Operations**: `equals`, `not-equals`, `contains`, `not-contains`, `starts-with`, `not-starts-with`, `ends-with`, `not-ends-with`, `regex`, `not-regex`, `in`, `not-in`, `exists`, `missing`
+### Rule conditions
 
-### Bot Challenge Interstitials
+Condition groups support `AND`, `OR`, `NAND`, and `NOR`. An omitted operator
+defaults to `AND`; FlowGuard rejects any other value when loading configuration.
 
-Rules can use the `challenge` action to require a browser to pass a same-origin proof-of-work check before reaching protected resources. FlowGuard serves its own challenge endpoints under the reserved `/fg-cgi/` prefix; requests to unknown `/fg-cgi/*` paths are handled by FlowGuard and are not proxied upstream.
+Matcher types are grouped by the value they inspect:
 
-Successful challenges set an HTTP-only `fg_clearance` cookie. By default, clearance is scoped to the matching rule, lasts 30 minutes, and is bound to the client IP and User-Agent. Non-HTML requests fail closed with a machine-readable response and `X-FlowGuard-Challenge-URL` so API clients can be pre-cleared through a browser flow.
+- Request fields: `path`, `method`, `domain`, `registerable-domain`,
+  `user-agent`, `header`, `query-param`, and `cookie`.
+- Validated client identity: `ip`, `asn`, `as-name`, `as-domain`, `country`,
+  `continent`, and `iplist`.
+- Immediate trusted proxy identity: `proxy-ip`, `proxy-asn`, and
+  `proxy-iplist`.
+- TLS client identity: `fingerprint-ja4` for HTTPS and HTTP/3 requests.
 
-When multiple challenge rules match the same request, the first matching challenge rule wins. Later challenge rules are skipped after the first one has either issued a challenge or accepted valid clearance, so overlapping challenge rules should be ordered intentionally. Nested or cumulative challenges are not supported.
+String matchers support equality, substring, prefix, suffix, regular-expression,
+and list operations, including their negative forms. IP matchers accept addresses
+or CIDR ranges with `equals`, `not-equals`, `in`, or `not-in`. Header, query,
+cookie, proxy-IP, and proxy-ASN matchers also support `exists` and `missing`.
 
-Proof-of-work defaults to calibrated PBKDF2-SHA256. Calibrated mode signs an explicit `work_units` target into the challenge and requires a sequential hash chain, which gives more predictable solve time than probabilistic leading-zero difficulty. If `work_units` is omitted, FlowGuard derives it from `difficulty_bits` so legacy difficulty tuning still changes the deterministic effort; set `work_units` directly when you want exact control. `difficulty_bits` is also used by configs that explicitly set `effort_mode` to `probabilistic`.
+### Bot challenge interstitials
 
-Challenges also include a signed dwell-time gate. By default, the browser must remain on the challenge page for at least 1500ms before FlowGuard accepts verification, preventing instant 1ms interstitials even when the proof completes quickly.
+The `challenge` action requires a browser to pass a same-origin proof-of-work
+check before reaching a protected resource. FlowGuard reserves the `/fg-cgi/`
+prefix for challenge endpoints. It handles unknown paths below that prefix
+instead of forwarding them upstream.
+
+A successful challenge sets the HTTP-only `fg_clearance` cookie. By default, it
+lasts 30 minutes, applies to the matching rule, and binds to the client IP and
+User-Agent. Non-HTML requests receive a machine-readable response with
+`X-FlowGuard-Challenge-URL`; a browser can use that URL to obtain clearance.
+
+The first matching challenge rule wins. Once that rule issues a challenge or
+accepts clearance, FlowGuard skips later challenge rules. Order overlapping
+rules with this behavior in mind. FlowGuard does not support nested or
+cumulative challenges.
+
+Proof-of-work defaults to calibrated PBKDF2-SHA256. Calibrated mode signs a
+`work_units` target into the challenge and requires a sequential hash chain. If
+`work_units` is absent, FlowGuard derives it from `difficulty_bits`. Set
+`work_units` for an exact target. In `probabilistic` mode, `difficulty_bits`
+controls the leading-zero requirement instead.
+
+Challenge tokens also record when the page was issued. By default, FlowGuard
+rejects verification until the page has been open for 1500 milliseconds.
 
 ```json
 {
@@ -587,17 +667,22 @@ For local previewing, run:
 ./bin/dev.sh
 ```
 
-This builds `./flowguard` and runs `./flowguard dev`, starting a local-only preview server at `http://127.0.0.1:18080/` with links for the challenge, block, and rate-limit scenarios. The preview command does not install firewall rules and only fronts its own in-process demo backend.
+This builds `./flowguard` with the `devtools` build tag and starts a preview at
+`http://127.0.0.1:18080/`. The preview covers challenge, block, and rate-limit
+responses. It uses an in-process backend and does not install firewall rules.
 
-The preview command is behind the `devtools` Go build tag and is not included in normal or production builds.
+Normal and production builds do not include the preview command.
 
-### JA4 Fingerprints
+### JA4 fingerprints
 
-FlowGuard logs JA4 TLS client fingerprints at `request.fingerprint.ja4` for HTTPS and HTTP/3 requests. Cleartext HTTP requests do not have a JA4 fingerprint.
+FlowGuard logs JA4 TLS client fingerprints at `request.fingerprint.ja4` for
+HTTPS and HTTP/3. Cleartext HTTP requests do not have a JA4 fingerprint.
 
-JA4 is useful as one bot signal alongside IP, ASN, user-agent, path, and rate limits. Avoid blocking on a fingerprint alone unless you have validated it against your own traffic.
+Use JA4 alongside IP, ASN, User-Agent, path, and rate limits. Avoid blocking on a
+fingerprint alone unless you have checked it against your own traffic.
 
-**Exact match:**
+Exact match:
+
 ```json
 {
   "type": "fingerprint-ja4",
@@ -606,7 +691,8 @@ JA4 is useful as one bot signal alongside IP, ASN, user-agent, path, and rate li
 }
 ```
 
-**Match a JA4 prefix:**
+Prefix match:
+
 ```json
 {
   "type": "fingerprint-ja4",
@@ -615,13 +701,14 @@ JA4 is useful as one bot signal alongside IP, ASN, user-agent, path, and rate li
 }
 ```
 
-## Security Configuration
+## IP lists
 
-### IP List System
+FlowGuard stores IPv4 and IPv6 prefixes in memory. A list can use a URL, a local
+file, or a URL with a local-file fallback. URL lists refresh at their configured
+interval and use ETags when the source provides one.
 
-FlowGuard includes a built-in high-performance IP list system using radix trees for 10M+ lookups/second. Lists are loaded from URLs or files and automatically refreshed.
+Configuration:
 
-**Configuration:**
 ```json
 {
   "ip_lists": {
@@ -636,14 +723,16 @@ FlowGuard includes a built-in high-performance IP list system using radix trees 
 }
 ```
 
-**List Format:** One IP or CIDR per line (supports both IPv4 and IPv6):
+List files contain one IPv4 address, IPv6 address, or CIDR range per line:
+
 ```
 192.168.1.1
 10.0.0.0/24
 2001:db8::/32
 ```
 
-**Rule Usage:**
+Rule usage:
+
 ```json
 {
   "type": "iplist",
@@ -652,7 +741,9 @@ FlowGuard includes a built-in high-performance IP list system using radix trees 
 }
 ```
 
-Use `proxy-iplist` to match the immediate trusted proxy against the same lists. For a fail-closed proxy allowlist, block when the proxy IP is absent or is not in the list:
+Use `proxy-iplist` to match the immediate trusted proxy against the same lists.
+For a fail-closed proxy allowlist, block when the proxy IP is absent or not in
+the list:
 
 ```json
 {
@@ -671,7 +762,8 @@ Use `proxy-iplist` to match the immediate trusted proxy against the same lists. 
 }
 ```
 
-**Testing:**
+Inspect a list or test an address with the CLI:
+
 ```bash
 # Show list stats (load time, memory usage, entry count)
 flowguard iplist blocklist
@@ -680,40 +772,40 @@ flowguard iplist blocklist
 flowguard iplist blocklist contains 192.168.1.1
 ```
 
-### Dynamic Security Rules
-
-The proxy uses a flexible rule engine defined in the configuration file. Rules can be updated without restarting the service by modifying the configuration file - FlowGuard automatically detects and reloads changes.
-
 ## Architecture
 
 ### Components
 
-- **Main**: Entry point, command-line parsing, signal handling
-- **Proxy Manager**: Coordinates proxy servers, interception rules, transparent upstream policy routing, and graceful shutdown
-- **HTTP/HTTPS Servers**: Handle incoming requests and forward to backends
-- **Certificate Manager**: Dynamic SSL certificate loading and management
-- **Configuration Manager**: Hot-reload configuration with rule management
-- **Cache System**: Caching layer for external data fetches with ETag support
-- **IP List Manager**: High-performance radix tree-based IP list matching
-- **Logger Manager**: Sink-based structured logging with hot-reload
-- **Middleware Chain**:
-  - Rules Engine: Dynamic rule-based filtering with complex conditions
-  - IP Lookup: ASN and geolocation database integration
-  - Client IP extraction from trusted proxy chains
+| Component | Responsibility |
+| --- | --- |
+| CLI | Loads commands, flags, and process lifecycle. |
+| Proxy manager | Coordinates listeners, firewall rules, upstream routing, and shutdown. |
+| HTTP servers | Serve HTTP/1.1, HTTP/2, and HTTP/3 and forward accepted requests. |
+| Certificate manager | Loads, selects, watches, and reloads TLS certificates. |
+| Configuration manager | Loads configuration, watches for changes, and refreshes remote configuration. |
+| Cache | Stores external data and metadata for conditional HTTP requests. |
+| IP list manager | Loads and matches IPv4 and IPv6 prefixes. |
+| Logger manager | Writes structured entries to the configured sinks. |
+| Middleware chain | Resolves identity, logs requests, enforces Fail2Ban, and evaluates rules. |
 
-### Traffic Flow
+### Traffic flow
 
-1. Original traffic to ports 80/443 is redirected via iptables to proxy ports
-2. Proxy receives connection and extracts real client IP through trusted proxy chains
-3. For HTTPS, appropriate certificate is loaded/retrieved from cache
-4. Rules engine evaluates all configured rules against the request
-5. Request is either logged, blocked, or allowed based on rule evaluation
-6. Valid requests are forwarded to the same-host backend using canonical headers or the validated client IP as the transparent TCP source
-7. Response is returned to client through proxy with appropriate headers
+1. `iptables` or `ip6tables` redirects ports 80 and 443 to FlowGuard's internal
+   listeners.
+2. FlowGuard resolves the client and immediate proxy identities.
+3. HTTPS connections use a certificate already loaded by the certificate
+   manager.
+4. Middleware enriches and logs the request, checks Fail2Ban, and evaluates
+   configured rules.
+5. FlowGuard blocks, rate-limits, challenges, or forwards the request according
+   to the matching action.
+6. Forwarded requests use canonical headers or a transparent client source
+   address, depending on the configured upstream mode.
+7. FlowGuard returns the backend response to the client.
 
 ## Development
 
-### Running Tests
+### Run tests
 
 ```bash
 go test ./...
@@ -725,11 +817,13 @@ On Linux, run the privileged transparent-source round-trip in an isolated networ
 ./bin/test-transparent-upstream.sh
 ```
 
-## Security Vulnerabilities
+## Security vulnerabilities
 
-If you discover a security vulnerability within this project, please report it privately via GitHub: https://github.com/chieftools/flowguard-proxy/security/advisories/new.
-All security vulnerabilities will be swiftly addressed. There is no bug bounty program at this time.
+Report vulnerabilities privately through
+[GitHub Security Advisories](https://github.com/chieftools/flowguard-proxy/security/advisories/new).
+FlowGuard does not currently run a bug bounty program.
 
 ## License
 
-FlowGuard Proxy is open-source software licensed under the Apache License 2.0. This means you are free to use, modify, and distribute the software for both commercial and non-commercial purposes. See the [LICENSE](LICENSE) file for details.
+FlowGuard Proxy is licensed under the Apache License 2.0. See
+[LICENSE](LICENSE) for the license text.
