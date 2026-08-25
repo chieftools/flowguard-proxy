@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"slices"
 	"testing"
 	"time"
@@ -109,6 +110,146 @@ func TestGetTLSConfigUsesConfiguredALPNProtocols(t *testing.T) {
 	if !slices.Equal(tlsConfig.NextProtos, []string{"http/1.1"}) {
 		t.Fatalf("unexpected ALPN protocols: %v", tlsConfig.NextProtos)
 	}
+}
+
+func TestGetTLSConfigUsesAEADCipherSuitesForTLS12(t *testing.T) {
+	manager := &Manager{}
+	want := []uint16{
+		tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+		tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+		tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+	}
+
+	tlsConfig := manager.GetTlsConfig()
+
+	if tlsConfig.MinVersion != tls.VersionTLS12 {
+		t.Fatalf("minimum TLS version = %#x, want %#x", tlsConfig.MinVersion, tls.VersionTLS12)
+	}
+	if tlsConfig.Renegotiation != tls.RenegotiateNever {
+		t.Fatalf("renegotiation policy = %d, want %d", tlsConfig.Renegotiation, tls.RenegotiateNever)
+	}
+	if !slices.Equal(tlsConfig.CipherSuites, want) {
+		t.Fatalf("unexpected TLS 1.2 cipher suites: %v", tlsConfig.CipherSuites)
+	}
+}
+
+func TestGetTLSConfigHandshakePolicy(t *testing.T) {
+	now := time.Now()
+	rsaCert := createSelfSignedRSACert(t, "edge.test", now.Add(time.Hour))
+	ecdsaCert := createCASignedECDSACert(t, "edge.test", now.Add(time.Hour))
+
+	tests := []struct {
+		name          string
+		certificate   *tls.Certificate
+		minVersion    uint16
+		maxVersion    uint16
+		cipherSuites  []uint16
+		wantVersion   uint16
+		wantCipher    uint16
+		wantHandshake bool
+	}{
+		{
+			name:          "TLS 1.2 RSA AES-GCM",
+			certificate:   rsaCert,
+			minVersion:    tls.VersionTLS12,
+			maxVersion:    tls.VersionTLS12,
+			cipherSuites:  []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+			wantVersion:   tls.VersionTLS12,
+			wantCipher:    tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			wantHandshake: true,
+		},
+		{
+			name:          "TLS 1.2 ECDSA ChaCha20-Poly1305",
+			certificate:   ecdsaCert,
+			minVersion:    tls.VersionTLS12,
+			maxVersion:    tls.VersionTLS12,
+			cipherSuites:  []uint16{tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256},
+			wantVersion:   tls.VersionTLS12,
+			wantCipher:    tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+			wantHandshake: true,
+		},
+		{
+			name:          "TLS 1.2 CBC with SHA-1",
+			certificate:   rsaCert,
+			minVersion:    tls.VersionTLS12,
+			maxVersion:    tls.VersionTLS12,
+			cipherSuites:  []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA},
+			wantHandshake: false,
+		},
+		{
+			name:          "TLS 1.3 remains available",
+			certificate:   rsaCert,
+			minVersion:    tls.VersionTLS13,
+			maxVersion:    tls.VersionTLS13,
+			wantVersion:   tls.VersionTLS13,
+			wantHandshake: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			serverConfig := (&Manager{}).GetTlsConfig()
+			serverConfig.GetCertificate = nil
+			serverConfig.Certificates = []tls.Certificate{*tt.certificate}
+
+			clientConfig := &tls.Config{
+				CipherSuites:       tt.cipherSuites,
+				InsecureSkipVerify: true,
+				MinVersion:         tt.minVersion,
+				MaxVersion:         tt.maxVersion,
+				ServerName:         "edge.test",
+			}
+
+			state, clientErr, serverErr := performTLSHandshake(t, serverConfig, clientConfig)
+			if !tt.wantHandshake {
+				if clientErr == nil || serverErr == nil {
+					t.Fatalf("handshake errors = client %v, server %v; want both sides to reject the connection", clientErr, serverErr)
+				}
+				return
+			}
+
+			if clientErr != nil || serverErr != nil {
+				t.Fatalf("handshake errors = client %v, server %v", clientErr, serverErr)
+			}
+			if state.Version != tt.wantVersion {
+				t.Fatalf("negotiated TLS version = %#x, want %#x", state.Version, tt.wantVersion)
+			}
+			if tt.wantCipher != 0 && state.CipherSuite != tt.wantCipher {
+				t.Fatalf("negotiated cipher suite = %#x, want %#x", state.CipherSuite, tt.wantCipher)
+			}
+		})
+	}
+}
+
+func performTLSHandshake(t *testing.T, serverConfig, clientConfig *tls.Config) (tls.ConnectionState, error, error) {
+	t.Helper()
+
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		serverConn.Close()
+		clientConn.Close()
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	if err := serverConn.SetDeadline(deadline); err != nil {
+		t.Fatalf("set server connection deadline: %v", err)
+	}
+	if err := clientConn.SetDeadline(deadline); err != nil {
+		t.Fatalf("set client connection deadline: %v", err)
+	}
+
+	server := tls.Server(serverConn, serverConfig)
+	client := tls.Client(clientConn, clientConfig)
+	serverResult := make(chan error, 1)
+	go func() {
+		serverResult <- server.Handshake()
+	}()
+
+	clientErr := client.Handshake()
+	serverErr := <-serverResult
+	return client.ConnectionState(), clientErr, serverErr
 }
 
 // Create a CA-signed ECDSA certificate
