@@ -9,6 +9,12 @@ release.
 
 ## [Unreleased]
 
+## [0.20.0]
+
+### Changed
+
+- Restricted TLS 1.2 to ECDHE cipher suites with AES-GCM or ChaCha20-Poly1305, removing CBC and SHA-1 support. ([ccda96cb](https://github.com/chieftools/flowguard-proxy/commit/ccda96cbf20e72eadadc9eb74fc0eee30f16ef8e))
+
 ## [0.19.0]
 
 ### Changed
@@ -564,7 +570,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.20.0
 [0.19.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.19.0
 [0.18.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.18.0
 [0.17.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.17.1
