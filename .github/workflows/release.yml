@@ -208,7 +208,7 @@ jobs:
 
             # Sign the RPM
             rpm --addsign --define "_gpg_name FlowGuard Team <hello@flowguard.network>" \
-              "${RPM_FILE}" || echo "RPM signing failed for ${RPM_ARCH}, continuing..."
+              "${RPM_FILE}"
 
             # Copy new RPM to repo directory
             mkdir -p "${REPO_DIR}"
