@@ -38,6 +38,7 @@ mkdir -p "${DEB_DIR}/etc/systemd/system"
 mkdir -p "${DEB_DIR}/var/log/flowguard"
 mkdir -p "${DEB_DIR}/var/cache/flowguard"
 mkdir -p "${DEB_DIR}/usr/share/doc/flowguard"
+install -m 0644 LICENSE "${DEB_DIR}/usr/share/doc/flowguard/copyright"
 
 # Build the binary
 echo -e "${YELLOW}Building FlowGuard binary...${NC}"

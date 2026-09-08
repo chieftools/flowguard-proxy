@@ -49,6 +49,7 @@ echo -e "${YELLOW}Creating RPM build structure...${NC}"
 # Create RPM build directory structure
 mkdir -p "${RPMBUILD_DIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 mkdir -p "${RPMBUILD_DIR}/BUILDROOT"
+install -m 0644 LICENSE "${RPMBUILD_DIR}/SOURCES/LICENSE"
 
 # Build the binary
 echo -e "${YELLOW}Building FlowGuard binary...${NC}"
@@ -107,10 +108,11 @@ Version:        ${VERSION}
 Release:        ${RELEASE}%{?dist}
 Summary:        ${DESCRIPTION}
 
-License:        Proprietary
+License:        Apache-2.0
 URL:            ${URL}
 Source0:        config.json
 Source1:        flowguard.service
+Source2:        LICENSE
 
 # Don't strip the binary or check for build-id
 %global debug_package %{nil}
@@ -140,6 +142,7 @@ mkdir -p %{buildroot}/etc/flowguard
 mkdir -p %{buildroot}/var/log/flowguard
 mkdir -p %{buildroot}/var/cache/flowguard
 mkdir -p %{buildroot}/usr/lib/systemd/system
+mkdir -p %{buildroot}/usr/share/licenses/flowguard
 
 # Install binary
 install -m 0755 %{_builddir}/flowguard %{buildroot}/usr/bin/flowguard
@@ -149,8 +152,10 @@ install -m 0644 %{SOURCE0} %{buildroot}/etc/flowguard/config.json
 
 # Install systemd service
 install -m 0644 %{SOURCE1} %{buildroot}/usr/lib/systemd/system/flowguard.service
+install -m 0644 %{SOURCE2} %{buildroot}/usr/share/licenses/flowguard/LICENSE
 
 %files
+%license %attr(0644, root, root) /usr/share/licenses/flowguard/LICENSE
 %attr(0755, root, root) /usr/bin/flowguard
 %config(noreplace) %attr(0644, root, root) /etc/flowguard/config.json
 %attr(0755, root, root) %dir /etc/flowguard
