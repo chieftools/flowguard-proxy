@@ -9,6 +9,18 @@ release.
 
 ## [Unreleased]
 
+## [0.22.0]
+
+### Added
+
+- Added bounded rolling client, path, domain, and JA4 behavior counters with numeric rule matching for coordinated traffic detection. ([1fe0990f](https://github.com/chieftools/flowguard-proxy/commit/1fe0990fc32acedc35068decb3c42c050e273257))
+- Added explicit rate-limit bucket partitioning by client IP, connection, JA4 fingerprint, domain, and path, including shared rule-wide buckets and backwards-compatible legacy behavior. ([1fe0990f](https://github.com/chieftools/flowguard-proxy/commit/1fe0990fc32acedc35068decb3c42c050e273257))
+- Added connection concurrency, upstream timing and outcome, network-prefix, cookie-name, and header-set telemetry for incident analysis without recording cookie values. ([1fe0990f](https://github.com/chieftools/flowguard-proxy/commit/1fe0990fc32acedc35068decb3c42c050e273257))
+
+### Fixed
+
+- Returned HTTP 504 for upstream timeouts while retaining HTTP 502 for other upstream failures. ([1fe0990f](https://github.com/chieftools/flowguard-proxy/commit/1fe0990fc32acedc35068decb3c42c050e273257))
+
 ## [0.21.0]
 
 ### Fixed
@@ -577,7 +589,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.22.0
 [0.21.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.21.0
 [0.20.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.20.0
 [0.19.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.19.0
