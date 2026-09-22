@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -172,6 +174,100 @@ func TestRateLimiter_DifferentKeys(t *testing.T) {
 	}
 	if remaining != 1 {
 		t.Errorf("Expected 1 remaining request for key2, got %d", remaining)
+	}
+}
+
+func TestRateLimiterSerializesConcurrentFirstRequests(t *testing.T) {
+	const concurrency = 1_000
+
+	rl := NewRateLimiter(time.Minute)
+	defer rl.Stop()
+
+	start := make(chan struct{})
+	var allowed atomic.Int64
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(concurrency)
+
+	for range concurrency {
+		go func() {
+			defer waitGroup.Done()
+			<-start
+			if ok, _, _ := rl.IsAllowed("shared-key", 1, 60); ok {
+				allowed.Add(1)
+			}
+		}()
+	}
+
+	close(start)
+	waitGroup.Wait()
+
+	if got := allowed.Load(); got != 1 {
+		t.Fatalf("allowed %d concurrent requests, want 1", got)
+	}
+}
+
+func TestRateLimiterSaturatedRequestsDoNotAllocate(t *testing.T) {
+	rl := NewRateLimiter(time.Minute)
+	defer rl.Stop()
+
+	for range 64 {
+		if allowed, _, _ := rl.IsAllowed("saturated-key", 64, 60); !allowed {
+			t.Fatal("expected request used to fill limiter to be allowed")
+		}
+	}
+
+	allocations := testing.AllocsPerRun(1_000, func() {
+		rl.IsAllowed("saturated-key", 64, 60)
+	})
+	if allocations != 0 {
+		t.Fatalf("expected saturated requests not to allocate, got %.2f allocations per request", allocations)
+	}
+}
+
+func TestRateLimiterRejectsNewKeysAtCapacity(t *testing.T) {
+	rl := newRateLimiter(time.Minute, 2)
+	defer rl.Stop()
+
+	for _, key := range []string{"first-key", "second-key"} {
+		if allowed, _, _ := rl.IsAllowed(key, 10, 60); !allowed {
+			t.Fatalf("expected %s to be tracked", key)
+		}
+	}
+
+	allowed, remaining, _ := rl.IsAllowed("overflow-key", 10, 60)
+	if allowed || remaining != 0 {
+		t.Fatalf("expected new key to be rejected at capacity, got allowed=%v remaining=%d", allowed, remaining)
+	}
+
+	stats := rl.GetStats()
+	if got := stats["total_keys"].(int); got != 2 {
+		t.Fatalf("expected key count to remain bounded at 2, got %d", got)
+	}
+	if got := stats["capacity_rejections"].(uint64); got != 1 {
+		t.Fatalf("expected one capacity rejection, got %d", got)
+	}
+}
+
+func TestRateLimiterReclaimsExpiredKeysAtCapacity(t *testing.T) {
+	synctest.Test(t, testRateLimiterReclaimsExpiredKeysAtCapacity)
+}
+
+func testRateLimiterReclaimsExpiredKeysAtCapacity(t *testing.T) {
+	rl := newRateLimiter(time.Hour, 1)
+	defer rl.Stop()
+
+	if allowed, _, _ := rl.IsAllowed("expired-key", 10, 1); !allowed {
+		t.Fatal("expected initial key to be tracked")
+	}
+
+	synctest.Sleep(time.Second + time.Millisecond)
+
+	if allowed, _, _ := rl.IsAllowed("replacement-key", 10, 1); !allowed {
+		t.Fatal("expected expired key to be reclaimed at capacity")
+	}
+	stats := rl.GetStats()
+	if got := stats["total_keys"].(int); got != 1 {
+		t.Fatalf("expected one tracked key after reclamation, got %d", got)
 	}
 }
 
@@ -463,7 +559,7 @@ func TestRateLimiter_Cleanup(t *testing.T) {
 }
 
 func testRateLimiterCleanup(t *testing.T) {
-	rl := NewRateLimiter(time.Hour + time.Millisecond)
+	rl := NewRateLimiter(time.Second)
 	defer rl.Stop()
 
 	// Add some entries
@@ -477,7 +573,7 @@ func testRateLimiterCleanup(t *testing.T) {
 	}
 
 	// Wait for entries to expire and cleanup to run.
-	synctest.Sleep(time.Hour + 2*time.Millisecond)
+	synctest.Sleep(time.Second + time.Millisecond)
 
 	stats = rl.GetStats()
 	totalKeys = stats["total_keys"].(int)

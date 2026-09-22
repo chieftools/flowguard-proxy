@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,6 +20,21 @@ type challengeMockConfigProvider struct {
 	actions map[string]*config.RuleAction
 }
 
+type challengeErrorResponseWriter struct {
+	header http.Header
+	err    error
+}
+
+func (w *challengeErrorResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *challengeErrorResponseWriter) WriteHeader(int) {}
+
+func (w *challengeErrorResponseWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
 func (m *challengeMockConfigProvider) GetConfig() *config.Config {
 	return m.cfg
 }
@@ -32,6 +49,69 @@ func (m *challengeMockConfigProvider) GetSortedRules() []*config.Rule {
 
 func (m *challengeMockConfigProvider) GetActions() map[string]*config.RuleAction {
 	return m.actions
+}
+
+func TestChallengeRenderErrorsIgnoreDisconnectsAndRateLimitUnexpectedFailures(t *testing.T) {
+	manager := NewChallengeManager(newChallengeProvider(nil, nil))
+	defer manager.Stop()
+
+	now := time.Now()
+	var messages []string
+	manager.renderErrorLimiter.now = func() time.Time { return now }
+	manager.renderErrorLimiter.logf = func(format string, args ...any) {
+		messages = append(messages, fmt.Sprintf(format, args...))
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "https://guard.example.invalid/protected", nil)
+	settings := challengeSettings{
+		DifficultyBits:   18,
+		Algorithm:        config.PoWAlgorithmPBKDF2SHA256,
+		PBKDF2Iterations: 100,
+		EffortMode:       config.PoWEffortModeCalibrated,
+		WorkUnits:        128,
+	}
+
+	manager.renderChallengePage(
+		&challengeErrorResponseWriter{header: make(http.Header), err: errors.New("client disconnected")},
+		request,
+		http.StatusForbidden,
+		"",
+		"synthetic-token",
+		settings,
+	)
+	if len(messages) != 0 {
+		t.Fatalf("expected client disconnect to be ignored, got %v", messages)
+	}
+
+	for range 2 {
+		manager.renderChallengePage(
+			&challengeErrorResponseWriter{header: make(http.Header), err: errors.New("synthetic write failure")},
+			request,
+			http.StatusForbidden,
+			"",
+			"synthetic-token",
+			settings,
+		)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("expected repeated errors to emit one log, got %v", messages)
+	}
+
+	now = now.Add(challengeRenderLogInterval)
+	manager.renderChallengePage(
+		&challengeErrorResponseWriter{header: make(http.Header), err: errors.New("another synthetic write failure")},
+		request,
+		http.StatusForbidden,
+		"",
+		"synthetic-token",
+		settings,
+	)
+	if len(messages) != 2 {
+		t.Fatalf("expected a new log after the interval, got %v", messages)
+	}
+	if !strings.Contains(messages[1], "suppressed 1 similar errors") {
+		t.Fatalf("expected suppressed error count, got %q", messages[1])
+	}
 }
 
 func TestChallengeManagerIssuesPerRuleClearance(t *testing.T) {

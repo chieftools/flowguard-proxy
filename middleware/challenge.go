@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -16,6 +17,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"flowguard/config"
@@ -40,6 +42,7 @@ const (
 	defaultAttemptLimit         = 20
 	defaultAttemptWindowSeconds = 60
 	challengeTokenVersion       = "fgv1"
+	challengeRenderLogInterval  = time.Minute
 )
 
 type challengeConfigProvider interface {
@@ -54,6 +57,16 @@ type ChallengeManager struct {
 	processSecret       []byte
 	consumedChallenges  map[string]time.Time
 	warnedProcessSecret bool
+	renderErrorLimiter  *challengeRenderErrorLimiter
+}
+
+type challengeRenderErrorLimiter struct {
+	mu         sync.Mutex
+	interval   time.Duration
+	now        func() time.Time
+	logf       func(string, ...any)
+	lastLogged time.Time
+	suppressed uint64
 }
 
 type challengeSettings struct {
@@ -125,7 +138,42 @@ func NewChallengeManager(configProvider ConfigProvider) *ChallengeManager {
 		processSecret:      secret,
 		attemptLimiter:     NewRateLimiter(time.Minute * 10),
 		consumedChallenges: make(map[string]time.Time),
+		renderErrorLimiter: newChallengeRenderErrorLimiter(challengeRenderLogInterval),
 	}
+}
+
+func newChallengeRenderErrorLimiter(interval time.Duration) *challengeRenderErrorLimiter {
+	return &challengeRenderErrorLimiter{
+		interval: interval,
+		now:      time.Now,
+		logf:     log.Printf,
+	}
+}
+
+func (l *challengeRenderErrorLimiter) Log(err error) {
+	if l == nil || err == nil {
+		return
+	}
+
+	now := l.now()
+	l.mu.Lock()
+	if !l.lastLogged.IsZero() && now.Sub(l.lastLogged) < l.interval {
+		l.suppressed++
+		l.mu.Unlock()
+		return
+	}
+
+	suppressed := l.suppressed
+	l.lastLogged = now
+	l.suppressed = 0
+	l.mu.Unlock()
+
+	if suppressed > 0 {
+		l.logf("[middleware:challenge] Failed to write challenge page: %v (suppressed %d similar errors)", err, suppressed)
+		return
+	}
+
+	l.logf("[middleware:challenge] Failed to write challenge page: %v", err)
 }
 
 func (cm *ChallengeManager) Stop() {
@@ -775,8 +823,42 @@ func (cm *ChallengeManager) renderChallengePage(w http.ResponseWriter, r *http.R
 		MinPageTimeMs:    int(settings.MinPageTime / time.Millisecond),
 		VerifyPath:       challengeVerifyPath,
 	}); err != nil {
-		log.Printf("[middleware:challenge] Failed to render challenge page: %v", err)
+		if isExpectedChallengeWriteError(r, err) {
+			return
+		}
+		cm.renderErrorLimiter.Log(err)
 	}
+}
+
+func isExpectedChallengeWriteError(r *http.Request, err error) bool {
+	if err == nil {
+		return false
+	}
+	if r != nil && r.Context().Err() != nil {
+		return true
+	}
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+
+	message := strings.ToLower(err.Error())
+	for _, part := range []string{
+		"client disconnected",
+		"stream closed",
+		"h3_request_cancelled",
+		"broken pipe",
+		"connection reset by peer",
+		"use of closed network connection",
+	} {
+		if strings.Contains(message, part) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (cm *ChallengeManager) writeNonHTMLChallenge(w http.ResponseWriter, r *http.Request, status int, challengeURL string) {

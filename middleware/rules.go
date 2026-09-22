@@ -47,7 +47,7 @@ func NewRulesMiddleware(configMgr ConfigProvider) *RulesMiddleware {
 	return &RulesMiddleware{
 		configMgr:    configMgr,
 		challenges:   NewChallengeManager(configMgr),
-		rateLimiter:  NewRateLimiter(time.Minute * 10), // Stop every 10 minutes
+		rateLimiter:  NewRateLimiter(time.Minute * 10),
 		keyGenerator: NewRateLimitKeyGenerator(),
 	}
 }
@@ -719,22 +719,42 @@ func writeBlockedResponse(w http.ResponseWriter, r *http.Request, status int, me
 // RateLimiter manages rate limiting counters using sliding window algorithm
 type RateLimiter struct {
 	entries       map[string]*RateLimitEntry
-	mutex         sync.RWMutex
+	mutex         sync.Mutex
 	cleanupTicker *time.Ticker
 	stopCleanup   chan struct{}
+	maxEntries    int
+
+	capacityRejections  uint64
+	lastCapacityCleanup time.Time
 }
 
 // RateLimitEntry represents a sliding window counter for rate limiting
 type RateLimitEntry struct {
-	timestamps []time.Time // Sliding window of request timestamps
-	mutex      sync.RWMutex
+	timestamps timestampQueue
+	expiresAt  time.Time
 }
+
+type timestampQueue struct {
+	values []int64
+	head   int
+	size   int
+}
+
+const (
+	defaultMaxRateLimitEntries       = 100_000
+	rateLimitCapacityCleanupInterval = time.Second
+)
 
 // NewRateLimiter creates a new rate limiter with automatic cleanup
 func NewRateLimiter(cleanupInterval time.Duration) *RateLimiter {
+	return newRateLimiter(cleanupInterval, defaultMaxRateLimitEntries)
+}
+
+func newRateLimiter(cleanupInterval time.Duration, maxEntries int) *RateLimiter {
 	rl := &RateLimiter{
 		entries:     make(map[string]*RateLimitEntry),
 		stopCleanup: make(chan struct{}),
+		maxEntries:  maxEntries,
 	}
 
 	// Start cleanup goroutine
@@ -749,54 +769,94 @@ func NewRateLimiter(cleanupInterval time.Duration) *RateLimiter {
 func (rl *RateLimiter) IsAllowed(key string, maxRequests int, windowSeconds int) (bool, int, time.Time) {
 	now := time.Now()
 	windowDuration := time.Duration(windowSeconds) * time.Second
-	windowStart := now.Add(-windowDuration)
+	windowStart := now.Add(-windowDuration).UnixNano()
 
-	rl.mutex.RLock()
+	rl.mutex.Lock()
+	defer rl.mutex.Unlock()
+
 	entry, exists := rl.entries[key]
-	rl.mutex.RUnlock()
-
 	if !exists {
-		// Create new entry
-		entry = &RateLimitEntry{
-			timestamps: make([]time.Time, 0),
+		if len(rl.entries) >= rl.maxEntries && now.Sub(rl.lastCapacityCleanup) >= rateLimitCapacityCleanupInterval {
+			rl.removeExpiredEntries(now)
+			rl.lastCapacityCleanup = now
 		}
-		rl.mutex.Lock()
+		if len(rl.entries) >= rl.maxEntries {
+			rl.capacityRejections++
+			return false, 0, now.Add(windowDuration)
+		}
+
+		entry = &RateLimitEntry{}
 		rl.entries[key] = entry
-		rl.mutex.Unlock()
 	}
 
-	entry.mutex.Lock()
-	defer entry.mutex.Unlock()
-
-	// Remove timestamps outside the current window
-	validTimestamps := make([]time.Time, 0, len(entry.timestamps))
-	for _, ts := range entry.timestamps {
-		if ts.After(windowStart) {
-			validTimestamps = append(validTimestamps, ts)
-		}
-	}
-	entry.timestamps = validTimestamps
-
-	currentCount := len(entry.timestamps)
+	entry.timestamps.RemoveThrough(windowStart)
+	currentCount := entry.timestamps.Len()
 
 	if currentCount >= maxRequests {
-		// Rate limit exceeded
-		var resetTime time.Time
-		if len(entry.timestamps) > 0 {
-			// Reset time is when the oldest request in the window expires
-			resetTime = entry.timestamps[0].Add(windowDuration)
-		} else {
-			resetTime = now.Add(windowDuration)
+		if currentCount > 0 {
+			return false, 0, time.Unix(0, entry.timestamps.Oldest()).Add(windowDuration)
 		}
-		return false, 0, resetTime
+
+		entry.expiresAt = now.Add(windowDuration)
+		return false, 0, entry.expiresAt
 	}
 
-	// Allow the request and record timestamp
-	entry.timestamps = append(entry.timestamps, now)
+	entry.timestamps.Add(now.UnixNano(), maxRequests)
+	entry.expiresAt = now.Add(windowDuration)
 	remaining := maxRequests - (currentCount + 1)
-	resetTime := now.Add(windowDuration)
 
-	return true, remaining, resetTime
+	return true, remaining, entry.expiresAt
+}
+
+func (q *timestampQueue) Add(timestamp int64, maxSize int) {
+	if q.size == len(q.values) {
+		capacity := max(1, len(q.values)*2)
+		if maxSize > 0 {
+			capacity = min(capacity, maxSize)
+		}
+
+		values := make([]int64, capacity)
+		for index := range q.size {
+			values[index] = q.values[(q.head+index)%len(q.values)]
+		}
+		q.values = values
+		q.head = 0
+	}
+
+	index := (q.head + q.size) % len(q.values)
+	q.values[index] = timestamp
+	q.size++
+}
+
+func (q *timestampQueue) RemoveThrough(timestamp int64) {
+	for q.size > 0 && q.Oldest() <= timestamp {
+		q.values[q.head] = 0
+		q.head = (q.head + 1) % len(q.values)
+		q.size--
+	}
+
+	if q.size == 0 {
+		q.values = nil
+		q.head = 0
+	}
+}
+
+func (q *timestampQueue) Len() int {
+	return q.size
+}
+
+func (q *timestampQueue) Oldest() int64 {
+	if q.size == 0 {
+		return 0
+	}
+	return q.values[q.head]
+}
+
+func (q *timestampQueue) Newest() int64 {
+	if q.size == 0 {
+		return 0
+	}
+	return q.values[(q.head+q.size-1)%len(q.values)]
 }
 
 // cleanupLoop periodically removes expired entries to prevent memory leaks
@@ -815,18 +875,15 @@ func (rl *RateLimiter) cleanupLoop() {
 // cleanup removes entries that haven't been accessed recently
 func (rl *RateLimiter) cleanup() {
 	now := time.Now()
-	cleanupThreshold := now.Add(-time.Hour) // Remove entries older than 1 hour
 
 	rl.mutex.Lock()
 	defer rl.mutex.Unlock()
+	rl.removeExpiredEntries(now)
+}
 
+func (rl *RateLimiter) removeExpiredEntries(now time.Time) {
 	for key, entry := range rl.entries {
-		entry.mutex.RLock()
-		shouldDelete := len(entry.timestamps) == 0 ||
-			(len(entry.timestamps) > 0 && entry.timestamps[len(entry.timestamps)-1].Before(cleanupThreshold))
-		entry.mutex.RUnlock()
-
-		if shouldDelete {
+		if entry.expiresAt.IsZero() || !entry.expiresAt.After(now) {
 			delete(rl.entries, key)
 		}
 	}
@@ -839,8 +896,8 @@ func (rl *RateLimiter) Stop() {
 
 // GetStats returns current rate limiter statistics
 func (rl *RateLimiter) GetStats() map[string]interface{} {
-	rl.mutex.RLock()
-	defer rl.mutex.RUnlock()
+	rl.mutex.Lock()
+	defer rl.mutex.Unlock()
 
 	stats := make(map[string]interface{})
 	stats["total_keys"] = len(rl.entries)
@@ -850,14 +907,13 @@ func (rl *RateLimiter) GetStats() map[string]interface{} {
 	recentThreshold := now.Add(-time.Minute * 5) // Consider active if accessed in last 5 minutes
 
 	for _, entry := range rl.entries {
-		entry.mutex.RLock()
-		if len(entry.timestamps) > 0 && entry.timestamps[len(entry.timestamps)-1].After(recentThreshold) {
+		if entry.timestamps.Len() > 0 && time.Unix(0, entry.timestamps.Newest()).After(recentThreshold) {
 			activeKeys++
 		}
-		entry.mutex.RUnlock()
 	}
 
 	stats["active_keys"] = activeKeys
+	stats["capacity_rejections"] = rl.capacityRejections
 	return stats
 }
 
