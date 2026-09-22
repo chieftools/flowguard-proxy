@@ -23,7 +23,7 @@ type behaviorSnapshotContextKey struct{}
 type BehaviorSnapshot struct {
 	Client      ClientBehaviorSnapshot      `json:"client"`
 	Fingerprint FingerprintBehaviorSnapshot `json:"fingerprint,omitempty"`
-	Global      GlobalBehaviorSnapshot      `json:"global"`
+	Server      ServerBehaviorSnapshot      `json:"server"`
 }
 
 type ClientBehaviorSnapshot struct {
@@ -43,11 +43,11 @@ type FingerprintBehaviorSnapshot struct {
 	UniqueCountries int    `json:"unique_countries_60s,omitempty"`
 }
 
-type GlobalBehaviorSnapshot struct {
-	DomainRequests10S uint64 `json:"domain_requests_10s"`
-	DomainRequests60S uint64 `json:"domain_requests_60s"`
-	PathRequests10S   uint64 `json:"path_requests_10s"`
-	PathRequests60S   uint64 `json:"path_requests_60s"`
+type ServerBehaviorSnapshot struct {
+	DomainRequests10S     uint64 `json:"domain_requests_10s"`
+	DomainRequests60S     uint64 `json:"domain_requests_60s"`
+	DomainPathRequests10S uint64 `json:"domain_path_requests_10s"`
+	DomainPathRequests60S uint64 `json:"domain_path_requests_60s"`
 }
 
 type behaviorWindow struct {
@@ -147,11 +147,11 @@ func (t *BehaviorTracker) Handle(w http.ResponseWriter, r *http.Request, next ht
 			PathRequests60S:    windowTotal(clientPathWindow, now, 60),
 			ConcurrentRequests: t.clientInFlight[clientIP],
 		},
-		Global: GlobalBehaviorSnapshot{
-			DomainRequests10S: windowTotal(domainWindow, now, 10),
-			DomainRequests60S: windowTotal(domainWindow, now, 60),
-			PathRequests10S:   windowTotal(domainPathWindow, now, 10),
-			PathRequests60S:   windowTotal(domainPathWindow, now, 60),
+		Server: ServerBehaviorSnapshot{
+			DomainRequests10S:     windowTotal(domainWindow, now, 10),
+			DomainRequests60S:     windowTotal(domainWindow, now, 60),
+			DomainPathRequests10S: windowTotal(domainPathWindow, now, 10),
+			DomainPathRequests60S: windowTotal(domainPathWindow, now, 60),
 		},
 	}
 
@@ -226,14 +226,15 @@ func BehaviorMetric(r *http.Request, key string) (float64, bool) {
 		return float64(snapshot.Fingerprint.UniqueASNs60S), true
 	case "fingerprint.unique_countries_60s":
 		return float64(snapshot.Fingerprint.UniqueCountries), true
-	case "global.domain_requests_10s":
-		return float64(snapshot.Global.DomainRequests10S), true
-	case "global.domain_requests_60s":
-		return float64(snapshot.Global.DomainRequests60S), true
-	case "global.path_requests_10s":
-		return float64(snapshot.Global.PathRequests10S), true
-	case "global.path_requests_60s":
-		return float64(snapshot.Global.PathRequests60S), true
+	// Retain the 0.22.0 global keys while deployed configurations migrate.
+	case "server.domain_requests_10s", "global.domain_requests_10s":
+		return float64(snapshot.Server.DomainRequests10S), true
+	case "server.domain_requests_60s", "global.domain_requests_60s":
+		return float64(snapshot.Server.DomainRequests60S), true
+	case "server.domain_path_requests_10s", "global.path_requests_10s":
+		return float64(snapshot.Server.DomainPathRequests10S), true
+	case "server.domain_path_requests_60s", "global.path_requests_60s":
+		return float64(snapshot.Server.DomainPathRequests60S), true
 	default:
 		return 0, false
 	}

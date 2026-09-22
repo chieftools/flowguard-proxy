@@ -38,11 +38,37 @@ func TestBehaviorTrackerRecordsRollingClientAndFingerprintSignals(t *testing.T) 
 	if last.Client.Requests10S != 1 || last.Client.PathRequests10S != 1 {
 		t.Fatalf("unexpected per-client counters: %+v", last.Client)
 	}
-	if last.Global.DomainRequests10S != 3 || last.Global.PathRequests10S != 3 {
-		t.Fatalf("unexpected global counters: %+v", last.Global)
+	if last.Server.DomainRequests10S != 3 || last.Server.DomainPathRequests10S != 3 {
+		t.Fatalf("unexpected server counters: %+v", last.Server)
 	}
 	if last.Fingerprint.Requests10S != 3 || last.Fingerprint.UniqueIPs60S != 2 || last.Fingerprint.UniqueASNs60S != 2 || last.Fingerprint.UniqueCountries != 2 {
 		t.Fatalf("unexpected fingerprint counters: %+v", last.Fingerprint)
+	}
+}
+
+func TestBehaviorMetricSupportsServerScopeAndGlobalAliases(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "https://edge.example.test/", nil)
+	req = req.WithContext(context.WithValue(req.Context(), behaviorSnapshotContextKey{}, &BehaviorSnapshot{
+		Server: ServerBehaviorSnapshot{
+			DomainRequests10S:     21,
+			DomainPathRequests10S: 13,
+		},
+	}))
+
+	tests := map[string]float64{
+		"server.domain_requests_10s":      21,
+		"server.domain_path_requests_10s": 13,
+		"global.domain_requests_10s":      21,
+		"global.path_requests_10s":        13,
+	}
+
+	for key, expected := range tests {
+		t.Run(key, func(t *testing.T) {
+			actual, found := BehaviorMetric(req, key)
+			if !found || actual != expected {
+				t.Fatalf("expected %s to return %v, got %v (found %v)", key, expected, actual, found)
+			}
+		})
 	}
 }
 
