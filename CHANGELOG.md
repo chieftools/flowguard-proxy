@@ -9,6 +9,13 @@ release.
 
 ## [Unreleased]
 
+## [0.21.0]
+
+### Fixed
+
+- Prevented rate-limit memory amplification by reusing bounded sliding-window storage, capping tracked keys, reclaiming expired counters under pressure, and serializing concurrent initial requests. ([3b7b045e](https://github.com/chieftools/flowguard-proxy/commit/3b7b045eb3a7be6d808a15928428b00998218062))
+- Prevented expected client disconnects from flooding challenge-response logs and rate-limited unexpected response-write failures. ([3b7b045e](https://github.com/chieftools/flowguard-proxy/commit/3b7b045eb3a7be6d808a15928428b00998218062))
+
 ## [0.20.0]
 
 ### Changed
@@ -570,7 +577,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.21.0
 [0.20.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.20.0
 [0.19.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.19.0
 [0.18.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.18.0
