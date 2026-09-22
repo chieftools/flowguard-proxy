@@ -9,6 +9,12 @@ release.
 
 ## [Unreleased]
 
+## [0.22.1]
+
+### Changed
+
+- Renamed proxy-local domain and path behavior telemetry and matcher keys to server-scoped names, while retaining the 0.22.0 matcher keys as compatibility aliases. ([d0714137](https://github.com/chieftools/flowguard-proxy/commit/d07141375cfa8483db0e295f9315483a27ce9d80))
+
 ## [0.22.0]
 
 ### Added
@@ -589,7 +595,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.22.1...HEAD
+[0.22.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.22.1
 [0.22.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.22.0
 [0.21.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.21.0
 [0.20.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.20.0
