@@ -275,6 +275,13 @@ func TestManagerSinkRemoval(t *testing.T) {
 	if manager.HasSinks() {
 		t.Error("Manager should not have sinks after removal")
 	}
+
+	if err := manager.UpdateSinks(sinks); err != nil {
+		t.Fatalf("Failed to re-enable sink after removal: %v", err)
+	}
+	if manager.SinkCount() != 1 {
+		t.Fatalf("Expected sink to be re-enabled, got %d", manager.SinkCount())
+	}
 }
 
 func TestManagerRejectsUnsupportedSinkType(t *testing.T) {

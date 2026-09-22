@@ -1,11 +1,12 @@
 package logger
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-	"sync"
 )
 
 // FileSink writes log entries to a file
@@ -13,8 +14,8 @@ type FileSink struct {
 	name       string
 	path       string
 	file       *os.File
+	writer     *asyncBatchWriter
 	configHash string
-	mu         sync.Mutex
 }
 
 // FileSinkConfig represents the configuration for a file sink
@@ -52,45 +53,58 @@ func NewFileSink(name string, config map[string]interface{}, userAgent string) (
 
 	log.Printf("[logger:file] File sink %s initialized: %s", name, sinkConfig.Path)
 
-	return &FileSink{
+	sink := &FileSink{
 		name:       name,
 		path:       sinkConfig.Path,
 		file:       file,
 		configHash: computeConfigHash(config),
-	}, nil
+	}
+	options := defaultAsyncBatchWriterOptions()
+	options.maxBatchEntries = 1
+	sink.writer = newAsyncBatchWriterWithOptions("file", name, sink.sendBatch, options)
+
+	return sink, nil
 }
 
 // Write writes a log entry to the file
 func (s *FileSink) Write(entry *LogEntry) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.file == nil {
+	if s.writer == nil {
 		return fmt.Errorf("file sink %s is closed", s.name)
 	}
+	return s.writer.Write(entry)
+}
 
-	jsonBytes, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("failed to marshal log entry: %w", err)
-	}
-
-	if _, err := s.file.WriteString(string(jsonBytes) + "\n"); err != nil {
-		return fmt.Errorf("failed to write to log file: %w", err)
+// Close closes the file
+func (s *FileSink) Close() error {
+	if s.file != nil {
+		log.Printf("[logger:file] Closing file sink %s", s.name)
+		if s.writer != nil {
+			s.writer.Close()
+		}
+		err := s.file.Close()
+		s.file = nil
+		return err
 	}
 
 	return nil
 }
 
-// Close closes the file
-func (s *FileSink) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *FileSink) sendBatch(ctx context.Context, entries []*LogEntry) error {
+	var batch bytes.Buffer
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		encoded, err := entry.jsonBytes()
+		if err != nil {
+			return err
+		}
+		batch.Write(encoded)
+		batch.WriteByte('\n')
+	}
 
-	if s.file != nil {
-		log.Printf("[logger:file] Closing file sink %s", s.name)
-		err := s.file.Close()
-		s.file = nil
-		return err
+	if _, err := s.file.Write(batch.Bytes()); err != nil {
+		return fmt.Errorf("failed to write to log file: %w", err)
 	}
 
 	return nil

@@ -302,8 +302,7 @@ func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
 	if cfg == nil || cfg.Logging == nil {
 		lm.enabled = false
 		lm.hostInfo = nil
-		// Close all sinks
-		if err := lm.loggerManager.Close(); err != nil {
+		if err := lm.loggerManager.UpdateSinks(nil); err != nil {
 			log.Printf("[middleware:logging] Error closing sinks: %v", err)
 		}
 		return nil

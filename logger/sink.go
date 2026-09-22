@@ -3,6 +3,7 @@ package logger
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 )
 
 // Sink represents a logging destination that can receive log entries
@@ -24,11 +25,51 @@ type Sink interface {
 // LogEntry represents a structured log entry
 type LogEntry struct {
 	Data map[string]interface{}
+
+	mu      sync.Mutex
+	encoded []byte
 }
 
 // MarshalJSON marshals the log entry to JSON
 func (e *LogEntry) MarshalJSON() ([]byte, error) {
-	return json.Marshal(e.Data)
+	if _, err := e.prepare(); err != nil {
+		return nil, err
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.encoded, nil
+}
+
+func (e *LogEntry) prepare() (int64, error) {
+	if e == nil {
+		return 0, fmt.Errorf("nil log entry")
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.encoded != nil {
+		return int64(len(e.encoded)), nil
+	}
+
+	encoded, err := json.Marshal(e.Data)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal entry: %w", err)
+	}
+	e.encoded = encoded
+	e.Data = nil
+
+	return int64(len(encoded)), nil
+}
+
+func (e *LogEntry) jsonBytes() ([]byte, error) {
+	if _, err := e.prepare(); err != nil {
+		return nil, err
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.encoded, nil
 }
 
 // Flatten returns a flattened version of the log entry data where nested objects
@@ -38,11 +79,9 @@ func (e *LogEntry) MarshalJSON() ([]byte, error) {
 // {"client.ip": "1.2.3.4", "client.as.num": 123}
 // This is useful for systems that don't support nested JSON structures or require flattened schemas for querying.
 func (e *LogEntry) Flatten(seperator string) (map[string]interface{}, error) {
-	// First, marshal and unmarshal to convert any structs to map[string]interface{}
-	// This ensures nested objects are proper maps that can be flattened
-	jsonBytes, err := json.Marshal(e.Data)
+	jsonBytes, err := e.jsonBytes()
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal entry: %w", err)
+		return nil, err
 	}
 
 	var normalizedData map[string]interface{}

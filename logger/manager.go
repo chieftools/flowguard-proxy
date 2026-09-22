@@ -1,11 +1,13 @@
 package logger
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
+	"time"
 )
 
 // Manager manages multiple logging sinks
@@ -14,25 +16,43 @@ type Manager struct {
 	sinkConfigs map[string]string // name -> config hash
 	userAgent   string
 	mu          sync.RWMutex
+	diagnostics *sinkDiagnostics
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	closed      bool
 }
 
 // NewManager creates a new logger manager
 func NewManager(userAgent string) *Manager {
-	return &Manager{
+	ctx, cancel := context.WithCancel(context.Background())
+	manager := &Manager{
 		sinks:       make(map[string]Sink),
 		sinkConfigs: make(map[string]string),
 		userAgent:   userAgent,
+		diagnostics: newSinkDiagnostics(),
+		cancel:      cancel,
 	}
+	manager.wg.Add(1)
+	go manager.runDiagnostics(ctx)
+
+	return manager
 }
 
 // Write writes a log entry to all configured sinks
 func (m *Manager) Write(entry *LogEntry) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if m.closed || len(m.sinks) == 0 {
+		return
+	}
+	if _, err := entry.prepare(); err != nil {
+		m.diagnostics.recordError(err)
+		return
+	}
 
 	for _, sink := range m.sinks {
 		if err := sink.Write(entry); err != nil {
-			log.Printf("[logger] Failed to write to sink %s: %v", sink.Name(), err)
+			m.diagnostics.recordError(fmt.Errorf("sink %s: %w", sink.Name(), err))
 		}
 	}
 }
@@ -43,6 +63,9 @@ func (m *Manager) Write(entry *LogEntry) {
 func (m *Manager) UpdateSinks(sinksConfig map[string]map[string]interface{}) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return fmt.Errorf("logger manager is closed")
+	}
 
 	// Track which sinks are in the new config
 	newSinkNames := make(map[string]bool)
@@ -101,7 +124,11 @@ func (m *Manager) UpdateSinks(sinksConfig map[string]map[string]interface{}) err
 // Close closes all sinks and releases resources
 func (m *Manager) Close() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil
+	}
+	m.closed = true
 
 	var firstError error
 	for name, sink := range m.sinks {
@@ -115,8 +142,28 @@ func (m *Manager) Close() error {
 
 	m.sinks = make(map[string]Sink)
 	m.sinkConfigs = make(map[string]string)
+	m.mu.Unlock()
+
+	m.cancel()
+	m.wg.Wait()
+	m.diagnostics.report("manager", "manager")
 
 	return firstError
+}
+
+func (m *Manager) runDiagnostics(ctx context.Context) {
+	defer m.wg.Done()
+	ticker := time.NewTicker(defaultReportInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			m.diagnostics.report("manager", "manager")
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // HasSinks returns true if there are any configured sinks

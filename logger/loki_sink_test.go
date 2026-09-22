@@ -118,13 +118,9 @@ func TestLokiSinkWrite(t *testing.T) {
 		},
 	}
 
-	// Write should not error (even though it might not actually send to Loki)
-	// This just tests that the Write method works without panicking
+	// Write should enqueue without waiting for the destination.
 	if err := sink.Write(entry); err != nil {
-		// It's okay if we get a channel full error in tests
-		if err.Error() != "channel full, event dropped" {
-			t.Errorf("unexpected error writing entry: %v", err)
-		}
+		t.Errorf("unexpected error writing entry: %v", err)
 	}
 }
 
@@ -146,8 +142,9 @@ func TestLokiSinkClose(t *testing.T) {
 
 	// Verify sink is closed
 	lokiSink := sink.(*LokiSink)
-	if lokiSink.channel != nil {
-		t.Errorf("expected channel to be nil after close")
+	_, _, _, closed := lokiSink.writer.buffer.stats()
+	if !closed {
+		t.Errorf("expected buffer to be closed")
 	}
 
 	// Writing after close should error
