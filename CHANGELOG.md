@@ -9,6 +9,16 @@ release.
 
 ## [Unreleased]
 
+## [0.23.0]
+
+### Changed
+
+- Updated the Go runtime and dependencies. ([53e0e964](https://github.com/chieftools/flowguard-proxy/commit/53e0e96412540cf2980f7e3fa6f2d676171c04df))
+
+### Fixed
+
+- Prevented logger memory growth during sustained sink failures or slow delivery by bounding queued and in-flight entries and bytes, limiting batch sizes, and applying controlled retries and shutdown deadlines. ([967fe8a4](https://github.com/chieftools/flowguard-proxy/commit/967fe8a4ca3c8c4f9c2549b332f13a48a53ae2fd))
+
 ## [0.22.1]
 
 ### Changed
@@ -595,7 +605,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.22.1...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.23.0
 [0.22.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.22.1
 [0.22.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.22.0
 [0.21.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.21.0
