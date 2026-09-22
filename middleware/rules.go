@@ -108,7 +108,7 @@ ruleLoop:
 				SetRateLimitApplied(r)
 
 				allowed, remaining, resetTime := rm.rateLimiter.IsAllowed(
-					rm.keyGenerator.GenerateKey(rule.ID, rule, r),
+					rm.keyGenerator.GenerateKeyForAction(rule.ID, rule, action, r),
 					action.RequestsPerWindow,
 					action.WindowSeconds,
 				)
@@ -330,6 +330,13 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 		if value == "" {
 			return false
 		}
+	case "behavior":
+		metric, exists := BehaviorMetric(r, match.Key)
+		threshold, valid := behaviorNumber(match.Value)
+		if !exists || !valid {
+			return false
+		}
+		return matchesBehaviorNumber(metric, threshold, match.Match)
 	case "ip":
 		clientIP := GetClientIP(r)
 		host, _, err := net.SplitHostPort(clientIP)
@@ -422,6 +429,25 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 	}
 
 	return rm.matchesStringValue(value, match)
+}
+
+func matchesBehaviorNumber(metric float64, threshold float64, operator string) bool {
+	switch operator {
+	case "equals":
+		return metric == threshold
+	case "not-equals":
+		return metric != threshold
+	case "greater-than":
+		return metric > threshold
+	case "greater-than-or-equal":
+		return metric >= threshold
+	case "less-than":
+		return metric < threshold
+	case "less-than-or-equal":
+		return metric <= threshold
+	default:
+		return false
+	}
 }
 
 func cookieValues(r *http.Request, name string) []string {
@@ -927,7 +953,6 @@ func NewRateLimitKeyGenerator() *RateLimitKeyGenerator {
 
 // GenerateKey creates a unique key for rate limiting based on rule and request context
 func (kg *RateLimitKeyGenerator) GenerateKey(ruleID string, rule *config.Rule, r *http.Request) string {
-	// Build a deterministic key based on rule conditions and matched values
 	var keyParts []string
 	keyParts = append(keyParts, "rule:"+ruleID)
 
@@ -935,10 +960,43 @@ func (kg *RateLimitKeyGenerator) GenerateKey(ruleID string, rule *config.Rule, r
 		kg.extractKeyParts(rule.Conditions, r, &keyParts)
 	}
 
-	// Sort key parts for consistent hashing
+	return hashRateLimitKeyParts(keyParts)
+}
+
+func (kg *RateLimitKeyGenerator) GenerateKeyForAction(ruleID string, rule *config.Rule, action *config.RuleAction, r *http.Request) string {
+	if action == nil || action.PartitionBy == nil {
+		return kg.GenerateKey(ruleID, rule, r)
+	}
+
+	keyParts := []string{"rule:" + ruleID}
+	for _, dimension := range *action.PartitionBy {
+		value := ""
+		switch dimension {
+		case "client.ip":
+			value = GetClientIP(r)
+		case "connection.id":
+			value = GetConnectionID(r)
+		case "request.fingerprint.ja4":
+			value = GetJA4Fingerprint(r)
+		case "request.url.domain":
+			value = behaviorDomain(r.Host)
+		case "request.url.path":
+			value = normalization.NormalizePath(r.URL.Path)
+		default:
+			continue
+		}
+		if value == "" {
+			value = "<missing>"
+		}
+		keyParts = append(keyParts, dimension+":"+value)
+	}
+
+	return hashRateLimitKeyParts(keyParts)
+}
+
+func hashRateLimitKeyParts(keyParts []string) string {
 	sort.Strings(keyParts)
 
-	// Create a hash of all key parts
 	h := sha256.New()
 	for _, part := range keyParts {
 		h.Write([]byte(part))

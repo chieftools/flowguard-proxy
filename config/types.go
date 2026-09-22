@@ -164,6 +164,7 @@ type RuleAction struct {
 	Message           string                     `json:"message,omitempty"`             // Response message (for block actions)
 	WindowSeconds     int                        `json:"window_seconds,omitempty"`      // Time window in seconds (for rate_limit actions)
 	RequestsPerWindow int                        `json:"requests_per_window,omitempty"` // Max requests in time window (for rate_limit actions)
+	PartitionBy       *[]string                  `json:"partition_by,omitempty"`        // Explicit bucket dimensions; nil preserves legacy rule-derived behavior
 	Challenge         *RuleActionChallengeConfig `json:"challenge,omitempty"`
 }
 
@@ -175,7 +176,7 @@ type RuleConditions struct {
 }
 
 type MatchCondition struct {
-	Type            string   `json:"type"`          // path, method, domain, ip, proxy-ip, agent, header, query-param, cookie, asn, proxy-asn, iplist, proxy-iplist, fingerprint-ja4
+	Type            string   `json:"type"`          // path, method, domain, ip, proxy-ip, agent, header, query-param, cookie, asn, proxy-asn, iplist, proxy-iplist, fingerprint-ja4, behavior
 	Match           string   `json:"match"`         // equals, contains, regex, in, not-in, etc.
 	Key             string   `json:"key,omitempty"` // For keyed matches: header name, query parameter, or cookie name
 	Value           string   `json:"value,omitempty"`

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"flowguard/config"
@@ -43,6 +44,7 @@ type Server struct {
 	upstreamBreaker      *upstreamCircuitBreaker
 	upstreamTransport    http.RoundTripper
 	proxyErrorLogLimiter *proxyErrorLogLimiter
+	activeUpstream       atomic.Int64
 }
 
 type ServerConfig struct {
@@ -91,6 +93,10 @@ func (s *Server) serveHTTP3(server *http3.Server, conn net.PacketConn, errChan c
 }
 
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
+	finishConnectionRequest := middleware.BeginConnectionRequest(r)
+	defer finishConnectionRequest()
+
+	r = r.WithContext(middleware.ContextWithUpstreamTelemetry(r.Context()))
 	r = s.withJA4Fingerprint(r)
 
 	// Create the proxy handler that will be called after middleware processing
@@ -200,6 +206,11 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 			log.Printf("[proxy] [%s:%s] proxy error for %s: %v", s.config.bindAddr, s.config.bindPort, proxyHost, err)
 		} else if !strings.Contains(err.Error(), "context canceled") {
 			s.logProxyError(proxyHost, err)
+		}
+
+		if isUpstreamTimeout(err) {
+			http.Error(w, "Gateway Timeout", http.StatusGatewayTimeout)
+			return
 		}
 
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
@@ -409,6 +420,8 @@ func (s *Server) recordJA4Fingerprint(hello *tls.ClientHelloInfo, transport stri
 }
 
 func (s *Server) tcpConnContext(ctx context.Context, conn net.Conn) context.Context {
+	ctx = middleware.ContextWithConnectionInfo(ctx)
+
 	if tlsConn, ok := conn.(*tls.Conn); ok {
 		conn = tlsConn.NetConn()
 	}
@@ -421,6 +434,8 @@ func (s *Server) tcpConnContext(ctx context.Context, conn net.Conn) context.Cont
 }
 
 func (s *Server) http3ConnContext(ctx context.Context, conn *quic.Conn) context.Context {
+	ctx = middleware.ContextWithConnectionInfo(ctx)
+
 	if conn == nil {
 		return ctx
 	}

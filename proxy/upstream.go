@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"flowguard/middleware"
 )
 
 const (
@@ -58,6 +61,7 @@ type upstreamRetryTransport struct {
 	recoveryWait time.Duration
 	sleep        func(context.Context, time.Duration) error
 	onRecovered  func(*http.Request, int, error)
+	server       *Server
 }
 
 func (t *upstreamRetryTransport) CloseIdleConnections() {
@@ -81,12 +85,29 @@ func (t *upstreamRetryTransport) RoundTrip(req *http.Request) (*http.Response, e
 
 	attempts := 0
 	var lastErr error
+	var finishOnce sync.Once
+	finish := func(outcome string) {
+		if t.server == nil {
+			return
+		}
+		finishOnce.Do(func() {
+			t.server.activeUpstream.Add(-1)
+			middleware.FinishUpstream(req, outcome)
+		})
+	}
+	if t.server != nil {
+		active := t.server.activeUpstream.Add(1)
+		middleware.BeginUpstream(req, active)
+	}
+
 	for {
 		if err := t.waitForBreaker(req.Context(), deadline); err != nil {
+			finish(upstreamOutcome(err))
 			return nil, err
 		}
 
-		resp, err := t.next.RoundTrip(req)
+		attemptReq := middleware.TraceUpstreamAttempt(req)
+		resp, err := t.next.RoundTrip(attemptReq)
 		attempts++
 		if err == nil {
 			if t.breaker != nil {
@@ -94,6 +115,14 @@ func (t *upstreamRetryTransport) RoundTrip(req *http.Request) (*http.Response, e
 			}
 			if lastErr != nil && t.onRecovered != nil {
 				t.onRecovered(req, attempts-1, lastErr)
+			}
+			if resp.Body == nil {
+				finish("success")
+			} else {
+				resp.Body = &upstreamTelemetryBody{
+					ReadCloser: resp.Body,
+					finish:     finish,
+				}
 			}
 			return resp, nil
 		}
@@ -114,12 +143,15 @@ func (t *upstreamRetryTransport) RoundTrip(req *http.Request) (*http.Response, e
 					t.breaker.recordSuccess()
 				}
 			}
+			finish(upstreamOutcome(err))
 			return nil, err
 		}
 		if !t.canRetryAfterFailure(req, err, deadline, attempts) {
+			finish(upstreamOutcome(err))
 			return nil, err
 		}
 		if err := prepareRequestForRetry(req); err != nil {
+			finish(upstreamOutcome(err))
 			return nil, err
 		}
 
@@ -127,6 +159,7 @@ func (t *upstreamRetryTransport) RoundTrip(req *http.Request) (*http.Response, e
 		if !deadline.IsZero() {
 			remaining := deadline.Sub(t.now())
 			if remaining <= 0 {
+				finish(upstreamOutcome(lastErr))
 				return nil, lastErr
 			}
 			if delay > remaining {
@@ -134,9 +167,76 @@ func (t *upstreamRetryTransport) RoundTrip(req *http.Request) (*http.Response, e
 			}
 		}
 		if err := t.sleepFor(req.Context(), delay); err != nil {
+			finish(upstreamOutcome(err))
 			return nil, err
 		}
 	}
+}
+
+type upstreamTelemetryBody struct {
+	io.ReadCloser
+	finish func(string)
+}
+
+func (b *upstreamTelemetryBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if errors.Is(err, io.EOF) {
+		b.finish("success")
+	} else if err != nil {
+		b.finish("upstream_error")
+	}
+
+	return n, err
+}
+
+func (b *upstreamTelemetryBody) Close() error {
+	err := b.ReadCloser.Close()
+	if err != nil {
+		b.finish("upstream_error")
+	} else {
+		b.finish("success")
+	}
+
+	return err
+}
+
+func upstreamOutcome(err error) string {
+	if errors.Is(err, context.Canceled) {
+		return "client_canceled"
+	}
+	if isUpstreamTimeout(err) {
+		return "timeout"
+	}
+	if isDefiniteUpstreamDialFailure(err) {
+		return "connect_error"
+	}
+	if isUpstreamTLSError(err) {
+		return "tls_error"
+	}
+
+	return "upstream_error"
+}
+
+func isUpstreamTLSError(err error) bool {
+	var recordHeaderError tls.RecordHeaderError
+	var certificateInvalidError x509.CertificateInvalidError
+	var hostnameError x509.HostnameError
+	var unknownAuthorityError x509.UnknownAuthorityError
+
+	return errors.As(err, &recordHeaderError) ||
+		errors.As(err, &certificateInvalidError) ||
+		errors.As(err, &hostnameError) ||
+		errors.As(err, &unknownAuthorityError)
+}
+
+func isUpstreamTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var networkError net.Error
+
+	return errors.As(err, &networkError) && networkError.Timeout()
 }
 
 func (t *upstreamRetryTransport) waitForBreaker(ctx context.Context, deadline time.Time) error {
@@ -440,6 +540,7 @@ func (s *Server) newUpstreamTransport() http.RoundTripper {
 		breaker:      s.upstreamBreaker,
 		recoveryWait: upstreamRecoveryWait,
 		onRecovered:  s.logUpstreamRecovery,
+		server:       s,
 	}
 }
 

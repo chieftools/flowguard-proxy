@@ -431,6 +431,23 @@ func TestReverseProxyClientAbortRecords499InsteadOfSynthetic502(t *testing.T) {
 	}
 }
 
+func TestReverseProxyUpstreamTimeoutReturns504(t *testing.T) {
+	server := NewServer(&ServerConfig{
+		scheme:   "https",
+		bindAddr: "192.0.2.62",
+		bindPort: "11443",
+	})
+	proxy := server.createReverseProxyWithHost(&url.URL{Scheme: "https", Host: "origin.example.test"}, "origin.example.test")
+	req := httptest.NewRequest(http.MethodGet, "https://edge.example.test/slow", nil)
+	w := httptest.NewRecorder()
+
+	proxy.ErrorHandler(w, req, context.DeadlineExceeded)
+
+	if w.Code != http.StatusGatewayTimeout {
+		t.Fatalf("expected upstream timeout to return 504, got %d", w.Code)
+	}
+}
+
 func TestReverseProxyPolicyRejectionAbortsWithoutResponse(t *testing.T) {
 	server := NewServer(&ServerConfig{
 		scheme:   "https",
@@ -847,6 +864,46 @@ func TestUpstreamRetryTransportRetriesSafeBodylessRequests(t *testing.T) {
 	}
 	if !errors.Is(recoveredErr, syscall.ECONNREFUSED) {
 		t.Fatalf("expected recovered error to be ECONNREFUSED, got %v", recoveredErr)
+	}
+}
+
+func TestUpstreamRetryTransportRecordsRequestTelemetry(t *testing.T) {
+	server := NewServer(&ServerConfig{
+		scheme:   "https",
+		bindAddr: "192.0.2.63",
+		bindPort: "11443",
+	})
+	transport := &upstreamRetryTransport{
+		server: server,
+		next: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Header:     http.Header{},
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		}),
+	}
+	req := mustNewRequest(t, http.MethodGet, "https://origin.example.test/", nil)
+	req = req.WithContext(middleware.ContextWithUpstreamTelemetry(req.Context()))
+
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close response: %v", err)
+	}
+
+	snapshot := middleware.GetUpstreamSnapshot(req)
+	if snapshot == nil {
+		t.Fatal("expected upstream snapshot")
+	}
+	if snapshot.Attempts != 1 || snapshot.ActiveRequests != 1 || snapshot.Outcome != "success" {
+		t.Fatalf("unexpected upstream snapshot: %+v", snapshot)
+	}
+	if server.activeUpstream.Load() != 0 {
+		t.Fatalf("active upstream requests = %d, want 0", server.activeUpstream.Load())
 	}
 }
 

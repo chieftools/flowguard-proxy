@@ -316,7 +316,8 @@
                         "iplist",
                         "proxy-iplist",
                         "registerable-domain",
-                        "fingerprint-ja4"
+                        "fingerprint-ja4",
+                        "behavior"
                     ],
                     "description": "The type of value to match against"
                 },
@@ -336,13 +337,17 @@
                         "regex",
                         "not-regex",
                         "exists",
-                        "missing"
+                        "missing",
+                        "greater-than",
+                        "greater-than-or-equal",
+                        "less-than",
+                        "less-than-or-equal"
                     ],
                     "description": "The matching operation to perform"
                 },
                 "key": {
                     "type": "string",
-                    "description": "The key/name to match against. Required for 'header', 'query-param', and 'cookie' type matches."
+                    "description": "The key/name to match against. Required for 'header', 'query-param', 'cookie', and 'behavior' type matches."
                 },
                 "value": {
                     "type": "string",
@@ -383,7 +388,8 @@
                                 "enum": [
                                     "header",
                                     "query-param",
-                                    "cookie"
+                                    "cookie",
+                                    "behavior"
                                 ]
                             }
                         }
@@ -434,6 +440,22 @@
                     "type": "integer",
                     "minimum": 1,
                     "description": "Time window in seconds for rate limiting (for rate_limit actions)"
+                },
+                "partition_by": {
+                    "type": "array",
+                    "maxItems": 5,
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "client.ip",
+                            "connection.id",
+                            "request.fingerprint.ja4",
+                            "request.url.domain",
+                            "request.url.path"
+                        ]
+                    },
+                    "description": "Dimensions that receive independent rate-limit buckets. An empty list creates one bucket per rule; omission preserves legacy rule-derived behavior."
                 },
                 "challenge": {
                     "$ref": "#/definitions/action_challenge_config"

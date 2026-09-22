@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -311,6 +312,38 @@ func TestRateLimitKeyGenerator_GenerateKey(t *testing.T) {
 	key4 := kg.GenerateKey("different_rule", rule, req)
 	if key3 == key4 {
 		t.Error("Different rule ID should generate different key")
+	}
+}
+
+func TestRateLimitKeyGenerator_UsesExplicitPartitions(t *testing.T) {
+	kg := NewRateLimitKeyGenerator()
+	rule := &config.Rule{
+		ID: "synthetic_rule",
+		Conditions: &config.RuleConditions{Matches: []config.MatchCondition{{
+			Type:  "path",
+			Match: "equals",
+			Value: "/synthetic",
+		}}},
+	}
+	clientPartition := []string{"client.ip"}
+	clientAction := &config.RuleAction{PartitionBy: &clientPartition}
+	first := httptest.NewRequest(http.MethodGet, "https://service.example.test/synthetic", nil)
+	first = first.WithContext(context.WithValue(first.Context(), ContextKeyClientIP, "192.0.2.21"))
+	second := httptest.NewRequest(http.MethodGet, "https://service.example.test/synthetic", nil)
+	second = second.WithContext(context.WithValue(second.Context(), ContextKeyClientIP, "192.0.2.22"))
+
+	if kg.GenerateKeyForAction(rule.ID, rule, clientAction, first) == kg.GenerateKeyForAction(rule.ID, rule, clientAction, second) {
+		t.Fatal("expected client partition to create independent buckets")
+	}
+
+	globalPartition := []string{}
+	globalAction := &config.RuleAction{PartitionBy: &globalPartition}
+	if kg.GenerateKeyForAction(rule.ID, rule, globalAction, first) != kg.GenerateKeyForAction(rule.ID, rule, globalAction, second) {
+		t.Fatal("expected empty partition list to create one rule-wide bucket")
+	}
+
+	if kg.GenerateKeyForAction(rule.ID, rule, &config.RuleAction{}, first) != kg.GenerateKey(rule.ID, rule, first) {
+		t.Fatal("expected omitted partition configuration to preserve the legacy key")
 	}
 }
 

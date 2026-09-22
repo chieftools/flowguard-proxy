@@ -80,6 +80,7 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 	// Timing middleware MUST be first to capture the full middleware stack timing
 	middlewareChain.Add(middleware.NewTimingMiddleware())                  // Captures precise timing for all middleware (must be first!)
 	middlewareChain.Add(middleware.NewIPLookupMiddleware(configMgr))       // Enriches request with IP/ASN data
+	middlewareChain.Add(middleware.NewBehaviorTracker())                   // Tracks rolling request behavior for logs and rules
 	middlewareChain.Add(middleware.NewLoggingMiddleware(configMgr))        // Logs request and response with enriched data
 	middlewareChain.Add(middleware.NewFail2BanMiddleware(fail2banManager)) // Enforces synchronized Fail2Ban bans
 	rulesMiddleware := middleware.NewRulesMiddleware(configMgr)            // Evaluates user defined rules

@@ -3,11 +3,13 @@ package middleware
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"log"
 	"net/http"
+	"net/netip"
 	"sort"
 	"strings"
 	"sync"
@@ -34,8 +36,9 @@ const (
 )
 
 type RequestLogEntryIPInfo struct {
-	IP      string `json:"ip"`
-	Country string `json:"country,omitempty"`
+	IP            string `json:"ip"`
+	NetworkPrefix string `json:"network_prefix,omitempty"`
+	Country       string `json:"country,omitempty"`
 
 	AS *RequestLogEntryIPASInfo `json:"as,omitempty"`
 }
@@ -82,14 +85,17 @@ type RequestLogEntryIPASInfo struct {
 }
 
 type RequestLogEntryRequestInfo struct {
-	TLS         *RequestLogEntryTLSInfo         `json:"tls,omitempty"`
-	URL         RequestLogEntryRequestURLInfo   `json:"url"`
-	Body        *RequestLogEntryBodyInfo        `json:"body,omitempty"`
-	Method      string                          `json:"method"`
-	Headers     map[string]string               `json:"headers,omitempty"`
-	HeaderNames []string                        `json:"header_names,omitempty"`
-	HTTPVersion string                          `json:"http_version"`
-	Fingerprint *RequestLogEntryFingerprintInfo `json:"fingerprint,omitempty"`
+	TLS           *RequestLogEntryTLSInfo         `json:"tls,omitempty"`
+	URL           RequestLogEntryRequestURLInfo   `json:"url"`
+	Body          *RequestLogEntryBodyInfo        `json:"body,omitempty"`
+	Method        string                          `json:"method"`
+	Headers       map[string]string               `json:"headers,omitempty"`
+	HeaderNames   []string                        `json:"header_names,omitempty"`
+	HTTPVersion   string                          `json:"http_version"`
+	Fingerprint   *RequestLogEntryFingerprintInfo `json:"fingerprint,omitempty"`
+	HasCookie     bool                            `json:"has_cookie"`
+	CookieNames   []string                        `json:"cookie_names,omitempty"`
+	HeaderSetHash string                          `json:"header_set_hash,omitempty"`
 }
 
 type RequestLogEntryResponseInfo struct {
@@ -249,6 +255,16 @@ func (lm *LoggingMiddleware) logRequest(r *http.Request, wrapper *ResponseWriter
 			"request":   getRequestInfo(r, lm.headerWhitelist),
 			"response":  getResponseInfo(r, wrapper, lm.headerWhitelist),
 		},
+	}
+
+	if connection := GetConnectionSnapshot(r); connection != nil {
+		entry.Data["connection"] = connection
+	}
+	if behavior := GetBehaviorSnapshot(r); behavior != nil {
+		entry.Data["behavior"] = behavior
+	}
+	if upstream := GetUpstreamSnapshot(r); upstream != nil && upstream.Attempts > 0 {
+		entry.Data["upstream"] = upstream
 	}
 
 	if challenge := GetChallengeInfo(r); challenge != nil {
@@ -508,6 +524,7 @@ func getClientInfo(r *http.Request) RequestLogEntryIPInfo {
 	clientInfo := RequestLogEntryIPInfo{
 		IP: GetClientIP(r),
 	}
+	clientInfo.NetworkPrefix = networkPrefix(clientInfo.IP)
 
 	if clientASN := GetClientASN(r); clientASN != nil {
 		clientInfo.AS = &RequestLogEntryIPASInfo{
@@ -521,6 +538,20 @@ func getClientInfo(r *http.Request) RequestLogEntryIPInfo {
 	return clientInfo
 }
 
+func networkPrefix(ip string) string {
+	address, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ""
+	}
+	address = address.Unmap()
+	bits := 48
+	if address.Is4() {
+		bits = 24
+	}
+
+	return netip.PrefixFrom(address, bits).Masked().String()
+}
+
 func getRequestInfo(r *http.Request, whitelist []string) RequestLogEntryRequestInfo {
 	var bodyInfo *RequestLogEntryBodyInfo = nil
 	if r.ContentLength > 0 {
@@ -530,6 +561,12 @@ func getRequestInfo(r *http.Request, whitelist []string) RequestLogEntryRequestI
 	}
 
 	headers, headerNames := simplifyHeaders(r.Header, whitelist)
+	cookieNames := requestCookieNames(r)
+	headerSetHash := ""
+	if len(headerNames) > 0 {
+		sum := sha256.Sum256([]byte(strings.Join(headerNames, "\x00")))
+		headerSetHash = hex.EncodeToString(sum[:16])
+	}
 
 	// Ensure User-Agent header is always present in the filtered headers
 	if _, ok := headers["user-agent"]; !ok {
@@ -537,15 +574,35 @@ func getRequestInfo(r *http.Request, whitelist []string) RequestLogEntryRequestI
 	}
 
 	return RequestLogEntryRequestInfo{
-		TLS:         getTLSInfo(r),
-		URL:         getRequestURLInfo(r),
-		Body:        bodyInfo,
-		Method:      r.Method,
-		Headers:     headers,
-		HeaderNames: headerNames,
-		HTTPVersion: r.Proto,
-		Fingerprint: getFingerprintInfo(r),
+		TLS:           getTLSInfo(r),
+		URL:           getRequestURLInfo(r),
+		Body:          bodyInfo,
+		Method:        r.Method,
+		Headers:       headers,
+		HeaderNames:   headerNames,
+		HTTPVersion:   r.Proto,
+		Fingerprint:   getFingerprintInfo(r),
+		HasCookie:     len(cookieNames) > 0,
+		CookieNames:   cookieNames,
+		HeaderSetHash: headerSetHash,
 	}
+}
+
+func requestCookieNames(r *http.Request) []string {
+	names := make(map[string]struct{})
+	for _, cookie := range r.Cookies() {
+		if cookie.Name != "" {
+			names[cookie.Name] = struct{}{}
+		}
+	}
+
+	result := make([]string, 0, len(names))
+	for name := range names {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+
+	return result
 }
 
 func getResponseInfo(r *http.Request, wrapper *ResponseWriterWrapper, whitelist []string) RequestLogEntryResponseInfo {
