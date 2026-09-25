@@ -891,6 +891,9 @@ func TestUpstreamRetryTransportRecordsRequestTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("round trip: %v", err)
 	}
+	if _, writable := resp.Body.(io.ReadWriteCloser); writable {
+		t.Fatalf("ordinary response body %T unexpectedly supports writes", resp.Body)
+	}
 	if err := resp.Body.Close(); err != nil {
 		t.Fatalf("close response: %v", err)
 	}

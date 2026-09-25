@@ -423,6 +423,12 @@ Fail2Ban blocks add a top-level `fail2ban` object containing the matching jail
 names, set `rule.result` to `block`, and record response status `403`. The Stream
 ID shown to the client is also available as `stream_id` in the request log.
 
+Successful HTTP/1.1 WebSocket upgrades write two request log entries with status
+`101` and `websocket.phase` set to `open` or `close`. They share a `stream_id`.
+The open entry records handshake timing; the close entry records the full
+connection duration and final upstream telemetry. WebSocket messages are not
+logged. Failed upgrades produce one ordinary request log entry.
+
 ### Sink configuration
 
 ```json

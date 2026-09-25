@@ -75,6 +75,7 @@ type ResponseWriterWrapper struct {
 	Headers    map[string][]string
 	BodySize   int64
 	StatusCode int
+	onHijack   func()
 }
 
 func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
@@ -110,7 +111,11 @@ func (w *ResponseWriterWrapper) Flush() {
 // This method delegates to the underlying ResponseWriter if it supports hijacking
 func (w *ResponseWriterWrapper) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if hijacker, ok := w.ResponseWriter.(http.Hijacker); ok {
-		return hijacker.Hijack()
+		conn, buffered, err := hijacker.Hijack()
+		if err == nil && w.onHijack != nil {
+			w.onHijack()
+		}
+		return conn, buffered, err
 	}
 	return nil, nil, http.ErrNotSupported
 }

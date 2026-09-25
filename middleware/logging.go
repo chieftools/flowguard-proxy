@@ -155,6 +155,14 @@ type recordedResponseStatus struct {
 
 type recordedResponseStatusContextKey struct{}
 
+type websocketLogContextKey struct{}
+
+type websocketLogState struct {
+	responseHeaders http.Header
+	accepted        bool
+	opened          bool
+}
+
 // RecordResponseStatus records an internal response outcome without writing an
 // HTTP status to the client. The logging middleware uses this for deliberately
 // aborted requests such as source-specific upstream policy rejections.
@@ -177,6 +185,18 @@ func responseStatusRecordedFor(r *http.Request) (int, bool) {
 		return 0, false
 	}
 	return recorded.status, true
+}
+
+// RecordWebSocketUpgrade preserves headers before ReverseProxy writes them through a hijacked connection.
+func RecordWebSocketUpgrade(r *http.Request, headers http.Header) {
+	if r == nil {
+		return
+	}
+	state, _ := r.Context().Value(websocketLogContextKey{}).(*websocketLogState)
+	if state != nil {
+		state.responseHeaders = headers.Clone()
+		state.accepted = true
+	}
 }
 
 func NewLoggingMiddleware(configMgr *config.Manager) *LoggingMiddleware {
@@ -211,16 +231,38 @@ func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 	}
 	recorded := &recordedResponseStatus{}
 	r = r.WithContext(context.WithValue(r.Context(), recordedResponseStatusContextKey{}, recorded))
+	websocket := &websocketLogState{}
+	r = r.WithContext(context.WithValue(r.Context(), websocketLogContextKey{}, websocket))
+	wrapper.onHijack = func() {
+		if !websocket.accepted {
+			return
+		}
+		wrapper.StatusCode = http.StatusSwitchingProtocols
+		wrapper.Headers = websocket.responseHeaders
+		wrapper.GotHeaders = true
+		websocket.opened = true
+		lm.logRequest(r, wrapper, "open")
+	}
+	logFinal := func() {
+		phase := ""
+		if websocket.opened {
+			wrapper.StatusCode = http.StatusSwitchingProtocols
+			phase = "close"
+		}
+		lm.logRequest(r, wrapper, phase)
+	}
 
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			if status, ok := responseStatusRecordedFor(r); ok {
+			if websocket.opened {
+				logFinal()
+			} else if status, ok := responseStatusRecordedFor(r); ok {
 				wrapper.StatusCode = status
-				lm.logRequest(r, wrapper)
+				logFinal()
 			}
 			panic(recovered)
 		}
-		lm.logRequest(r, wrapper)
+		logFinal()
 	}()
 
 	// Process the request through the next handler. Deliberately aborted
@@ -235,7 +277,7 @@ func (lm *LoggingMiddleware) Stop() {
 	}
 }
 
-func (lm *LoggingMiddleware) logRequest(r *http.Request, wrapper *ResponseWriterWrapper) {
+func (lm *LoggingMiddleware) logRequest(r *http.Request, wrapper *ResponseWriterWrapper, websocketPhase string) {
 	lm.mu.RLock()
 	defer lm.mu.RUnlock()
 
@@ -255,6 +297,9 @@ func (lm *LoggingMiddleware) logRequest(r *http.Request, wrapper *ResponseWriter
 			"request":   getRequestInfo(r, lm.headerWhitelist),
 			"response":  getResponseInfo(r, wrapper, lm.headerWhitelist),
 		},
+	}
+	if websocketPhase != "" {
+		entry.Data["websocket"] = map[string]string{"phase": websocketPhase}
 	}
 
 	if connection := GetConnectionSnapshot(r); connection != nil {

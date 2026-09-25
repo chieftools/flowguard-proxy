@@ -119,9 +119,25 @@ func (t *upstreamRetryTransport) RoundTrip(req *http.Request) (*http.Response, e
 			if resp.Body == nil {
 				finish("success")
 			} else {
-				resp.Body = &upstreamTelemetryBody{
+				body := &upstreamTelemetryBody{
 					ReadCloser: resp.Body,
 					finish:     finish,
+				}
+				if writable, ok := resp.Body.(io.ReadWriteCloser); ok {
+					upgraded := &upstreamTelemetryReadWriteBody{
+						upstreamTelemetryBody: body,
+						writer:                writable,
+					}
+					if closeWriter, ok := resp.Body.(interface{ CloseWrite() error }); ok {
+						resp.Body = &upstreamTelemetryHalfCloseBody{
+							upstreamTelemetryReadWriteBody: upgraded,
+							closeWriter:                    closeWriter,
+						}
+					} else {
+						resp.Body = upgraded
+					}
+				} else {
+					resp.Body = body
 				}
 			}
 			return resp, nil
@@ -175,7 +191,9 @@ func (t *upstreamRetryTransport) RoundTrip(req *http.Request) (*http.Response, e
 
 type upstreamTelemetryBody struct {
 	io.ReadCloser
-	finish func(string)
+	finish    func(string)
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (b *upstreamTelemetryBody) Read(p []byte) (int, error) {
@@ -190,14 +208,37 @@ func (b *upstreamTelemetryBody) Read(p []byte) (int, error) {
 }
 
 func (b *upstreamTelemetryBody) Close() error {
-	err := b.ReadCloser.Close()
+	b.closeOnce.Do(func() {
+		b.closeErr = b.ReadCloser.Close()
+		if b.closeErr != nil {
+			b.finish("upstream_error")
+		} else {
+			b.finish("success")
+		}
+	})
+	return b.closeErr
+}
+
+type upstreamTelemetryReadWriteBody struct {
+	*upstreamTelemetryBody
+	writer io.Writer
+}
+
+func (b *upstreamTelemetryReadWriteBody) Write(p []byte) (int, error) {
+	n, err := b.writer.Write(p)
 	if err != nil {
 		b.finish("upstream_error")
-	} else {
-		b.finish("success")
 	}
+	return n, err
+}
 
-	return err
+type upstreamTelemetryHalfCloseBody struct {
+	*upstreamTelemetryReadWriteBody
+	closeWriter interface{ CloseWrite() error }
+}
+
+func (b *upstreamTelemetryHalfCloseBody) CloseWrite() error {
+	return b.closeWriter.CloseWrite()
 }
 
 func upstreamOutcome(err error) string {

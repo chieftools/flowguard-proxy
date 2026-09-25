@@ -114,6 +114,26 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		}
 
 		proxy := s.createReverseProxyWithHost(proxyTarget, proxyHost)
+		var upgradedBody io.ReadCloser
+		modifyResponse := proxy.ModifyResponse
+		proxy.ModifyResponse = func(resp *http.Response) error {
+			if err := modifyResponse(resp); err != nil {
+				return err
+			}
+			if resp.StatusCode == http.StatusSwitchingProtocols {
+				upgradedBody = resp.Body
+				if strings.EqualFold(resp.Header.Get("Upgrade"), "websocket") {
+					middleware.RecordWebSocketUpgrade(r, resp.Header)
+				}
+			}
+			return nil
+		}
+		// ReverseProxy closes upgraded bodies asynchronously; finish telemetry before request logging.
+		defer func() {
+			if upgradedBody != nil {
+				_ = upgradedBody.Close()
+			}
+		}()
 		proxy.ServeHTTP(w, r)
 	})
 
