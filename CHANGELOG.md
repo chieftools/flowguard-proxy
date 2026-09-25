@@ -9,6 +9,16 @@ release.
 
 ## [Unreleased]
 
+## [0.24.0]
+
+### Added
+
+- Logged successful HTTP/1.1 WebSocket connections at open and close with linked request entries and final upstream telemetry. ([2af17f99](https://github.com/chieftools/flowguard-proxy/commit/2af17f99786d2e0a82de6eae3fd8939227e6fd53))
+
+### Fixed
+
+- Restored HTTP/1.1 WebSocket proxying by preserving writable upstream response bodies during protocol upgrades. ([2af17f99](https://github.com/chieftools/flowguard-proxy/commit/2af17f99786d2e0a82de6eae3fd8939227e6fd53))
+
 ## [0.23.0]
 
 ### Changed
@@ -605,7 +615,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.24.0
 [0.23.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.23.0
 [0.22.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.22.1
 [0.22.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.22.0
