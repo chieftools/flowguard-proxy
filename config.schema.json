@@ -146,8 +146,28 @@
                     "default": "headers",
                     "description": "Use forwarding headers or Linux transparent source sockets to expose the validated client IP to backends"
                 },
+                "headers": {
+                    "$ref": "#/definitions/upstream_headers_config"
+                },
                 "transparent": {
                     "$ref": "#/definitions/transparent_upstream_config"
+                }
+            },
+            "additionalProperties": false
+        },
+        "upstream_headers_config": {
+            "type": "object",
+            "description": "Informational headers FlowGuard adds to requests sent to the backend",
+            "properties": {
+                "stream_id": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Add the FG-Stream header (unique request ID) to requests sent to the backend. Responses to the client always include FG-Stream"
+                },
+                "ip_country": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Add the FG-IPCountry header (client ISO 3166-1 alpha-2 country code, or XX when unknown) to requests sent to the backend"
                 }
             },
             "additionalProperties": false

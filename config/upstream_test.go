@@ -109,3 +109,32 @@ func TestValidateUpstreamConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestUpstreamHeaderSettingsDefaultsToAllEnabled(t *testing.T) {
+	settings := (*Config)(nil).UpstreamHeaderSettings()
+
+	if !settings.StreamID || !settings.IPCountry {
+		t.Fatalf("expected all upstream headers enabled by default, got %+v", settings)
+	}
+}
+
+func TestUpstreamHeaderSettingsAppliesOverrides(t *testing.T) {
+	cfg := &Config{
+		Server: &ServerConfig{
+			Upstream: &UpstreamConfig{
+				Headers: &UpstreamHeadersConfig{
+					IPCountry: boolPtr(false),
+				},
+			},
+		},
+	}
+
+	settings := cfg.UpstreamHeaderSettings()
+
+	if !settings.StreamID {
+		t.Fatal("expected stream ID header to keep its default enabled state")
+	}
+	if settings.IPCountry {
+		t.Fatal("expected IP country header to be disabled")
+	}
+}

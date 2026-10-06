@@ -25,6 +25,39 @@ type TransparentUpstreamSettings struct {
 	AddressPairs    []AddressPair
 }
 
+// UpstreamHeaderSettings controls the informational headers added to requests
+// sent to the backend.
+type UpstreamHeaderSettings struct {
+	StreamID  bool
+	IPCountry bool
+}
+
+// DefaultUpstreamHeaderSettings returns the upstream headers added when config
+// does not explicitly disable them.
+func DefaultUpstreamHeaderSettings() UpstreamHeaderSettings {
+	return UpstreamHeaderSettings{
+		StreamID:  true,
+		IPCountry: true,
+	}
+}
+
+func (c *Config) UpstreamHeaderSettings() UpstreamHeaderSettings {
+	settings := DefaultUpstreamHeaderSettings()
+	if c == nil || c.Server == nil || c.Server.Upstream == nil || c.Server.Upstream.Headers == nil {
+		return settings
+	}
+
+	headers := c.Server.Upstream.Headers
+	if headers.StreamID != nil {
+		settings.StreamID = *headers.StreamID
+	}
+	if headers.IPCountry != nil {
+		settings.IPCountry = *headers.IPCountry
+	}
+
+	return settings
+}
+
 func (c *Config) UpstreamClientIPMode() string {
 	if c == nil || c.Server == nil || c.Server.Upstream == nil || c.Server.Upstream.ClientIPMode == "" {
 		return UpstreamClientIPModeHeaders

@@ -58,6 +58,7 @@ type ServerConfig struct {
 	middleware      *middleware.Chain
 	transparentPool *transparentTransportPool
 	addressPairs    AddressPairResolution
+	upstreamHeaders *atomic.Pointer[config.UpstreamHeaderSettings]
 }
 
 func NewServer(config *ServerConfig) *Server {
@@ -196,7 +197,13 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 			}
 			out.Header.Set("X-Forwarded-Host", proxyRequest.In.Host)
 			out.Header.Set("X-Forwarded-Proto", s.config.scheme)
-			out.Header.Set("FG-Stream", middleware.GetStreamID(proxyRequest.In))
+			headers := s.upstreamHeaderSettings()
+			if headers.StreamID {
+				out.Header.Set("FG-Stream", middleware.GetStreamID(proxyRequest.In))
+			}
+			if headers.IPCountry {
+				out.Header.Set("FG-IPCountry", clientCountryCode(proxyRequest.In))
+			}
 		},
 	}
 
@@ -278,6 +285,24 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 	return proxy
 }
 
+func (s *Server) upstreamHeaderSettings() config.UpstreamHeaderSettings {
+	if s.config.upstreamHeaders != nil {
+		if settings := s.config.upstreamHeaders.Load(); settings != nil {
+			return *settings
+		}
+	}
+	return config.DefaultUpstreamHeaderSettings()
+}
+
+// clientCountryCode returns the client's ISO 3166-1 alpha-2 country code, or
+// "XX" when it is unknown.
+func clientCountryCode(r *http.Request) string {
+	if asn := middleware.GetClientASN(r); asn != nil && asn.CountryCode != "" {
+		return strings.ToUpper(asn.CountryCode)
+	}
+	return "XX"
+}
+
 func stripForwardingHeaders(header http.Header) {
 	for _, name := range []string{
 		"Forwarded",
@@ -292,6 +317,7 @@ func stripForwardingHeaders(header http.Header) {
 		"CF-Connecting-IP",
 		"Fastly-Client-IP",
 		"FG-Stream",
+		"FG-IPCountry",
 	} {
 		header.Del(name)
 	}

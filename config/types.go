@@ -51,7 +51,13 @@ type ProtocolsConfig struct {
 
 type UpstreamConfig struct {
 	ClientIPMode string                     `json:"client_ip_mode,omitempty"`
+	Headers      *UpstreamHeadersConfig     `json:"headers,omitempty"`
 	Transparent  *TransparentUpstreamConfig `json:"transparent,omitempty"`
+}
+
+type UpstreamHeadersConfig struct {
+	StreamID  *bool `json:"stream_id,omitempty"`
+	IPCountry *bool `json:"ip_country,omitempty"`
 }
 
 type TransparentUpstreamConfig struct {

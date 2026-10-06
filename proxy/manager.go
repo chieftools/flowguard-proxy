@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"flowguard/api"
@@ -38,22 +39,23 @@ type Config struct {
 }
 
 type Manager struct {
-	config               *Config
-	servers              []*Server
-	updater              *updater.Updater
-	startedAt            time.Time
-	certManager          *certmanager.Manager
-	configManager        *config.Manager
-	ipListManager        *iplist.Manager
-	fail2banManager      *fail2ban.Manager
-	firewallState        api.FirewallHeartbeat
-	middlewareChain      *middleware.Chain
-	upstreamMode         string
-	upstreamModeOverride string
-	upstreamSettings     config.TransparentUpstreamSettings
-	addressPairs         AddressPairResolution
-	transparentPool      *transparentTransportPool
-	transparentNet       *transparentNetworkManager
+	config                 *Config
+	servers                []*Server
+	updater                *updater.Updater
+	startedAt              time.Time
+	certManager            *certmanager.Manager
+	configManager          *config.Manager
+	ipListManager          *iplist.Manager
+	fail2banManager        *fail2ban.Manager
+	firewallState          api.FirewallHeartbeat
+	middlewareChain        *middleware.Chain
+	upstreamMode           string
+	upstreamModeOverride   string
+	upstreamSettings       config.TransparentUpstreamSettings
+	addressPairs           AddressPairResolution
+	transparentPool        *transparentTransportPool
+	transparentNet         *transparentNetworkManager
+	upstreamHeaderSettings *atomic.Pointer[config.UpstreamHeaderSettings]
 
 	serveErrChan        chan error
 	stopHeartbeat       chan struct{}
@@ -158,17 +160,18 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 	}
 
 	pm := &Manager{
-		config:               cfg,
-		startedAt:            time.Now(),
-		configManager:        configMgr,
-		fail2banManager:      fail2banManager,
-		middlewareChain:      middlewareChain,
-		upstreamMode:         upstreamMode,
-		upstreamModeOverride: cfg.UpstreamClientIPMode,
-		upstreamSettings:     upstreamSettings,
-		addressPairs:         addressPairs,
-		transparentPool:      transparentPool,
-		transparentNet:       transparentNet,
+		config:                 cfg,
+		startedAt:              time.Now(),
+		configManager:          configMgr,
+		fail2banManager:        fail2banManager,
+		middlewareChain:        middlewareChain,
+		upstreamMode:           upstreamMode,
+		upstreamModeOverride:   cfg.UpstreamClientIPMode,
+		upstreamSettings:       upstreamSettings,
+		addressPairs:           addressPairs,
+		transparentPool:        transparentPool,
+		transparentNet:         transparentNet,
+		upstreamHeaderSettings: &atomic.Pointer[config.UpstreamHeaderSettings]{},
 
 		certManager: certmanager.New(certmanager.Config{
 			Verbose:         cfg.Verbose,
@@ -184,6 +187,7 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 		forceHeartbeat:      make(chan struct{}, 1),
 		stopFirewallMonitor: make(chan struct{}),
 	}
+	pm.setUpstreamHeaderSettings(configMgr.GetConfig().UpstreamHeaderSettings())
 
 	// Initialize IP list manager with current config
 	pm.initializeIPListManager(configMgr.GetConfig(), rulesMiddleware)
@@ -192,6 +196,7 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 	configMgr.OnChange(func(newConfig *config.Config) {
 		pm.handleIPListConfigChange(newConfig, rulesMiddleware)
 		pm.handleServerConfigChange(newConfig)
+		pm.setUpstreamHeaderSettings(newConfig.UpstreamHeaderSettings())
 		pm.fail2banManager.SetEnabled(newConfig.Fail2BanEnabled())
 	})
 
@@ -363,6 +368,10 @@ func (p *Manager) handleIPListUpdateEvent(listIDs []string) {
 			log.Printf("[ip_list] Failed to refresh list %s: %v", listID, err)
 		}
 	}
+}
+
+func (p *Manager) setUpstreamHeaderSettings(settings config.UpstreamHeaderSettings) {
+	p.upstreamHeaderSettings.Store(&settings)
 }
 
 func (p *Manager) handleServerConfigChange(newConfig *config.Config) {
@@ -892,6 +901,7 @@ func (p *Manager) startServers(protocols config.ProtocolSettings, advertiseHTTP3
 				middleware:      p.middlewareChain,
 				transparentPool: p.transparentPool,
 				addressPairs:    p.addressPairs,
+				upstreamHeaders: p.upstreamHeaderSettings,
 			})
 			started = append(started, httpServer)
 
@@ -916,6 +926,7 @@ func (p *Manager) startServers(protocols config.ProtocolSettings, advertiseHTTP3
 			middleware:      p.middlewareChain,
 			transparentPool: p.transparentPool,
 			addressPairs:    p.addressPairs,
+			upstreamHeaders: p.upstreamHeaderSettings,
 		})
 		started = append(started, httpsServer)
 

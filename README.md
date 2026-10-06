@@ -331,6 +331,35 @@ transparent mode if more than one pairing remains possible:
 }
 ```
 
+### Request ID and country headers
+
+FlowGuard adds two informational headers to requests sent to the backend:
+
+- `FG-Stream` carries the request's unique Stream ID, which matches the
+  `stream_id` in request logs.
+- `FG-IPCountry` carries the client's ISO 3166-1 alpha-2 country code from the
+  IP database, or `XX` when the country is unknown.
+
+FlowGuard always removes client-supplied copies of both headers. Both are
+enabled by default and can be turned off for backend requests under
+`server.upstream.headers`:
+
+```json
+{
+  "server": {
+    "upstream": {
+      "headers": {
+        "stream_id": true,
+        "ip_country": false
+      }
+    }
+  }
+}
+```
+
+Changes apply without a restart. Responses to the client always include
+`FG-Stream`, whatever these settings are.
+
 ## Fail2Ban integration
 
 On Linux hosts, FlowGuard can mirror the addresses currently banned by every

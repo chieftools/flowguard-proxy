@@ -368,6 +368,66 @@ func TestReverseProxyReplacesSpoofableForwardingHeaders(t *testing.T) {
 	}
 }
 
+func TestReverseProxyAddsClientCountryHeader(t *testing.T) {
+	tests := []struct {
+		name string
+		asn  *middleware.ASNInfo
+		want string
+	}{
+		{name: "known country", asn: &middleware.ASNInfo{CountryCode: "nl"}, want: "NL"},
+		{name: "missing country code", asn: &middleware.ASNInfo{}, want: "XX"},
+		{name: "no lookup result", want: "XX"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := NewServer(&ServerConfig{scheme: "https", bindAddr: "192.0.2.10", bindPort: "11443"})
+			proxy := server.createReverseProxyWithHost(&url.URL{Scheme: "https", Host: "example.com"}, "example.com")
+			req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
+			req.Header.Set("FG-IPCountry", "US")
+			if tt.asn != nil {
+				req = req.WithContext(context.WithValue(req.Context(), middleware.ContextKeyClientASNInfo, tt.asn))
+			}
+
+			outReq := req.Clone(req.Context())
+			proxy.Rewrite(&httputil.ProxyRequest{In: req, Out: outReq})
+
+			if got := outReq.Header.Values("FG-IPCountry"); len(got) != 1 || got[0] != tt.want {
+				t.Fatalf("unexpected FG-IPCountry: %q", got)
+			}
+		})
+	}
+}
+
+func TestReverseProxyOmitsDisabledUpstreamHeaders(t *testing.T) {
+	headers := &atomic.Pointer[config.UpstreamHeaderSettings]{}
+	headers.Store(&config.UpstreamHeaderSettings{})
+	server := NewServer(&ServerConfig{scheme: "https", bindAddr: "192.0.2.10", bindPort: "11443", upstreamHeaders: headers})
+	proxy := server.createReverseProxyWithHost(&url.URL{Scheme: "https", Host: "example.com"}, "example.com")
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
+	req.Header.Set("FG-Stream", "spoofed")
+	req.Header.Set("FG-IPCountry", "US")
+	ctx := context.WithValue(req.Context(), middleware.ContextKeyClientASNInfo, &middleware.ASNInfo{CountryCode: "NL"})
+	req = req.WithContext(context.WithValue(ctx, middleware.ContextKeyStreamID, "stream-123"))
+
+	outReq := req.Clone(req.Context())
+	proxy.Rewrite(&httputil.ProxyRequest{In: req, Out: outReq})
+
+	for _, name := range []string{"FG-Stream", "FG-IPCountry"} {
+		if got := outReq.Header.Get(name); got != "" {
+			t.Fatalf("expected %s to be stripped and not re-added, got %q", name, got)
+		}
+	}
+
+	resp := &http.Response{Header: http.Header{}, Request: req, ProtoMajor: 1, ProtoMinor: 1}
+	if err := proxy.ModifyResponse(resp); err != nil {
+		t.Fatalf("modify response: %v", err)
+	}
+	if got := resp.Header.Get("FG-Stream"); got != "stream-123" {
+		t.Fatalf("expected FG-Stream response header regardless of upstream header settings, got %q", got)
+	}
+}
+
 func TestReverseProxyPreservesRawQuery(t *testing.T) {
 	server := NewServer(&ServerConfig{
 		scheme:   "https",
