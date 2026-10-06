@@ -9,6 +9,13 @@ release.
 
 ## [Unreleased]
 
+## [0.26.0]
+
+### Added
+
+- Added an `FG-IPCountry` header with the client's country code (or `XX` when unknown) to requests sent to the backend. ([61a3ede5](https://github.com/chieftools/flowguard-proxy/commit/61a3ede5f54f9ed47d847ad4861fdcfd7548fda9))
+- Added `server.upstream.headers.stream_id` and `server.upstream.headers.ip_country` settings to turn off the `FG-Stream` and `FG-IPCountry` headers on requests sent to the backend. Both are enabled by default, and client responses always include `FG-Stream`. ([61a3ede5](https://github.com/chieftools/flowguard-proxy/commit/61a3ede5f54f9ed47d847ad4861fdcfd7548fda9))
+
 ## [0.25.2]
 
 ### Changed
@@ -633,7 +640,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.25.2...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.26.0
 [0.25.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.25.2
 [0.25.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.25.1
 [0.25.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.25.0
