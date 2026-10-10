@@ -9,6 +9,13 @@ release.
 
 ## [Unreleased]
 
+## [0.26.1]
+
+### Fixed
+
+- Fixed client IP resolution behind trusted proxies when a client adds its own `X-Forwarded-For` value. A loopback, link-local or malformed entry to the left of the address added by the trusted proxy no longer makes FlowGuard record the trusted proxy as the client, which let clients evade IP-based rules and per-client counters. ([05e87ce9](https://github.com/chieftools/flowguard-proxy/commit/05e87ce901f3c840d1f061baf85ea55ccae4ded8))
+- Combined repeated `X-Forwarded-For` header lines before resolving the client IP, so a client-supplied first line can no longer override the address added by a trusted proxy that appends a separate header line. Requests with more than one `X-Real-IP` value now fall back to the connecting address. ([05e87ce9](https://github.com/chieftools/flowguard-proxy/commit/05e87ce901f3c840d1f061baf85ea55ccae4ded8))
+
 ## [0.26.0]
 
 ### Added
@@ -640,7 +647,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.26.1...HEAD
+[0.26.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.26.1
 [0.26.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.26.0
 [0.25.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.25.2
 [0.25.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.25.1
