@@ -173,6 +173,114 @@ func TestExtractIPsRejectsMalformedTrustedForwardingChain(t *testing.T) {
 	}
 }
 
+func TestExtractIPsIgnoresClientControlledForwardingEntries(t *testing.T) {
+	manager := newIPLookupTestConfigManager(t, `{
+  "ipnets": ["198.51.100.0/24"]
+}`)
+	ipLookup := &IPLookupMiddleware{configMgr: manager}
+
+	for _, xff := range []string{
+		"127.0.0.1, 203.0.113.9",
+		"::ffff:127.0.0.1, 203.0.113.9",
+		"not-an-ip, 203.0.113.9",
+		"192.0.2.1, 127.0.0.4, 203.0.113.9",
+		"127.0.0.1, 203.0.113.9, 198.51.100.20",
+	} {
+		t.Run(xff, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+			req.RemoteAddr = "198.51.100.10:12345"
+			req.Header.Set("X-Forwarded-For", xff)
+
+			clientIP, proxyIP := ipLookup.extractIPs(req)
+
+			if clientIP != "203.0.113.9" {
+				t.Fatalf("expected rightmost untrusted client IP, got %q", clientIP)
+			}
+			if proxyIP != "198.51.100.10" {
+				t.Fatalf("expected immediate peer as proxy, got %q", proxyIP)
+			}
+		})
+	}
+}
+
+func TestExtractIPsRejectsMalformedEntryBetweenTrustedProxies(t *testing.T) {
+	manager := newIPLookupTestConfigManager(t, `{
+  "ipnets": ["198.51.100.0/24"]
+}`)
+	ipLookup := &IPLookupMiddleware{configMgr: manager}
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+	req.RemoteAddr = "198.51.100.10:12345"
+	req.Header.Set("X-Forwarded-For", "203.0.113.9, 127.0.0.1, 198.51.100.20")
+
+	clientIP, proxyIP := ipLookup.extractIPs(req)
+
+	if clientIP != "198.51.100.10" {
+		t.Fatalf("expected fail-closed fallback to immediate peer, got %q", clientIP)
+	}
+	if proxyIP != "" {
+		t.Fatalf("expected malformed chain not to mark request as proxied, got %q", proxyIP)
+	}
+}
+
+func TestExtractIPsUsesLeftmostEntryWhenChainFullyTrusted(t *testing.T) {
+	manager := newIPLookupTestConfigManager(t, `{
+  "ipnets": ["198.51.100.0/24"]
+}`)
+	ipLookup := &IPLookupMiddleware{configMgr: manager}
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+	req.RemoteAddr = "198.51.100.10:12345"
+	req.Header.Set("X-Forwarded-For", "198.51.100.30, 198.51.100.20")
+
+	clientIP, proxyIP := ipLookup.extractIPs(req)
+
+	if clientIP != "198.51.100.30" {
+		t.Fatalf("expected leftmost trusted IP, got %q", clientIP)
+	}
+	if proxyIP != "198.51.100.10" {
+		t.Fatalf("expected immediate peer as proxy, got %q", proxyIP)
+	}
+}
+
+func TestExtractIPsCombinesRepeatedXForwardedForHeaders(t *testing.T) {
+	manager := newIPLookupTestConfigManager(t, `{
+  "ipnets": ["198.51.100.0/24"]
+}`)
+	ipLookup := &IPLookupMiddleware{configMgr: manager}
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+	req.RemoteAddr = "198.51.100.10:12345"
+	req.Header.Add("X-Forwarded-For", "192.0.2.66")
+	req.Header.Add("X-Forwarded-For", "203.0.113.9")
+
+	clientIP, proxyIP := ipLookup.extractIPs(req)
+
+	if clientIP != "203.0.113.9" {
+		t.Fatalf("expected client IP from last header line, got %q", clientIP)
+	}
+	if proxyIP != "198.51.100.10" {
+		t.Fatalf("expected immediate peer as proxy, got %q", proxyIP)
+	}
+}
+
+func TestExtractIPsRejectsRepeatedXRealIPHeaders(t *testing.T) {
+	manager := newIPLookupTestConfigManager(t, `{
+  "ipnets": ["198.51.100.0/24"]
+}`)
+	ipLookup := &IPLookupMiddleware{configMgr: manager}
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+	req.RemoteAddr = "198.51.100.10:12345"
+	req.Header.Add("X-Real-IP", "192.0.2.66")
+	req.Header.Add("X-Real-IP", "203.0.113.9")
+
+	clientIP, proxyIP := ipLookup.extractIPs(req)
+
+	if clientIP != "198.51.100.10" {
+		t.Fatalf("expected fail-closed fallback to immediate peer, got %q", clientIP)
+	}
+	if proxyIP != "" {
+		t.Fatalf("expected ambiguous X-Real-IP not to mark request as proxied, got %q", proxyIP)
+	}
+}
+
 func TestExtractIPsCanonicalizesForwardedAddressWithPort(t *testing.T) {
 	manager := newIPLookupTestConfigManager(t, `{
   "ipnets": ["198.51.100.10"]

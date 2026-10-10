@@ -169,40 +169,39 @@ func (m *IPLookupMiddleware) extractIPs(r *http.Request) (clientIP string, proxy
 	if trustedProxy {
 		proxyIP = remoteIP
 
-		// Check X-Forwarded-For header
-		xff := r.Header.Get("X-Forwarded-For")
+		// Check X-Forwarded-For header. Repeated header lines form a single list
+		// (RFC 9110 §5.3), and some proxies append a new line instead of
+		// extending the existing one, so the trusted entries may not be in the
+		// first line.
+		xff := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
 		if xff != "" {
-			// Get the rightmost non-trusted IP from the chain
+			// Traverse from right to left to find the first non-trusted IP. Only
+			// entries up to and including that IP were added by trusted proxies;
+			// everything to its left is client-controlled and must not be parsed,
+			// otherwise a client can force the fallback by prepending a bogus value.
 			ips := strings.Split(xff, ",")
-			parsedIPs := make([]string, 0, len(ips))
-			for _, rawIP := range ips {
+			for _, rawIP := range slices.Backward(ips) {
 				ip, ok := parseForwardedIP(rawIP)
 				if !ok {
 					return remoteIP, ""
 				}
-				parsedIPs = append(parsedIPs, ip)
-			}
-
-			// Traverse from right to left to find the first non-trusted IP
-			for _, ip := range slices.Backward(parsedIPs) {
 				if !m.configMgr.IsTrustedProxy(ip) {
-					clientIP = ip
-					return clientIP, proxyIP
+					return ip, proxyIP
 				}
+				clientIP = ip
 			}
 
 			// If all IPs in the chain are trusted, use the leftmost one
-			if len(parsedIPs) > 0 {
-				clientIP = parsedIPs[0]
-				return clientIP, proxyIP
-			}
+			return clientIP, proxyIP
 		}
 
-		// Check X-Real-IP header
-		xri := r.Header.Get("X-Real-IP")
-		if xri != "" {
-			if clientIP, ok := parseForwardedIP(xri); ok {
-				return clientIP, proxyIP
+		// Check X-Real-IP header. It holds a single address, so repeated values
+		// are ambiguous and one of them may be client-supplied.
+		if xris := r.Header.Values("X-Real-IP"); len(xris) > 0 {
+			if len(xris) == 1 {
+				if clientIP, ok := parseForwardedIP(xris[0]); ok {
+					return clientIP, proxyIP
+				}
 			}
 			return remoteIP, ""
 		}
