@@ -136,3 +136,29 @@ func TestEvaluateMatch_DomainRegexSeesIPLiteralHosts(t *testing.T) {
 		})
 	}
 }
+
+func TestEvaluateMatch_RawPathSeesPercentEncoding(t *testing.T) {
+	rm := &RulesMiddleware{}
+
+	tests := []struct {
+		target   string
+		value    string
+		expected bool
+	}{
+		{"/static/%2e%2e/admin", "%2e%2e", true},
+		{"/admin%00.php", "%00", true},
+		{"/static%2f..%2fadmin", "%2f", true},
+		{"//wp-login.php", "//", true},
+		{"/static/../admin", "%2e%2e", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.target, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.target, nil)
+			raw := &config.MatchCondition{Type: "path", Match: "contains", Value: tt.value, RawMatch: true}
+			if got := rm.evaluateMatch(req, raw); got != tt.expected {
+				t.Errorf("raw path %q contains %q: expected %v, got %v", req.URL.EscapedPath(), tt.value, tt.expected, got)
+			}
+		})
+	}
+}

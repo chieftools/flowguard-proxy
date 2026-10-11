@@ -386,7 +386,7 @@
                 },
                 "raw_match": {
                     "type": "boolean",
-                    "description": "Skip URL normalization for path matching to detect malformed URLs (default: false). Only applies to 'path' type matches."
+                    "description": "Match the path as sent, still percent-encoded and without normalization, to detect malformed or encoded URLs such as %2e%2e or %00 (default: false). Only applies to 'path' type matches."
                 },
                 "confidence": {
                     "type": "integer",

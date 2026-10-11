@@ -286,9 +286,10 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 	case "registerable-domain":
 		value = normalization.RegisterableDomain(r.Host)
 	case "path":
-		// Use raw path if raw_match is true, otherwise normalize for consistent matching
+		// Use the path as sent (still percent-encoded, as forwarded upstream)
+		// if raw_match is true, otherwise normalize for consistent matching
 		if match.RawMatch {
-			value = r.URL.Path
+			value = r.URL.EscapedPath()
 		} else {
 			// Normalize the path for consistent matching (Cloudflare-style normalization)
 			value = normalization.NormalizePath(r.URL.Path)
