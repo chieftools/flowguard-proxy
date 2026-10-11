@@ -56,6 +56,8 @@ type Manager struct {
 
 // New creates a new certificate manager
 func New(config Config) *Manager {
+	config.DefaultHostname = normalizeHostname(config.DefaultHostname)
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Printf("[cert_manager] Warning: Failed to create file watcher: %v. Certificate updates will not be automatic.", err)
@@ -133,6 +135,8 @@ func (cm *Manager) nextProtos() []string {
 
 // GetCertificateForHostname retrieves the best matching certificate for a given hostname
 func (cm *Manager) GetCertificateForHostname(hostname string) *tls.Certificate {
+	hostname = normalizeHostname(hostname)
+
 	cm.cacheMutex.RLock()
 	defer cm.cacheMutex.RUnlock()
 
@@ -185,6 +189,8 @@ func (cm *Manager) GetCertificateForHostname(hostname string) *tls.Certificate {
 
 // ShowCertificatesForHostname displays all certificates for a hostname and which will be served
 func (cm *Manager) ShowCertificatesForHostname(hostname string) {
+	hostname = normalizeHostname(hostname)
+
 	cm.cacheMutex.RLock()
 	defer cm.cacheMutex.RUnlock()
 
@@ -871,13 +877,13 @@ func (cm *Manager) getCertificateHostnames(cert *x509.Certificate) []string {
 
 	// Add CN if present and valid
 	if cert.Subject.CommonName != "" && cm.isValidHostname(cert.Subject.CommonName) {
-		hostnameMap[cert.Subject.CommonName] = true
+		hostnameMap[normalizeHostname(cert.Subject.CommonName)] = true
 	}
 
 	// Add all SANs (already validated by x509 parser, but filter just in case)
 	for _, san := range cert.DNSNames {
 		if cm.isValidHostname(san) {
-			hostnameMap[san] = true
+			hostnameMap[normalizeHostname(san)] = true
 		}
 	}
 
@@ -941,6 +947,12 @@ func (cm *Manager) isValidHostname(hostname string) bool {
 	}
 
 	return true
+}
+
+// normalizeHostname lowercases a hostname and strips a trailing dot, since
+// DNS names (and so SNI values and certificate names) are case-insensitive.
+func normalizeHostname(hostname string) string {
+	return strings.ToLower(strings.TrimSuffix(hostname, "."))
 }
 
 func (cm *Manager) matchesWildcard(pattern, hostname string) bool {

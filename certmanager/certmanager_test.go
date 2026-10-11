@@ -508,6 +508,39 @@ func TestGetCertificateForHostnameFallsBackWhenMatchesAreExpired(t *testing.T) {
 	}
 }
 
+func TestGetCertificateForHostnameIgnoresCase(t *testing.T) {
+	now := time.Now()
+	exactCert := createSelfSignedRSACert(t, "App.Example.TEST", now.Add(24*time.Hour))
+	wildcardCert := createWildcardCert(t, "Wild.Example.TEST", now.Add(24*time.Hour), true)
+	defaultCert := createSelfSignedRSACert(t, "fallback.test", now.Add(24*time.Hour))
+
+	manager := New(Config{DefaultHostname: "Fallback.TEST."})
+	defer manager.Stop()
+	manager.hostnameCache = make(map[string][]*certificateWithMetadata)
+	for path, cert := range map[string]*tls.Certificate{"/certs/app.pem": exactCert, "/certs/wild.pem": wildcardCert, "/certs/fallback.pem": defaultCert} {
+		metadata := &certificateWithMetadata{cert: cert, filePath: path, notAfter: cert.Leaf.NotAfter, keyType: getKeyType(cert)}
+		for _, name := range manager.getCertificateHostnames(cert.Leaf) {
+			manager.hostnameCache[name] = append(manager.hostnameCache[name], metadata)
+		}
+	}
+
+	tests := map[string]*tls.Certificate{
+		"app.example.test":      exactCert,
+		"APP.EXAMPLE.TEST":      exactCert,
+		"app.example.test.":     exactCert,
+		"api.wild.example.test": wildcardCert,
+		"API.Wild.Example.Test": wildcardCert,
+		"unknown.example.test":  defaultCert,
+	}
+	for hostname, want := range tests {
+		t.Run(hostname, func(t *testing.T) {
+			if got := manager.GetCertificateForHostname(hostname); got != want {
+				t.Fatalf("GetCertificateForHostname(%q) returned %p, want %p", hostname, got, want)
+			}
+		})
+	}
+}
+
 func TestIsTrustedCertificate(t *testing.T) {
 	tests := []struct {
 		name     string
