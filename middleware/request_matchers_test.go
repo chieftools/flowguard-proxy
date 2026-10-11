@@ -116,7 +116,7 @@ func TestQueryParamMatcher(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:   "absent key does not satisfy negative comparison",
+			name:   "absent key satisfies negative comparison as an empty value",
 			target: "https://example.com/search?tag=alpha",
 			match: config.MatchCondition{
 				Type:  "query-param",
@@ -124,7 +124,7 @@ func TestQueryParamMatcher(t *testing.T) {
 				Match: "not-equals",
 				Value: "blocked",
 			},
-			expected: false,
+			expected: true,
 		},
 		{
 			name:   "missing key fails without key field",
@@ -200,7 +200,7 @@ func TestCookieMatcher(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:   "absent key does not satisfy negative comparison",
+			name:   "absent key satisfies negative comparison as an empty value",
 			cookie: "session=active",
 			match: config.MatchCondition{
 				Type:  "cookie",
@@ -210,7 +210,7 @@ func TestCookieMatcher(t *testing.T) {
 					"blocked",
 				},
 			},
-			expected: false,
+			expected: true,
 		},
 		{
 			name:   "missing key fails without key field",

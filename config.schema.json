@@ -363,7 +363,7 @@
                         "less-than",
                         "less-than-or-equal"
                     ],
-                    "description": "The matching operation to perform"
+                    "description": "The matching operation to perform. When a header, query parameter or cookie has several values, positive operations match if any value matches and negated (not-*) operations match only if no value matches."
                 },
                 "key": {
                     "type": "string",

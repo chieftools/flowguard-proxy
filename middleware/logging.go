@@ -703,7 +703,7 @@ func getRequestURLInfo(r *http.Request) RequestLogEntryRequestURLInfo {
 	return RequestLogEntryRequestURLInfo{
 		Full:               fullURL,
 		Path:               r.URL.Path,
-		Query:              r.URL.Query().Encode(),
+		Query:              normalization.ParseQuery(r.URL.RawQuery).Encode(),
 		Scheme:             scheme,
 		Domain:             domain,
 		NormalizedPath:     normalization.NormalizePath(r.URL.Path),

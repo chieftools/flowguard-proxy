@@ -301,20 +301,13 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 			log.Printf("[middleware:rules] Header match missing 'key' field for header name")
 			return false
 		}
-		value = r.Header.Get(headerName)
-		// For header existence checks
-		if match.Match == "exists" {
-			return value != ""
-		} else if match.Match == "missing" {
-			return value == ""
-		}
-		return rm.matchesStringValue(value, match)
+		return rm.matchesHeaderValues(r, headerName, match)
 	case "query-param":
 		if match.Key == "" {
 			log.Printf("[middleware:rules] Query parameter match missing 'key' field")
 			return false
 		}
-		values, present := r.URL.Query()[match.Key]
+		values, present := normalization.ParseQuery(r.URL.RawQuery)[match.Key]
 		return rm.matchesKeyedValues(match, values, present)
 	case "cookie":
 		if match.Key == "" {
@@ -324,7 +317,7 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 		values := cookieValues(r, match.Key)
 		return rm.matchesKeyedValues(match, values, len(values) > 0)
 	case "user-agent":
-		value = r.Header.Get("User-Agent")
+		return rm.matchesHeaderValues(r, "User-Agent", match)
 	case "fingerprint-ja4":
 		value = GetJA4Fingerprint(r)
 		if value == "" {
@@ -469,7 +462,26 @@ func (rm *RulesMiddleware) matchesKeyedValues(match *config.MatchCondition, valu
 	}
 
 	if !present || len(values) == 0 {
-		return false
+		// A missing key is matched as an empty value, like a missing header,
+		// so "token not-equals secret" cannot be evaded by omitting token.
+		values = []string{""}
+	}
+
+	return rm.matchesStringValues(match, values)
+}
+
+// matchesStringValues matches a repeated value. A negated operator means "no
+// value matches": a repeated key such as ?q=safe&q=<script> must not satisfy
+// not-contains "<" through the safe value alone. Positive operators match when
+// any value matches.
+func (rm *RulesMiddleware) matchesStringValues(match *config.MatchCondition, values []string) bool {
+	if isNegatedOperator(match.Match) {
+		for _, value := range values {
+			if !rm.matchesStringValue(value, match) {
+				return false
+			}
+		}
+		return true
 	}
 
 	for _, value := range values {
@@ -478,6 +490,51 @@ func (rm *RulesMiddleware) matchesKeyedValues(match *config.MatchCondition, valu
 		}
 	}
 	return false
+}
+
+// matchesHeaderValues matches every value of a repeated header, plus the
+// comma-joined form that backends such as nginx pass upstream, so a rule
+// cannot be evaded by sending a harmless copy of the header first. A missing
+// header is matched as an empty value, so negated operators still match it.
+func (rm *RulesMiddleware) matchesHeaderValues(r *http.Request, name string, match *config.MatchCondition) bool {
+	values := r.Header.Values(name)
+	switch match.Match {
+	case "exists":
+		return hasNonEmptyValue(values)
+	case "missing":
+		return !hasNonEmptyValue(values)
+	}
+
+	switch len(values) {
+	case 0:
+		values = []string{""}
+	case 1:
+	default:
+		values = append(values[:len(values):len(values)], strings.Join(values, ", "))
+	}
+	return rm.matchesStringValues(match, values)
+}
+
+func hasNonEmptyValue(values []string) bool {
+	for _, value := range values {
+		if value != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func joinedHeaderValue(r *http.Request, name string) string {
+	return strings.Join(r.Header.Values(name), ", ")
+}
+
+func isNegatedOperator(operator string) bool {
+	switch operator {
+	case "not-equals", "not-in", "not-contains", "not-starts-with", "not-ends-with", "not-regex":
+		return true
+	default:
+		return false
+	}
 }
 
 func isIPTargetMatch(operator string) bool {
@@ -1016,7 +1073,7 @@ func (kg *RateLimitKeyGenerator) extractKeyParts(conditions *config.RuleConditio
 		case "registerable-domain":
 			*keyParts = append(*keyParts, "reg-domain:"+normalization.RegisterableDomain(r.Host))
 		case "agent", "user-agent":
-			agent := r.Header.Get("User-Agent")
+			agent := joinedHeaderValue(r, "User-Agent")
 			if agent != "" {
 				*keyParts = append(*keyParts, "agent:"+agent)
 			}
@@ -1032,14 +1089,14 @@ func (kg *RateLimitKeyGenerator) extractKeyParts(conditions *config.RuleConditio
 		case "header":
 			headerName := match.Key
 			if headerName != "" {
-				headerValue := r.Header.Get(headerName)
-				if headerValue != "" {
-					*keyParts = append(*keyParts, "header:"+headerName+":"+headerValue)
+				value := joinedHeaderValue(r, headerName)
+				if value != "" {
+					*keyParts = append(*keyParts, "header:"+headerName+":"+value)
 				}
 			}
 		case "query-param":
 			if match.Key != "" {
-				for _, value := range r.URL.Query()[match.Key] {
+				for _, value := range normalization.ParseQuery(r.URL.RawQuery)[match.Key] {
 					*keyParts = append(*keyParts, "query-param:"+match.Key+":"+value)
 				}
 			}
