@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"flowguard/config"
 	"flowguard/proxy"
@@ -22,6 +23,7 @@ var (
 	httpsPort            string
 	noRedirect           bool
 	upstreamClientIPMode string
+	shutdownTimeout      time.Duration
 )
 
 var runCmd = &cobra.Command{
@@ -46,6 +48,7 @@ func init() {
 	runCmd.Flags().StringVar(&httpsPort, "https-port", "11443", "Port for HTTPS proxy server")
 	runCmd.Flags().BoolVar(&noRedirect, "no-redirect", false, "Skip iptables port redirection setup")
 	runCmd.Flags().StringVar(&upstreamClientIPMode, "upstream-client-ip-mode", "", "Override upstream client IP mode (headers or transparent)")
+	runCmd.Flags().DurationVar(&shutdownTimeout, "shutdown-timeout", proxy.DefaultShutdownTimeout, "How long to let in-flight requests finish on shutdown before closing remaining connections, including WebSockets")
 }
 
 func runProxy() {
@@ -86,6 +89,7 @@ func runProxy() {
 		NoRedirect:           noRedirect,
 		UpstreamClientIPMode: upstreamClientIPMode,
 		Updater:              u,
+		ShutdownTimeout:      shutdownTimeout,
 	})
 	if err != nil {
 		log.Fatalf("[proxy] Failed to initialize: %v", err)

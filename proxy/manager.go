@@ -24,6 +24,10 @@ import (
 	"flowguard/updater"
 )
 
+// DefaultShutdownTimeout is how long servers drain in-flight requests on
+// shutdown when Config.ShutdownTimeout is not set.
+const DefaultShutdownTimeout = 10 * time.Second
+
 type Config struct {
 	Verbose              bool
 	Version              string
@@ -36,6 +40,9 @@ type Config struct {
 	AdvertiseHTTP3       bool
 	UpstreamClientIPMode string
 	Updater              *updater.Updater
+	// ShutdownTimeout is how long servers drain in-flight requests before
+	// remaining connections, including WebSockets, are closed.
+	ShutdownTimeout time.Duration
 }
 
 type Manager struct {
@@ -462,7 +469,7 @@ func (p *Manager) stopServers(servers []*Server) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), p.shutdownTimeout())
 	defer cancel()
 
 	var wg sync.WaitGroup
@@ -474,6 +481,14 @@ func (p *Manager) stopServers(servers []*Server) {
 		}(server)
 	}
 	wg.Wait()
+}
+
+func (p *Manager) shutdownTimeout() time.Duration {
+	if p.config.ShutdownTimeout > 0 {
+		return p.config.ShutdownTimeout
+	}
+
+	return DefaultShutdownTimeout
 }
 
 // handleUpgradeRequest processes an upgrade request from the WebSocket channel.

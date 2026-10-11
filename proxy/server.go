@@ -28,6 +28,10 @@ import (
 const (
 	statusClientClosedRequest   = 499
 	statusRequestClosedByPolicy = 444
+
+	// activeRequestCloseTimeout bounds how long Shutdown waits for handlers to
+	// return after their connections were closed.
+	activeRequestCloseTimeout = 2 * time.Second
 )
 
 type Server struct {
@@ -45,6 +49,8 @@ type Server struct {
 	upstreamTransport    http.RoundTripper
 	proxyErrorLogLimiter *proxyErrorLogLimiter
 	activeUpstream       atomic.Int64
+	activeRequests       atomic.Int64
+	cancelRequests       context.CancelFunc
 }
 
 type ServerConfig struct {
@@ -94,6 +100,9 @@ func (s *Server) serveHTTP3(server *http3.Server, conn net.PacketConn, errChan c
 }
 
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
+	s.activeRequests.Add(1)
+	defer s.activeRequests.Add(-1)
+
 	finishConnectionRequest := middleware.BeginConnectionRequest(r)
 	defer finishConnectionRequest()
 
@@ -374,8 +383,12 @@ func (s *Server) Start(tlsConfig *tls.Config, errChan chan<- error) error {
 		return fmt.Errorf("[%s:%s] %s server has no enabled protocols", s.config.bindAddr, s.config.bindPort, s.config.scheme)
 	}
 
+	requestCtx, cancelRequests := context.WithCancel(context.Background())
+	s.cancelRequests = cancelRequests
+
 	s.httpServer = &http.Server{
 		Addr:         addr,
+		BaseContext:  func(net.Listener) context.Context { return requestCtx },
 		Handler:      http.HandlerFunc(s.handleRequest),
 		ErrorLog:     newFilteredLogger(s.config.verbose),
 		TLSConfig:    tcpTLSConfig,
@@ -501,6 +514,10 @@ func (s *Server) http3ConnContext(ctx context.Context, conn *quic.Conn) context.
 	return middleware.ContextWithJA4Fingerprint(ctx, ja4)
 }
 
+// Shutdown stops accepting connections and lets in-flight requests finish until
+// ctx is done. Connections still open after that are closed, including
+// hijacked ones such as proxied WebSockets, which http.Server.Shutdown neither
+// waits for nor closes.
 func (s *Server) Shutdown(ctx context.Context) {
 	if s.config.verbose {
 		log.Printf("[proxy] [%s:%s] Request received to shutdown server", s.config.bindAddr, s.config.bindPort)
@@ -509,38 +526,79 @@ func (s *Server) Shutdown(ctx context.Context) {
 	s.CleanupPortRedirect()
 	s.closeUpstreamIdleConnections()
 
-	if s.http3Server != nil {
-		if err := s.http3Server.Shutdown(ctx); err != nil {
-			log.Printf("[proxy] [%s:%s] Error shutting down HTTP/3 server: %v", s.config.bindAddr, s.config.bindPort, err)
-			if closeErr := s.http3Server.Close(); closeErr != nil {
-				log.Printf("[proxy] [%s:%s] Error closing HTTP/3 server: %v", s.config.bindAddr, s.config.bindPort, closeErr)
+	// Drain HTTP/3 and HTTP/1.1+HTTP/2 concurrently so slow QUIC clients can't use
+	// up the drain window before the TCP server starts draining.
+	var wg sync.WaitGroup
+	if http3Server := s.http3Server; http3Server != nil {
+		wg.Go(func() {
+			if err := http3Server.Shutdown(ctx); err != nil {
+				log.Printf("[proxy] [%s:%s] Error shutting down HTTP/3 server: %v", s.config.bindAddr, s.config.bindPort, err)
+				if closeErr := http3Server.Close(); closeErr != nil {
+					log.Printf("[proxy] [%s:%s] Error closing HTTP/3 server: %v", s.config.bindAddr, s.config.bindPort, closeErr)
+				}
 			}
-		}
-		s.http3Server = nil
+		})
 	}
 
-	if s.httpServer != nil {
-		if err := s.httpServer.Shutdown(ctx); err != nil {
-			log.Printf("[proxy] [%s:%s] Error shutting down server: %v", s.config.bindAddr, s.config.bindPort, err)
-			if closeErr := s.CloseListener(); closeErr != nil {
-				log.Printf("[proxy] [%s:%s] Error closing listener: %v", s.config.bindAddr, s.config.bindPort, closeErr)
+	httpShutdownErr := make(chan error, 1)
+	if httpServer := s.httpServer; httpServer != nil {
+		wg.Go(func() {
+			err := httpServer.Shutdown(ctx)
+			if err != nil {
+				log.Printf("[proxy] [%s:%s] Error shutting down server: %v", s.config.bindAddr, s.config.bindPort, err)
+				if closeErr := httpServer.Close(); closeErr != nil {
+					log.Printf("[proxy] [%s:%s] Error closing server: %v", s.config.bindAddr, s.config.bindPort, closeErr)
+				}
 			}
-		} else {
+			httpShutdownErr <- err
+		})
+	}
+	wg.Wait()
+
+	s.closeActiveRequests()
+
+	if s.httpServer != nil {
+		if err := <-httpShutdownErr; err == nil {
 			s.markListenerClosed()
 			if s.config.verbose {
 				log.Printf("[proxy] [%s:%s] Proxy server stopped gracefully", s.config.bindAddr, s.config.bindPort)
 			}
-			if closeErr := s.CloseListener(); closeErr != nil {
-				log.Printf("[proxy] [%s:%s] Error closing listener: %v", s.config.bindAddr, s.config.bindPort, closeErr)
-			}
 		}
-		s.httpServer = nil
-		s.resetListenerState()
-	} else {
-		if err := s.CloseListener(); err != nil {
-			log.Printf("[proxy] [%s:%s] Error closing listener: %v", s.config.bindAddr, s.config.bindPort, err)
-		}
-		s.resetListenerState()
+	}
+
+	if err := s.CloseListener(); err != nil {
+		log.Printf("[proxy] [%s:%s] Error closing listener: %v", s.config.bindAddr, s.config.bindPort, err)
+	}
+
+	s.http3Server = nil
+	s.httpServer = nil
+	s.resetListenerState()
+}
+
+// closeActiveRequests cancels the context of every request still running, which
+// makes ReverseProxy close upgraded connections, and waits briefly for their
+// handlers to return so their final log entries are recorded.
+func (s *Server) closeActiveRequests() {
+	if s.cancelRequests != nil {
+		s.cancelRequests()
+	}
+
+	active := s.activeRequests.Load()
+	if active == 0 {
+		return
+	}
+
+	if s.config.verbose {
+		log.Printf("[proxy] [%s:%s] Closing %d active long-lived requests", s.config.bindAddr, s.config.bindPort, active)
+	}
+
+	deadline := time.Now().Add(activeRequestCloseTimeout)
+	for s.activeRequests.Load() > 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if remaining := s.activeRequests.Load(); remaining > 0 {
+		log.Printf("[proxy] [%s:%s] %d requests still active after closing connections", s.config.bindAddr, s.config.bindPort, remaining)
 	}
 }
 
