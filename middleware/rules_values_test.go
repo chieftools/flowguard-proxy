@@ -162,3 +162,30 @@ func TestEvaluateMatch_RawPathSeesPercentEncoding(t *testing.T) {
 		})
 	}
 }
+
+func TestEvaluateMatch_CookieSeesValuesGoWouldDrop(t *testing.T) {
+	rm := &RulesMiddleware{}
+
+	tests := []struct {
+		name     string
+		cookie   string
+		match    config.MatchCondition
+		expected bool
+	}{
+		{"backslash value", `session=a\b; theme=dark`, config.MatchCondition{Type: "cookie", Key: "session", Match: "contains", Value: `\`}, true},
+		{"non-ASCII value", "session=héllo", config.MatchCondition{Type: "cookie", Key: "session", Match: "exists"}, true},
+		{"encoded payload", "q=%3Cscript%3E", config.MatchCondition{Type: "cookie", Key: "q", Match: "contains", Value: "<script>"}, true},
+		{"encoded payload fails not-contains", "q=%3Cscript%3E", config.MatchCondition{Type: "cookie", Key: "q", Match: "not-contains", Value: "<"}, false},
+		{"quoted value equals", `u="q"`, config.MatchCondition{Type: "cookie", Key: "u", Match: "equals", Value: "q"}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("Cookie", tt.cookie)
+			if got := rm.evaluateMatch(req, &tt.match); got != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, got)
+			}
+		})
+	}
+}

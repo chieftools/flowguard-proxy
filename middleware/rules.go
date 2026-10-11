@@ -446,13 +446,7 @@ func matchesBehaviorNumber(metric float64, threshold float64, operator string) b
 }
 
 func cookieValues(r *http.Request, name string) []string {
-	var values []string
-	for _, cookie := range r.Cookies() {
-		if cookie.Name == name {
-			values = append(values, cookie.Value)
-		}
-	}
-	return values
+	return normalization.CookieValues(r.Header.Values("Cookie"), name)
 }
 
 func (rm *RulesMiddleware) matchesKeyedValues(match *config.MatchCondition, values []string, present bool) bool {
