@@ -98,6 +98,25 @@ func runProxy() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// systemd's ExecReload sends SIGHUP. Without a handler SIGHUP terminates the
+	// process without removing the port redirects, so reload configuration the
+	// same way startup loads it instead.
+	reloadChan := make(chan os.Signal, 1)
+	signal.Notify(reloadChan, syscall.SIGHUP)
+	go func() {
+		for range reloadChan {
+			log.Println("[config] Received SIGHUP, reloading configuration...")
+			if err := configMgr.RefreshFromAPI(false); err != nil {
+				log.Printf("[config] Warning: Failed to refresh configuration from API: %v", err)
+			}
+			if err := configMgr.Load(); err != nil {
+				log.Printf("[config] Failed to reload configuration: %v", err)
+				continue
+			}
+			log.Println("[config] Configuration reloaded successfully")
+		}
+	}()
+
 	if err := proxyManager.Start(); err != nil {
 		// If we fail to start, attempt to shut down any started servers
 		if shutdownErr := proxyManager.Shutdown(); shutdownErr != nil {
