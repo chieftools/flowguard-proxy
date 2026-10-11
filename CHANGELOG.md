@@ -9,6 +9,32 @@ release.
 
 ## [Unreleased]
 
+## [0.27.0]
+
+### Added
+
+- Added a `--shutdown-timeout` option to `flowguard run` that sets how long in-flight requests may finish on shutdown before remaining connections are closed. It defaults to 10 seconds, replacing the previous fixed 30 seconds. ([125dad0b](https://github.com/chieftools/flowguard-proxy/commit/125dad0b30ef058e3338627afa285ae1a47634a4))
+
+### Changed
+
+- Rate limit actions without `partition_by` now give each client its own bucket, as if `partition_by` were `["client.ip"]`. Previously the bucket was built from the request values the rule matched (path, User-Agent, headers, query parameters, cookies) and was shared by all clients, so one client could exhaust a limit such as a login limit for everyone, while varying a value such as `//login` or the User-Agent gave a fresh bucket. Set `partition_by` to `[]` to keep one bucket per rule. ([c7a0862c](https://github.com/chieftools/flowguard-proxy/commit/c7a0862c2db61808e480d309ff4034b504a726e3))
+- Grouped IPv6 clients by /64 in `client.ip` rate limit buckets, challenge attempt limits and behavior counters (including the unique clients counted per JA4 fingerprint), so rotating addresses within one allocation no longer gives a client fresh buckets or counts as many clients. ([d3f48f5c](https://github.com/chieftools/flowguard-proxy/commit/d3f48f5cf87ed894266b7783aefa2e395babf6ff), [ef201b04](https://github.com/chieftools/flowguard-proxy/commit/ef201b049fdcfea139481f1986621a2436de6c11))
+- Logged `request.url.domain` as the normalized host that domain rules match, so log searches find the same requests as a rule with that value. `request.url.full` keeps the host as the client sent it. ([c7db6cd8](https://github.com/chieftools/flowguard-proxy/commit/c7db6cd84e01a5cbbd4d49615f9157d57df2a6f3))
+
+### Fixed
+
+- Normalized the request host before `domain` and `registerable-domain` rule matching, rate limit keys, challenge binding and behavior tracking. Hosts are lowercased, any port, IPv6 brackets and trailing dot are removed, and IP addresses are written in canonical form, so `STAGING.example.com`, `staging.example.com.` and `staging.example.com:443` no longer evade a rule for `staging.example.com` when `case_insensitive` is off. Configured domain values are normalized the same way, and domain regex matches are now case-insensitive. Domain rules that match IPv6 hosts with brackets, such as a regex for raw-IP requests, should accept the bare form. ([fd295198](https://github.com/chieftools/flowguard-proxy/commit/fd2951985e0e3de3b793e58ecf7c896390f8e1bd), [1df7bb85](https://github.com/chieftools/flowguard-proxy/commit/1df7bb8541c3240e262b75f5d55051bd1347ae47))
+- Fixed `query-param` rules missing parameters that contain a `;` or an invalid percent escape. These pairs were dropped when the query was parsed, while the backend still received them, so `?q=1 union select;` or `?q=%zz' union select` evaded a rule on `q`. Rules and the logged query now parse the query like common backends do: pairs are split on `&` only and invalid escapes are kept as text. ([4952ec31](https://github.com/chieftools/flowguard-proxy/commit/4952ec31b6007f7ed56611270c56e36bb0d6eebf))
+- Fixed `header` and `user-agent` rules only checking the first value of a repeated header. Every value is now checked, together with the comma-joined form backends such as nginx pass upstream. `user-agent` rules also support `exists` and `missing`. ([4952ec31](https://github.com/chieftools/flowguard-proxy/commit/4952ec31b6007f7ed56611270c56e36bb0d6eebf))
+- Fixed negated operators (`not-equals`, `not-contains`, `not-in`, `not-regex` and the other `not-*` operators) matching a repeated header, query parameter or cookie when any one value satisfied them. They now match only when no value matches, so `?q=safe&q=<script>` no longer satisfies `not-contains "<"`. ([4952ec31](https://github.com/chieftools/flowguard-proxy/commit/4952ec31b6007f7ed56611270c56e36bb0d6eebf))
+- Fixed `query-param` and `cookie` rules never matching when the key is absent. A missing key is now matched as an empty value, as a missing header already was, so a rule such as `token not-equals secret` can no longer be evaded by leaving `token` out. `exists` and `missing` are unchanged. ([4952ec31](https://github.com/chieftools/flowguard-proxy/commit/4952ec31b6007f7ed56611270c56e36bb0d6eebf))
+- Fixed `raw_match` path rules matching the already-decoded path, so encoded sequences such as `%2e%2e`, `%2f` or `%00` could never match. Raw path rules now see the path as sent and forwarded upstream. ([00432901](https://github.com/chieftools/flowguard-proxy/commit/004329018345e646e6474d63e29ff9c962cdef24))
+- Fixed `cookie` rules missing cookies whose values contain bytes such as `\`, a stray `"` or non-ASCII text, which were dropped when cookies were parsed while backends such as PHP still received them. Cookie values are now also matched percent-decoded, as PHP and common Node parsers read them, so `%3Cscript%3E` matches a rule for `<script>`. ([d0efcb10](https://github.com/chieftools/flowguard-proxy/commit/d0efcb10c95e4a88a6fbab524679d508f03413ec))
+- Fixed `header` rules on `Host` never matching. They now match the `Host` header as the client sent it; use `domain` to match the normalized host. ([5d823483](https://github.com/chieftools/flowguard-proxy/commit/5d823483989e0b06be47e1a20ebef571ab330c77))
+- Fixed TLS certificate selection being case-sensitive, so a mixed-case SNI name or certificate name could fall back to the default certificate. Certificate names, SNI names and `default_hostname` are now compared case-insensitively. ([fdbe3d86](https://github.com/chieftools/flowguard-proxy/commit/fdbe3d8628e8d6453f2a60b91191537a886739d1))
+- Fixed `SIGHUP`, which systemd sends for `systemctl reload`, terminating the proxy without removing its port redirects. FlowGuard now reloads its configuration on `SIGHUP`, refreshing it from the API first when one is configured. ([b19e8678](https://github.com/chieftools/flowguard-proxy/commit/b19e867813fc1b767b0518691c7ba9ea9dbb4c90))
+- Fixed shutdown leaving proxied WebSockets and other upgraded connections open, which `http.Server.Shutdown` neither waits for nor closes. After the drain timeout FlowGuard now cancels remaining requests and closes their connections, and it drains HTTP/3 alongside HTTP/1.1 and HTTP/2 so slow QUIC clients no longer use up the drain window. ([125dad0b](https://github.com/chieftools/flowguard-proxy/commit/125dad0b30ef058e3338627afa285ae1a47634a4))
+
 ## [0.26.1]
 
 ### Fixed
@@ -647,7 +673,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.26.1...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.27.0
 [0.26.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.26.1
 [0.26.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.26.0
 [0.25.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.25.2

@@ -42,7 +42,10 @@ and request filtering stay on the FlowGuard host.
 
 ### Operations
 
-- Reloads configuration and certificates after file changes.
+- Reloads configuration and certificates after file changes, and reloads
+  configuration on `SIGHUP` (`systemctl reload flowguard`).
+- Lets in-flight requests finish on shutdown for `--shutdown-timeout`
+  (default 10 seconds), then closes remaining connections, including WebSockets.
 - Writes structured request logs to files, Loki, or OpenObserve.
 - Can synchronize bans from active local Fail2Ban jails.
 - Monitors FlowGuard-owned firewall state and repairs missing rules by default.
@@ -601,7 +604,7 @@ value. Use `header_auth.header` only for a custom header name.
 | `log` | Records the match and continues to later rules. |
 | `allow` | Allows the request and stops rule evaluation. |
 | `block` | Returns the configured status and message. |
-| `rate_limit` | Applies the configured request limit and time window. |
+| `rate_limit` | Applies the configured request limit and time window per bucket. `partition_by` chooses the bucket dimensions (`client.ip`, `connection.id`, `request.fingerprint.ja4`, `request.url.domain`, `request.url.path`); omitted, each client gets its own bucket, and `[]` shares one bucket per rule. IPv6 clients are grouped by /64. |
 | `challenge` | Requires a first-party browser challenge before continuing. |
 
 ### Rule conditions
@@ -623,6 +626,22 @@ String matchers support equality, substring, prefix, suffix, regular-expression,
 and list operations, including their negative forms. IP matchers accept addresses
 or CIDR ranges with `equals`, `not-equals`, `in`, or `not-in`. Header, query,
 cookie, proxy-IP, and proxy-ASN matchers also support `exists` and `missing`.
+
+Request values are read the way common backends read them, so a request cannot
+slip past a rule by spelling a value differently:
+
+- `domain` and `registerable-domain` match the normalized host: lowercased, with
+  any port and trailing dot removed, and IP addresses in canonical form without
+  brackets (`2001:db8::1`). Configured domain values are normalized the same way.
+  A `header` match on `Host` sees the header as sent.
+- `path` matches the normalized path. Set `raw_match` to match the path as sent,
+  still percent-encoded, for example to catch `%2e%2e` or `//`.
+- Query parameters are split on `&` only, and invalid percent escapes are kept as
+  text. Cookie values are matched as sent and percent-decoded.
+- When a header, query parameter, or cookie has several values, positive
+  operators match if any value matches and negated (`not-*`) operators match only
+  if no value matches. A missing header, query parameter, or cookie is matched as
+  an empty value.
 
 ### Bot challenge interstitials
 
