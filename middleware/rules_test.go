@@ -312,6 +312,31 @@ func TestRateLimitKeyGenerator_DefaultsToClientIP(t *testing.T) {
 	}
 }
 
+func TestRateLimitKeyGenerator_GroupsIPv6ClientsBySlash64(t *testing.T) {
+	kg := NewRateLimitKeyGenerator()
+	rule := &config.Rule{ID: "rule"}
+	partition := []string{"client.ip"}
+	action := &config.RuleAction{PartitionBy: &partition}
+	key := func(clientIP string) string {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req = req.WithContext(context.WithValue(req.Context(), ContextKeyClientIP, clientIP))
+		return kg.GenerateKeyForAction(rule.ID, rule, action, req)
+	}
+
+	if key("2001:db8:1:2::1") != key("2001:db8:1:2:ffff:ffff:ffff:ffff") {
+		t.Error("expected addresses in one /64 to share a bucket")
+	}
+	if key("2001:db8:1:2::1") == key("2001:db8:1:3::1") {
+		t.Error("expected different /64s to get different buckets")
+	}
+	if key("192.0.2.10") == key("192.0.2.11") {
+		t.Error("expected IPv4 clients to keep per-address buckets")
+	}
+	if key("::ffff:192.0.2.10") != key("192.0.2.10") {
+		t.Error("expected IPv4-mapped addresses to share the IPv4 bucket")
+	}
+}
+
 func TestRateLimitKeyGenerator_UsesExplicitPartitions(t *testing.T) {
 	kg := NewRateLimitKeyGenerator()
 	rule := &config.Rule{

@@ -475,7 +475,7 @@
                             "request.url.path"
                         ]
                     },
-                    "description": "Dimensions that receive independent rate-limit buckets. An empty list creates one bucket per rule; omission partitions by client.ip."
+                    "description": "Dimensions that receive independent rate-limit buckets. An empty list creates one bucket per rule; omission partitions by client.ip. IPv6 clients are grouped by /64 for client.ip."
                 },
                 "challenge": {
                     "$ref": "#/definitions/action_challenge_config"

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"sort"
 	"strings"
 	"sync"
@@ -1021,7 +1022,7 @@ func (kg *RateLimitKeyGenerator) GenerateKeyForAction(ruleID string, rule *confi
 		value := ""
 		switch dimension {
 		case "client.ip":
-			value = GetClientIP(r)
+			value = rateLimitClientKey(GetClientIP(r))
 		case "connection.id":
 			value = GetConnectionID(r)
 		case "request.fingerprint.ja4":
@@ -1040,6 +1041,21 @@ func (kg *RateLimitKeyGenerator) GenerateKeyForAction(ruleID string, rule *confi
 	}
 
 	return hashRateLimitKeyParts(keyParts)
+}
+
+// rateLimitClientKey groups IPv6 clients by /64, the allocation a single
+// subscriber or server usually controls, so rotating addresses within it
+// does not create fresh buckets. IPv4 addresses are used as is.
+func rateLimitClientKey(clientIP string) string {
+	addr, err := netip.ParseAddr(clientIP)
+	if err != nil {
+		return clientIP
+	}
+	addr = addr.Unmap()
+	if addr.Is4() {
+		return addr.String()
+	}
+	return netip.PrefixFrom(addr, 64).Masked().String()
 }
 
 func hashRateLimitKeyParts(keyParts []string) string {
