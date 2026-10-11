@@ -122,6 +122,7 @@ func TestNormalizeHostMatchValuesNormalizesNestedDomainMatches(t *testing.T) {
 			{Type: "domain", Match: "in", Values: []string{"API.example.com", "www.Example.com."}},
 			{Type: "domain", Match: "starts-with", Value: "Staging."},
 			{Type: "path", Match: "equals", Value: "/Admin"},
+			{Type: "domain", Match: "equals", Value: "2001:DB8::1"},
 		},
 		Groups: []RuleConditions{{
 			Matches: []MatchCondition{{Type: "registerable-domain", Match: "not-equals", Value: "EXAMPLE.CO.UK"}},
@@ -130,7 +131,7 @@ func TestNormalizeHostMatchValuesNormalizesNestedDomainMatches(t *testing.T) {
 
 	normalizeHostMatchValues(conditions)
 
-	expected := []string{"staging.example.com", "", "staging.", "/Admin"}
+	expected := []string{"staging.example.com", "", "staging.", "/Admin", "2001:db8::1"}
 	for i, want := range expected {
 		if got := conditions.Matches[i].Value; got != want {
 			t.Errorf("match %d value = %q, want %q", i, got, want)

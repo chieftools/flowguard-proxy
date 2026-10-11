@@ -2,6 +2,7 @@ package normalization
 
 import (
 	"net"
+	"net/netip"
 	"strings"
 
 	"golang.org/x/net/publicsuffix"
@@ -10,7 +11,9 @@ import (
 // Host normalizes a request host for matching. Hostnames are case-insensitive
 // (RFC 3986 section 3.2.2), so the result is lowercased. Any port, IPv6
 // brackets and a trailing root dot are stripped, so "Example.COM.:443" and
-// "example.com" compare equal.
+// "example.com" compare equal. IP literals are returned in canonical form
+// (RFC 5952 for IPv6, IPv4-mapped addresses unmapped), so differently
+// spelled forms of one address compare equal too.
 func Host(host string) string {
 	// Strip port if present (also handles [IPv6]:port)
 	if h, _, err := net.SplitHostPort(host); err == nil {
@@ -20,6 +23,10 @@ func Host(host string) string {
 	// Strip IPv6 brackets (e.g. [::1] without port)
 	if len(host) > 2 && host[0] == '[' && host[len(host)-1] == ']' {
 		host = host[1 : len(host)-1]
+	}
+
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.Unmap().String()
 	}
 
 	return strings.ToLower(strings.TrimSuffix(host, "."))
