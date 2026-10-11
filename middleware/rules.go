@@ -281,7 +281,7 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 	// Extract the value based on type
 	switch match.Type {
 	case "domain":
-		value = r.Host
+		value = normalization.Host(r.Host)
 	case "registerable-domain":
 		value = normalization.RegisterableDomain(r.Host)
 	case "path":
@@ -979,7 +979,7 @@ func (kg *RateLimitKeyGenerator) GenerateKeyForAction(ruleID string, rule *confi
 		case "request.fingerprint.ja4":
 			value = GetJA4Fingerprint(r)
 		case "request.url.domain":
-			value = behaviorDomain(r.Host)
+			value = normalization.Host(r.Host)
 		case "request.url.path":
 			value = normalization.NormalizePath(r.URL.Path)
 		default:
@@ -1012,7 +1012,7 @@ func (kg *RateLimitKeyGenerator) extractKeyParts(conditions *config.RuleConditio
 	for _, match := range conditions.Matches {
 		switch match.Type {
 		case "domain", "host":
-			*keyParts = append(*keyParts, "domain:"+r.Host)
+			*keyParts = append(*keyParts, "domain:"+normalization.Host(r.Host))
 		case "registerable-domain":
 			*keyParts = append(*keyParts, "reg-domain:"+normalization.RegisterableDomain(r.Host))
 		case "agent", "user-agent":

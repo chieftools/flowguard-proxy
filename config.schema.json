@@ -382,7 +382,7 @@
                 },
                 "case_insensitive": {
                     "type": "boolean",
-                    "description": "Perform case-insensitive matching (default: false)"
+                    "description": "Perform case-insensitive matching (default: false). Domain and registerable-domain matches are always case-insensitive."
                 },
                 "raw_match": {
                     "type": "boolean",

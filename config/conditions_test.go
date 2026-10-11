@@ -114,3 +114,48 @@ func TestCompileConditionRegexCompilesNestedConditions(t *testing.T) {
 		t.Fatal("expected nested case-insensitive not-regex pattern to compile as regex")
 	}
 }
+
+func TestNormalizeHostMatchValuesNormalizesNestedDomainMatches(t *testing.T) {
+	conditions := &RuleConditions{
+		Matches: []MatchCondition{
+			{Type: "domain", Match: "equals", Value: "Staging.Example.com.:443"},
+			{Type: "domain", Match: "in", Values: []string{"API.example.com", "www.Example.com."}},
+			{Type: "domain", Match: "starts-with", Value: "Staging."},
+			{Type: "path", Match: "equals", Value: "/Admin"},
+		},
+		Groups: []RuleConditions{{
+			Matches: []MatchCondition{{Type: "registerable-domain", Match: "not-equals", Value: "EXAMPLE.CO.UK"}},
+		}},
+	}
+
+	normalizeHostMatchValues(conditions)
+
+	expected := []string{"staging.example.com", "", "staging.", "/Admin"}
+	for i, want := range expected {
+		if got := conditions.Matches[i].Value; got != want {
+			t.Errorf("match %d value = %q, want %q", i, got, want)
+		}
+	}
+	if got := strings.Join(conditions.Matches[1].Values, ","); got != "api.example.com,www.example.com" {
+		t.Errorf("in values = %q", got)
+	}
+	if got := conditions.Groups[0].Matches[0].Value; got != "example.co.uk" {
+		t.Errorf("nested registerable-domain value = %q", got)
+	}
+}
+
+func TestCompileConditionRegexMakesDomainRegexCaseInsensitive(t *testing.T) {
+	conditions := &RuleConditions{Matches: []MatchCondition{
+		{Type: "domain", Match: "regex", Value: `^Staging\.`},
+		{Type: "path", Match: "regex", Value: `^/Admin`},
+	}}
+
+	(&Manager{}).compileConditionRegex(conditions)
+
+	if !conditions.Matches[0].GetCompiledRegex().MatchString("staging.example.com") {
+		t.Error("expected domain regex to match case-insensitively")
+	}
+	if conditions.Matches[1].GetCompiledRegex().MatchString("/admin") {
+		t.Error("expected path regex to stay case-sensitive")
+	}
+}

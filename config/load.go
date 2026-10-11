@@ -44,6 +44,7 @@ func (m *Manager) Load() error {
 				if err := validateConditionOperators(rule.ID, rule.Conditions, "conditions"); err != nil {
 					return err
 				}
+				normalizeHostMatchValues(rule.Conditions)
 				m.compileConditionRegex(rule.Conditions)
 			}
 		}

@@ -5,6 +5,8 @@ import (
 	"log"
 	"regexp"
 	"strings"
+
+	"flowguard/normalization"
 )
 
 // compileConditionRegex recursively compiles regex patterns in conditions
@@ -13,7 +15,7 @@ func (m *Manager) compileConditionRegex(cond *RuleConditions) {
 	for i := range cond.Matches {
 		if cond.Matches[i].Match == "regex" || cond.Matches[i].Match == "not-regex" {
 			pattern := cond.Matches[i].Value
-			if cond.Matches[i].CaseInsensitive {
+			if cond.Matches[i].CaseInsensitive || isHostMatchType(cond.Matches[i].Type) {
 				pattern = "(?i)" + pattern
 			}
 			re, err := compileMatchRegex(pattern)
@@ -29,6 +31,38 @@ func (m *Manager) compileConditionRegex(cond *RuleConditions) {
 	for i := range cond.Groups {
 		m.compileConditionRegex(&cond.Groups[i])
 	}
+}
+
+// normalizeHostMatchValues recursively normalizes the values of domain and
+// registerable-domain matches. Request hosts are normalized before matching
+// (see normalization.Host), so configured values must be too: exact matches
+// get the full host normalization and partial matches are lowercased.
+func normalizeHostMatchValues(cond *RuleConditions) {
+	for i := range cond.Matches {
+		match := &cond.Matches[i]
+		if !isHostMatchType(match.Type) || match.Match == "regex" || match.Match == "not-regex" {
+			continue
+		}
+
+		normalize := strings.ToLower
+		switch match.Match {
+		case "equals", "not-equals", "in", "not-in":
+			normalize = normalization.Host
+		}
+
+		match.Value = normalize(match.Value)
+		for j := range match.Values {
+			match.Values[j] = normalize(match.Values[j])
+		}
+	}
+
+	for i := range cond.Groups {
+		normalizeHostMatchValues(&cond.Groups[i])
+	}
+}
+
+func isHostMatchType(matchType string) bool {
+	return matchType == "domain" || matchType == "registerable-domain"
 }
 
 func validateConditionOperators(ruleID string, cond *RuleConditions, path string) error {

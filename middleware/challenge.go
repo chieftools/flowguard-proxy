@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"flowguard/config"
+	"flowguard/normalization"
 
 	"golang.org/x/crypto/pbkdf2"
 )
@@ -226,7 +227,7 @@ func (cm *ChallengeManager) ClearanceStatus(r *http.Request, rule *config.Rule, 
 	}
 
 	scope := effectiveClearanceScope(action)
-	host := normalizedHost(r.Host)
+	host := normalization.Host(r.Host)
 	if payload.Scope != scope {
 		return false, "invalid_token", payload
 	}
@@ -478,7 +479,7 @@ func (cm *ChallengeManager) newChallengeToken(r *http.Request, rule *config.Rule
 	payload := challengeTokenPayload{
 		Type:                "challenge",
 		ID:                  randomTokenID(),
-		Host:                normalizedHost(r.Host),
+		Host:                normalization.Host(r.Host),
 		RuleID:              rule.ID,
 		RuleName:            rule.Name,
 		ActionID:            action.ID,
@@ -539,7 +540,7 @@ func (cm *ChallengeManager) verifyChallengeTokenForRequest(r *http.Request, toke
 	if payload.ExpiresAt <= time.Now().Unix() {
 		return payload, settings, errors.New("expired challenge")
 	}
-	if payload.Host != normalizedHost(r.Host) {
+	if payload.Host != normalization.Host(r.Host) {
 		return payload, settings, errors.New("host mismatch")
 	}
 	if settings.BindIP && payload.IPHash != cm.bindingHash(settings.Secret, "ip", requestClientIP(r)) {
@@ -658,7 +659,7 @@ func (cm *ChallengeManager) allowAttempt(r *http.Request, settings challengeSett
 		return true
 	}
 
-	key := "challenge:" + normalizedHost(r.Host) + ":" + requestClientIP(r)
+	key := "challenge:" + normalization.Host(r.Host) + ":" + requestClientIP(r)
 	allowed, _, _ := cm.attemptLimiter.IsAllowed(key, settings.MaxAttemptsPerWindow, int(settings.AttemptWindow.Seconds()))
 	return allowed
 }
@@ -912,13 +913,6 @@ func requestClientIP(r *http.Request) string {
 		return host
 	}
 	return clientIP
-}
-
-func normalizedHost(host string) string {
-	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
-		host = parsedHost
-	}
-	return strings.ToLower(strings.TrimSuffix(host, "."))
 }
 
 func randomTokenID() string {

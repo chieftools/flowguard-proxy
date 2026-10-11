@@ -2,10 +2,8 @@ package middleware
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -115,7 +113,7 @@ func (t *BehaviorTracker) Handle(w http.ResponseWriter, r *http.Request, next ht
 	now := time.Now().Unix()
 	clientIP := GetClientIP(r)
 	ja4 := GetJA4Fingerprint(r)
-	domain := behaviorDomain(r.Host)
+	domain := normalization.Host(r.Host)
 	path := normalization.NormalizePath(r.URL.Path)
 	clientPathKey := ""
 	if clientIP != "" {
@@ -361,12 +359,4 @@ func (t *BehaviorTracker) cleanup(now int64) {
 func behaviorNumber(value string) (float64, bool) {
 	number, err := strconv.ParseFloat(value, 64)
 	return number, err == nil
-}
-
-func behaviorDomain(host string) string {
-	if hostname, _, err := net.SplitHostPort(host); err == nil {
-		host = hostname
-	}
-
-	return strings.ToLower(host)
 }

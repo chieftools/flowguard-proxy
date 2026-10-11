@@ -727,6 +727,54 @@ func TestStringMatcher(t *testing.T) {
 	}
 }
 
+func TestEvaluateMatch_DomainIgnoresHostCasePortAndTrailingDot(t *testing.T) {
+	rm := &RulesMiddleware{}
+	match := &config.MatchCondition{Type: "domain", Match: "equals", Value: "staging.example.com"}
+
+	for _, host := range []string{
+		"staging.example.com",
+		"STAGING.EXAMPLE.COM",
+		"Staging.Example.com",
+		"staging.example.com.",
+		"staging.example.com:443",
+		"STAGING.example.com.:443",
+	} {
+		t.Run(host, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Host = host
+			if !rm.evaluateMatch(req, match) {
+				t.Errorf("expected domain match for host %q", host)
+			}
+		})
+	}
+}
+
+func TestRateLimitKeyGenerator_NormalizesDomain(t *testing.T) {
+	kg := NewRateLimitKeyGenerator()
+	rule := &config.Rule{
+		ID: "domain_rule",
+		Conditions: &config.RuleConditions{Matches: []config.MatchCondition{{
+			Type:  "domain",
+			Match: "equals",
+			Value: "example.com",
+		}}},
+	}
+	domainPartition := []string{"request.url.domain"}
+	domainAction := &config.RuleAction{PartitionBy: &domainPartition}
+
+	lower := httptest.NewRequest(http.MethodGet, "/", nil)
+	lower.Host = "example.com"
+	upper := httptest.NewRequest(http.MethodGet, "/", nil)
+	upper.Host = "EXAMPLE.COM.:443"
+
+	if kg.GenerateKey(rule.ID, rule, lower) != kg.GenerateKey(rule.ID, rule, upper) {
+		t.Error("expected host variants to share a rate limit bucket")
+	}
+	if kg.GenerateKeyForAction(rule.ID, rule, domainAction, lower) != kg.GenerateKeyForAction(rule.ID, rule, domainAction, upper) {
+		t.Error("expected host variants to share a domain-partitioned bucket")
+	}
+}
+
 func TestRegexMatcher(t *testing.T) {
 	rm := &RulesMiddleware{}
 
