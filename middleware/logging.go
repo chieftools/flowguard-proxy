@@ -690,14 +690,16 @@ func getRequestURLInfo(r *http.Request) RequestLogEntryRequestURLInfo {
 		}
 	}
 
-	domain := r.Host
-	if domain == "" {
-		domain = r.URL.Host
+	host := r.Host
+	if host == "" {
+		host = r.URL.Host
 	}
 
+	// The full URL keeps the host as sent; domain is normalized the same way
+	// domain rules see it, so log searches match what rules match.
 	fullURL := r.URL.String()
-	if !r.URL.IsAbs() && domain != "" {
-		fullURL = fmt.Sprintf("%s://%s%s", scheme, domain, r.URL.RequestURI())
+	if !r.URL.IsAbs() && host != "" {
+		fullURL = fmt.Sprintf("%s://%s%s", scheme, host, r.URL.RequestURI())
 	}
 
 	return RequestLogEntryRequestURLInfo{
@@ -705,9 +707,9 @@ func getRequestURLInfo(r *http.Request) RequestLogEntryRequestURLInfo {
 		Path:               r.URL.Path,
 		Query:              normalization.ParseQuery(r.URL.RawQuery).Encode(),
 		Scheme:             scheme,
-		Domain:             domain,
+		Domain:             normalization.Host(host),
 		NormalizedPath:     normalization.NormalizePath(r.URL.Path),
-		RegisterableDomain: normalization.RegisterableDomain(domain),
+		RegisterableDomain: normalization.RegisterableDomain(host),
 	}
 }
 
