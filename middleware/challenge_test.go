@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -475,6 +476,30 @@ func TestChallengeSettingsPreservesExplicitZeroValues(t *testing.T) {
 		if !manager.allowAttempt(req, settings) {
 			t.Fatal("expected explicit zero attempt limit to disable attempt limiting")
 		}
+	}
+}
+
+func TestChallengeAttemptLimitGroupsIPv6ClientsBySlash64(t *testing.T) {
+	provider := newChallengeProvider(nil, nil)
+	provider.cfg.Challenges.MaxAttemptsPerWindow = testIntPtr(2)
+	manager := NewChallengeManager(provider)
+	defer manager.Stop()
+	settings := manager.settings(nil)
+
+	attempt := func(clientIP string) bool {
+		req := httptest.NewRequest(http.MethodPost, "https://example.com/fg-cgi/challenge/verify", nil)
+		req = req.WithContext(context.WithValue(req.Context(), ContextKeyClientIP, clientIP))
+		return manager.allowAttempt(req, settings)
+	}
+
+	if !attempt("2001:db8:1:2::1") || !attempt("2001:db8:1:2::2") {
+		t.Fatal("expected the first two attempts to be allowed")
+	}
+	if attempt("2001:db8:1:2::3") {
+		t.Fatal("expected a third address in the same /64 to share the attempt limit")
+	}
+	if !attempt("2001:db8:1:3::1") {
+		t.Fatal("expected a different /64 to get its own attempt limit")
 	}
 }
 

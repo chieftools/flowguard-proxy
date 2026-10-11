@@ -659,7 +659,7 @@ func (cm *ChallengeManager) allowAttempt(r *http.Request, settings challengeSett
 		return true
 	}
 
-	key := "challenge:" + normalization.Host(r.Host) + ":" + requestClientIP(r)
+	key := "challenge:" + normalization.Host(r.Host) + ":" + clientBucketKey(requestClientIP(r))
 	allowed, _, _ := cm.attemptLimiter.IsAllowed(key, settings.MaxAttemptsPerWindow, int(settings.AttemptWindow.Seconds()))
 	return allowed
 }

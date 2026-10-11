@@ -111,7 +111,7 @@ func NewBehaviorTracker() *BehaviorTracker {
 
 func (t *BehaviorTracker) Handle(w http.ResponseWriter, r *http.Request, next http.Handler) {
 	now := time.Now().Unix()
-	clientIP := GetClientIP(r)
+	clientIP := clientBucketKey(GetClientIP(r))
 	ja4 := GetJA4Fingerprint(r)
 	domain := normalization.Host(r.Host)
 	path := normalization.NormalizePath(r.URL.Path)

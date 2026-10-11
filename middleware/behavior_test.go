@@ -96,3 +96,24 @@ func TestBehaviorMatcherComparesRollingMetrics(t *testing.T) {
 		t.Fatal("expected behavioral threshold not to match")
 	}
 }
+
+func TestBehaviorTrackerGroupsIPv6ClientsBySlash64(t *testing.T) {
+	tracker := NewBehaviorTracker()
+	var last *BehaviorSnapshot
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		last = GetBehaviorSnapshot(r)
+	})
+
+	for _, ip := range []string{"2001:db8:1:2::1", "2001:db8:1:2::2", "2001:db8:1:2:ffff::3"} {
+		req := httptest.NewRequest(http.MethodGet, "https://edge.example.test/landing", nil)
+		req = WithJA4Fingerprint(req.WithContext(context.WithValue(req.Context(), ContextKeyClientIP, ip)), "t13d-synthetic")
+		tracker.Handle(httptest.NewRecorder(), req, next)
+	}
+
+	if last.Client.Requests10S != 3 {
+		t.Fatalf("expected addresses in one /64 to share client counters, got %+v", last.Client)
+	}
+	if last.Fingerprint.UniqueIPs60S != 1 {
+		t.Fatalf("expected one /64 to count as one unique client, got %+v", last.Fingerprint)
+	}
+}
