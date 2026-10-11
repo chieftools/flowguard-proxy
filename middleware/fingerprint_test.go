@@ -104,7 +104,9 @@ func TestFingerprintJA4RateLimitKeyUsesFingerprint(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
 	req2 = WithJA4Fingerprint(req2, "ja4-two")
 
-	if kg.GenerateKey(rule.ID, rule, req1) == kg.GenerateKey(rule.ID, rule, req2) {
+	partition := []string{"request.fingerprint.ja4"}
+	action := &config.RuleAction{PartitionBy: &partition}
+	if kg.GenerateKeyForAction(rule.ID, rule, action, req1) == kg.GenerateKeyForAction(rule.ID, rule, action, req2) {
 		t.Fatal("expected different rate limit keys for different JA4 fingerprints")
 	}
 }

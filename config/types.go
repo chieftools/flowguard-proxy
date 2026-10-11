@@ -170,7 +170,7 @@ type RuleAction struct {
 	Message           string                     `json:"message,omitempty"`             // Response message (for block actions)
 	WindowSeconds     int                        `json:"window_seconds,omitempty"`      // Time window in seconds (for rate_limit actions)
 	RequestsPerWindow int                        `json:"requests_per_window,omitempty"` // Max requests in time window (for rate_limit actions)
-	PartitionBy       *[]string                  `json:"partition_by,omitempty"`        // Explicit bucket dimensions; nil preserves legacy rule-derived behavior
+	PartitionBy       *[]string                  `json:"partition_by,omitempty"`        // Bucket dimensions; nil partitions by client.ip, empty is one bucket per rule
 	Challenge         *RuleActionChallengeConfig `json:"challenge,omitempty"`
 }
 

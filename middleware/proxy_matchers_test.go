@@ -341,30 +341,6 @@ func TestProxyIPAllowlistRuleBlocksDirectAndUnlistedTraffic(t *testing.T) {
 	}
 }
 
-func TestRateLimitKeyGeneratorIncludesProxyMatchers(t *testing.T) {
-	rule := &config.Rule{
-		Conditions: &config.RuleConditions{
-			Matches: []config.MatchCondition{
-				{Type: "proxy-ip", Match: "exists"},
-				{Type: "proxy-asn", Match: "exists"},
-			},
-		},
-	}
-	generator := &RateLimitKeyGenerator{}
-
-	base := requestWithProxyInfo("203.0.113.10", &ASNInfo{ASN: "AS13335"})
-	differentIP := requestWithProxyInfo("203.0.113.11", &ASNInfo{ASN: "AS13335"})
-	differentASN := requestWithProxyInfo("203.0.113.10", &ASNInfo{ASN: "AS209242"})
-
-	baseKey := generator.GenerateKey("rule", rule, base)
-	if baseKey == generator.GenerateKey("rule", rule, differentIP) {
-		t.Fatal("expected proxy IP changes to affect rate limit key")
-	}
-	if baseKey == generator.GenerateKey("rule", rule, differentASN) {
-		t.Fatal("expected proxy ASN changes to affect rate limit key")
-	}
-}
-
 func requestWithProxyInfo(proxyIP string, proxyASN *ASNInfo) *http.Request {
 	req := httptest.NewRequest(http.MethodGet, "https://example.com", nil)
 	ctx := req.Context()

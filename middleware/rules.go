@@ -524,10 +524,6 @@ func hasNonEmptyValue(values []string) bool {
 	return false
 }
 
-func joinedHeaderValue(r *http.Request, name string) string {
-	return strings.Join(r.Header.Values(name), ", ")
-}
-
 func isNegatedOperator(operator string) bool {
 	switch operator {
 	case "not-equals", "not-in", "not-contains", "not-starts-with", "not-ends-with", "not-regex":
@@ -1008,25 +1004,20 @@ func NewRateLimitKeyGenerator() *RateLimitKeyGenerator {
 	return &RateLimitKeyGenerator{}
 }
 
-// GenerateKey creates a unique key for rate limiting based on rule and request context
-func (kg *RateLimitKeyGenerator) GenerateKey(ruleID string, rule *config.Rule, r *http.Request) string {
-	var keyParts []string
-	keyParts = append(keyParts, "rule:"+ruleID)
+// defaultRateLimitPartitions applies when an action has no partition_by, so
+// every client gets its own bucket.
+var defaultRateLimitPartitions = []string{"client.ip"}
 
-	if rule.Conditions != nil {
-		kg.extractKeyParts(rule.Conditions, r, &keyParts)
-	}
-
-	return hashRateLimitKeyParts(keyParts)
-}
-
+// GenerateKeyForAction creates the rate limit bucket key for a request from the
+// action's partition_by dimensions, or per client when none are configured.
 func (kg *RateLimitKeyGenerator) GenerateKeyForAction(ruleID string, rule *config.Rule, action *config.RuleAction, r *http.Request) string {
-	if action == nil || action.PartitionBy == nil {
-		return kg.GenerateKey(ruleID, rule, r)
+	partitions := defaultRateLimitPartitions
+	if action != nil && action.PartitionBy != nil {
+		partitions = *action.PartitionBy
 	}
 
 	keyParts := []string{"rule:" + ruleID}
-	for _, dimension := range *action.PartitionBy {
+	for _, dimension := range partitions {
 		value := ""
 		switch dimension {
 		case "client.ip":
@@ -1061,82 +1052,4 @@ func hashRateLimitKeyParts(keyParts []string) string {
 	}
 
 	return fmt.Sprintf("rl_%x", h.Sum(nil)[:16])
-}
-
-// extractKeyParts recursively extracts key components from rule conditions
-func (kg *RateLimitKeyGenerator) extractKeyParts(conditions *config.RuleConditions, r *http.Request, keyParts *[]string) {
-	// Process matches
-	for _, match := range conditions.Matches {
-		switch match.Type {
-		case "domain", "host":
-			*keyParts = append(*keyParts, "domain:"+normalization.Host(r.Host))
-		case "registerable-domain":
-			*keyParts = append(*keyParts, "reg-domain:"+normalization.RegisterableDomain(r.Host))
-		case "agent", "user-agent":
-			agent := joinedHeaderValue(r, "User-Agent")
-			if agent != "" {
-				*keyParts = append(*keyParts, "agent:"+agent)
-			}
-		case "path":
-			*keyParts = append(*keyParts, "path:"+r.URL.Path)
-		case "method":
-			*keyParts = append(*keyParts, "method:"+r.Method)
-		case "fingerprint-ja4":
-			ja4 := GetJA4Fingerprint(r)
-			if ja4 != "" {
-				*keyParts = append(*keyParts, "fingerprint-ja4:"+ja4)
-			}
-		case "header":
-			headerName := match.Key
-			if headerName != "" {
-				value := joinedHeaderValue(r, headerName)
-				if value != "" {
-					*keyParts = append(*keyParts, "header:"+headerName+":"+value)
-				}
-			}
-		case "query-param":
-			if match.Key != "" {
-				for _, value := range normalization.ParseQuery(r.URL.RawQuery)[match.Key] {
-					*keyParts = append(*keyParts, "query-param:"+match.Key+":"+value)
-				}
-			}
-		case "cookie":
-			if match.Key != "" {
-				for _, value := range cookieValues(r, match.Key) {
-					*keyParts = append(*keyParts, "cookie:"+match.Key+":"+value)
-				}
-			}
-		case "asn":
-			clientASNInfo := GetClientASN(r)
-			if clientASNInfo != nil {
-				asn := clientASNInfo.GetASN()
-				if asn != 0 {
-					*keyParts = append(*keyParts, fmt.Sprintf("asn:%d", asn))
-				}
-			}
-		case "proxy-asn":
-			proxyASNInfo := GetProxyASN(r)
-			if proxyASNInfo != nil {
-				asn := proxyASNInfo.GetASN()
-				if asn != 0 {
-					*keyParts = append(*keyParts, fmt.Sprintf("proxy-asn:%d", asn))
-				}
-			}
-		case "ip":
-			clientIP := GetClientIP(r)
-			if clientIP != "" {
-				*keyParts = append(*keyParts, "ip:"+clientIP)
-			}
-		case "proxy-ip":
-			proxyIP := GetProxyIP(r)
-			if proxyIP != "" {
-				*keyParts = append(*keyParts, "proxy-ip:"+proxyIP)
-			}
-		}
-	}
-
-	// Process nested groups
-	for _, group := range conditions.Groups {
-		kg.extractKeyParts(&group, r, keyParts)
-	}
 }

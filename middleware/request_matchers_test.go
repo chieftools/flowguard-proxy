@@ -327,42 +327,6 @@ func TestIPMatcherSupportsCIDRTargets(t *testing.T) {
 	}
 }
 
-func TestRateLimitKeyGeneratorIncludesRequestFieldMatchers(t *testing.T) {
-	rule := &config.Rule{
-		Conditions: &config.RuleConditions{
-			Matches: []config.MatchCondition{
-				{Type: "method", Match: "equals", Value: http.MethodPost},
-				{Type: "query-param", Key: "token", Match: "exists"},
-				{Type: "cookie", Key: "session", Match: "exists"},
-			},
-		},
-	}
-
-	generator := &RateLimitKeyGenerator{}
-	base := httptest.NewRequest(http.MethodPost, "https://example.com/path?token=one", nil)
-	base.Header.Set("Cookie", "session=one")
-
-	differentMethod := httptest.NewRequest(http.MethodGet, "https://example.com/path?token=one", nil)
-	differentMethod.Header.Set("Cookie", "session=one")
-
-	differentQuery := httptest.NewRequest(http.MethodPost, "https://example.com/path?token=two", nil)
-	differentQuery.Header.Set("Cookie", "session=one")
-
-	differentCookie := httptest.NewRequest(http.MethodPost, "https://example.com/path?token=one", nil)
-	differentCookie.Header.Set("Cookie", "session=two")
-
-	baseKey := generator.GenerateKey("rule", rule, base)
-	if baseKey == generator.GenerateKey("rule", rule, differentMethod) {
-		t.Fatal("expected method changes to affect rate limit key")
-	}
-	if baseKey == generator.GenerateKey("rule", rule, differentQuery) {
-		t.Fatal("expected query parameter changes to affect rate limit key")
-	}
-	if baseKey == generator.GenerateKey("rule", rule, differentCookie) {
-		t.Fatal("expected cookie changes to affect rate limit key")
-	}
-}
-
 func requestWithClientIP(clientIP string) *http.Request {
 	req := httptest.NewRequest(http.MethodGet, "https://example.com", nil)
 	ctx := context.WithValue(req.Context(), ContextKeyClientIP, clientIP)

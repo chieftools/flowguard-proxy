@@ -272,46 +272,43 @@ func testRateLimiterReclaimsExpiredKeysAtCapacity(t *testing.T) {
 	}
 }
 
-func TestRateLimitKeyGenerator_GenerateKey(t *testing.T) {
+func TestRateLimitKeyGenerator_DefaultsToClientIP(t *testing.T) {
 	kg := NewRateLimitKeyGenerator()
-
-	// Create a test rule with user-agent matching
 	rule := &config.Rule{
-		ID: "test_rule",
-		Conditions: &config.RuleConditions{
-			Matches: []config.MatchCondition{
-				{
-					Type:  "user-agent",
-					Match: "contains",
-					Value: "bot",
-				},
-			},
-		},
+		ID: "login_rule",
+		Conditions: &config.RuleConditions{Matches: []config.MatchCondition{
+			{Type: "path", Match: "contains", Value: "/login"},
+			{Type: "user-agent", Match: "contains", Value: "bot"},
+			{Type: "query-param", Key: "q", Match: "exists"},
+		}},
+	}
+	request := func(target, userAgent, clientIP string) *http.Request {
+		req := httptest.NewRequest(http.MethodPost, target, nil)
+		req.Header.Set("User-Agent", userAgent)
+		return req.WithContext(context.WithValue(req.Context(), ContextKeyClientIP, clientIP))
 	}
 
-	// Create test request with user-agent
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.Header.Set("User-Agent", "TestBot/1.0")
+	base := kg.GenerateKeyForAction(rule.ID, rule, &config.RuleAction{}, request("/login?q=1", "bot/1", "192.0.2.10"))
 
-	key1 := kg.GenerateKey("test_rule", rule, req)
-
-	// Same request should generate same key
-	key2 := kg.GenerateKey("test_rule", rule, req)
-	if key1 != key2 {
-		t.Error("Same request should generate same key")
+	// Varying the matched request values must not create fresh buckets.
+	for name, req := range map[string]*http.Request{
+		"path":       request("//login/./x?q=1", "bot/1", "192.0.2.10"),
+		"user-agent": request("/login?q=1", "bot/2", "192.0.2.10"),
+		"query":      request("/login?q=2", "bot/1", "192.0.2.10"),
+	} {
+		if got := kg.GenerateKeyForAction(rule.ID, rule, &config.RuleAction{}, req); got != base {
+			t.Errorf("expected changing %s to keep the client bucket", name)
+		}
 	}
 
-	// Different user-agent should generate different key
-	req.Header.Set("User-Agent", "DifferentBot/1.0")
-	key3 := kg.GenerateKey("test_rule", rule, req)
-	if key1 == key3 {
-		t.Error("Different user-agent should generate different key")
+	if kg.GenerateKeyForAction(rule.ID, rule, &config.RuleAction{}, request("/login?q=1", "bot/1", "192.0.2.11")) == base {
+		t.Error("expected different clients to get different buckets")
 	}
-
-	// Different rule should generate different key
-	key4 := kg.GenerateKey("different_rule", rule, req)
-	if key3 == key4 {
-		t.Error("Different rule ID should generate different key")
+	if kg.GenerateKeyForAction("other_rule", rule, &config.RuleAction{}, request("/login?q=1", "bot/1", "192.0.2.10")) == base {
+		t.Error("expected different rules to get different buckets")
+	}
+	if kg.GenerateKeyForAction(rule.ID, rule, nil, request("/login?q=1", "bot/1", "192.0.2.10")) != base {
+		t.Error("expected a nil action to use the client default")
 	}
 }
 
@@ -342,8 +339,8 @@ func TestRateLimitKeyGenerator_UsesExplicitPartitions(t *testing.T) {
 		t.Fatal("expected empty partition list to create one rule-wide bucket")
 	}
 
-	if kg.GenerateKeyForAction(rule.ID, rule, &config.RuleAction{}, first) != kg.GenerateKey(rule.ID, rule, first) {
-		t.Fatal("expected omitted partition configuration to preserve the legacy key")
+	if kg.GenerateKeyForAction(rule.ID, rule, &config.RuleAction{}, first) != kg.GenerateKeyForAction(rule.ID, rule, clientAction, first) {
+		t.Fatal("expected omitted partition configuration to partition by client IP")
 	}
 }
 
@@ -767,9 +764,6 @@ func TestRateLimitKeyGenerator_NormalizesDomain(t *testing.T) {
 	upper := httptest.NewRequest(http.MethodGet, "/", nil)
 	upper.Host = "EXAMPLE.COM.:443"
 
-	if kg.GenerateKey(rule.ID, rule, lower) != kg.GenerateKey(rule.ID, rule, upper) {
-		t.Error("expected host variants to share a rate limit bucket")
-	}
 	if kg.GenerateKeyForAction(rule.ID, rule, domainAction, lower) != kg.GenerateKeyForAction(rule.ID, rule, domainAction, upper) {
 		t.Error("expected host variants to share a domain-partitioned bucket")
 	}
