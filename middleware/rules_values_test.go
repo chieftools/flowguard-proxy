@@ -189,3 +189,30 @@ func TestEvaluateMatch_CookieSeesValuesGoWouldDrop(t *testing.T) {
 		})
 	}
 }
+
+func TestEvaluateMatch_HostHeader(t *testing.T) {
+	rm := &RulesMiddleware{}
+
+	tests := []struct {
+		name     string
+		host     string
+		match    config.MatchCondition
+		expected bool
+	}{
+		{"equals as sent", "Staging.Example.com:443", config.MatchCondition{Type: "header", Key: "host", Match: "equals", Value: "Staging.Example.com:443"}, true},
+		{"contains", "staging.example.com", config.MatchCondition{Type: "header", Key: "Host", Match: "contains", Value: "staging"}, true},
+		{"exists", "example.com", config.MatchCondition{Type: "header", Key: "Host", Match: "exists"}, true},
+		{"missing", "", config.MatchCondition{Type: "header", Key: "Host", Match: "missing"}, true},
+		{"empty host fails exists", "", config.MatchCondition{Type: "header", Key: "Host", Match: "exists"}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Host = tt.host
+			if got := rm.evaluateMatch(req, &tt.match); got != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, got)
+			}
+		})
+	}
+}

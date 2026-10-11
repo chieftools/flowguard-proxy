@@ -494,6 +494,13 @@ func (rm *RulesMiddleware) matchesStringValues(match *config.MatchCondition, val
 // header is matched as an empty value, so negated operators still match it.
 func (rm *RulesMiddleware) matchesHeaderValues(r *http.Request, name string, match *config.MatchCondition) bool {
 	values := r.Header.Values(name)
+	if http.CanonicalHeaderKey(name) == "Host" {
+		// net/http moves the Host header out of r.Header into r.Host.
+		values = nil
+		if r.Host != "" {
+			values = []string{r.Host}
+		}
+	}
 	switch match.Match {
 	case "exists":
 		return hasNonEmptyValue(values)
