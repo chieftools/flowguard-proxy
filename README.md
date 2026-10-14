@@ -602,17 +602,33 @@ value. Use `header_auth.header` only for a custom header name.
 
 FlowGuard reads PROXY protocol v1 and v2 headers on its TCP listeners, so a
 layer 4 load balancer such as AWS NLB or HAProxy in TCP mode can pass the client
-address. Add the load balancer's addresses to `trusted_proxies.ipnets` and
-enable the PROXY protocol on the load balancer. `header_auth` does not apply,
-because the header arrives before any HTTP headers.
+address. List the load balancer's addresses or CIDRs in
+`trusted_proxies.proxy_protocol.ipnets` and enable the PROXY protocol on the
+load balancer:
 
-The header is optional, so trusted HTTP proxies such as Cloudflare keep working
-without one. FlowGuard uses a header only when the TCP peer is in
-`trusted_proxies.ipnets`, and reads and discards one from any other peer. When a
-header is used, the load balancer is recorded as the immediate proxy
-(`proxy-ip`, `proxy-asn`, `proxy-iplist`). If the address in the header is
-itself a trusted proxy, FlowGuard reads the client from its forwarding headers
-as usual. HTTP/3 does not use the PROXY protocol.
+```json
+"trusted_proxies": {
+  "ipnets": ["https://www.cloudflare.com/ips-v4", "10.0.0.0/24"],
+  "proxy_protocol": {
+    "ipnets": ["10.0.0.0/24"]
+  }
+}
+```
+
+FlowGuard uses a header only from these peers, and reads and discards one from
+any other peer. The load balancer is then recorded as the immediate proxy
+(`proxy-ip`, `proxy-asn`, `proxy-iplist`). Forwarding headers from the client are
+ignored, unless the address in the header is itself in `trusted_proxies.ipnets`,
+such as a CDN in front of the load balancer.
+
+The header is optional, so health checks without one keep working. On HTTPS and
+HTTP/3, a connection from a load balancer without a header uses the load
+balancer as the client and ignores forwarding headers, even when the load
+balancer is also in `trusted_proxies.ipnets`: a load balancer that forwards TLS
+cannot add headers to it. On HTTP, a load balancer without a header keeps the
+trust it has in `trusted_proxies.ipnets`, so it can run port 80 in HTTP mode and
+add `X-Forwarded-For` itself. In the example above, `10.0.0.0/24` is listed in
+both for that reason. HTTP/3 does not use the PROXY protocol.
 
 ### Actions
 

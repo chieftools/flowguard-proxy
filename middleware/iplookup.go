@@ -32,7 +32,23 @@ const (
 	// ContextKeyProxyProtocolPeer holds the trusted peer that set the
 	// connection's client address with a PROXY protocol header.
 	ContextKeyProxyProtocolPeer contextKey = "proxyProtocolPeer"
+
+	// ContextKeyUntrustedForwardingHeaders marks a connection whose forwarding
+	// headers came from the client, even if its peer is a trusted proxy.
+	ContextKeyUntrustedForwardingHeaders contextKey = "untrustedForwardingHeaders"
 )
+
+// ContextWithUntrustedForwardingHeaders marks the connection's forwarding
+// headers as client-supplied, such as on TLS that a layer 4 load balancer
+// forwards without a PROXY protocol header.
+func ContextWithUntrustedForwardingHeaders(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ContextKeyUntrustedForwardingHeaders, true)
+}
+
+func forwardingHeadersUntrusted(r *http.Request) bool {
+	untrusted, _ := r.Context().Value(ContextKeyUntrustedForwardingHeaders).(bool)
+	return untrusted
+}
 
 // WithProxyProtocolPeer records that r.RemoteAddr came from a PROXY protocol
 // header sent by the trusted peer peerIP.
@@ -203,7 +219,7 @@ func (m *IPLookupMiddleware) extractForwardedIPs(r *http.Request) (clientIP stri
 	if m.configMgr != nil {
 		trustedByIP := m.configMgr.IsTrustedProxy(remoteIP)
 		trustedByHeader := m.isTrustedByHeaderAuth(r)
-		trustedProxy = trustedByIP || trustedByHeader
+		trustedProxy = (trustedByIP || trustedByHeader) && !forwardingHeadersUntrusted(r)
 	}
 
 	// Check if the request came through a trusted proxy

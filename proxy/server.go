@@ -65,9 +65,9 @@ type ServerConfig struct {
 	transparentPool *transparentTransportPool
 	addressPairs    AddressPairResolution
 	upstreamHeaders *atomic.Pointer[config.UpstreamHeaderSettings]
-	// trustedProxy reports whether a peer may set the client address with a
-	// PROXY protocol header.
-	trustedProxy func(netip.Addr) bool
+	// loadBalancer reports whether a peer is a layer 4 load balancer that may
+	// set the client address with a PROXY protocol header.
+	loadBalancer func(netip.Addr) bool
 }
 
 func NewServer(config *ServerConfig) *Server {
@@ -86,7 +86,7 @@ func NewServer(config *ServerConfig) *Server {
 func (s *Server) serve(server *http.Server, listener net.Listener, tlsConfig *tls.Config, errChan chan<- error) {
 	listener = proxyProtocolListener{
 		Listener:      listener,
-		trusted:       s.config.trustedProxy,
+		loadBalancer:  s.config.loadBalancer,
 		headerTimeout: server.ReadTimeout,
 	}
 
@@ -117,7 +117,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	r = r.WithContext(middleware.ContextWithUpstreamTelemetry(r.Context()))
 	r = s.withJA4Fingerprint(r)
-	r = s.withProxyProtocolPeer(r)
+	r = s.withLoadBalancer(r)
 
 	// Create the proxy handler that will be called after middleware processing
 	proxyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -184,17 +184,28 @@ func (s *Server) withJA4Fingerprint(r *http.Request) *http.Request {
 	return r
 }
 
-func (s *Server) withProxyProtocolPeer(r *http.Request) *http.Request {
+// withLoadBalancer records how a connection from a layer 4 load balancer set
+// the client address. With a PROXY protocol header, the load balancer is the
+// immediate proxy. Without one, on HTTPS, any forwarding headers came from the
+// client: the load balancer forwards TLS that FlowGuard terminates, so it
+// cannot have added them, even when it is a trusted proxy for plain HTTP.
+func (s *Server) withLoadBalancer(r *http.Request) *http.Request {
 	conn, ok := r.Context().Value(proxyProtocolConnContextKey{}).(*proxyProtocolConn)
 	if !ok {
 		return r
 	}
 
-	if peer, ok := conn.proxyPeer(); ok {
+	peer, headerUsed, ok := conn.loadBalancerPeer()
+	switch {
+	case !ok:
+		return r
+	case headerUsed:
 		return middleware.WithProxyProtocolPeer(r, peer.String())
+	case s.config.scheme == "https":
+		return r.WithContext(middleware.ContextWithUntrustedForwardingHeaders(r.Context()))
+	default:
+		return r
 	}
-
-	return r
 }
 
 func (s *Server) markListenerClosed() {
@@ -525,6 +536,13 @@ func (s *Server) http3ConnContext(ctx context.Context, conn *quic.Conn) context.
 
 	if conn == nil {
 		return ctx
+	}
+
+	// QUIC cannot carry a PROXY protocol header, and a load balancer that
+	// forwards it cannot add forwarding headers inside it.
+	if udpAddr, ok := conn.RemoteAddr().(*net.UDPAddr); ok && s.config.loadBalancer != nil &&
+		s.config.loadBalancer(udpAddr.AddrPort().Addr().Unmap()) {
+		ctx = middleware.ContextWithUntrustedForwardingHeaders(ctx)
 	}
 
 	localAddr := conn.LocalAddr().String()

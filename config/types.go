@@ -136,7 +136,14 @@ type IPDatabaseConfig struct {
 type TrustedProxiesConfig struct {
 	IPNets                 []string                      `json:"ipnets,omitempty"`
 	HeaderAuth             *TrustedProxyHeaderAuthConfig `json:"header_auth,omitempty"`
+	ProxyProtocol          *ProxyProtocolConfig          `json:"proxy_protocol,omitempty"`
 	RefreshIntervalSeconds int                           `json:"refresh_interval_seconds"`
+}
+
+// ProxyProtocolConfig lists the layer 4 load balancers that may set the client
+// address with a PROXY protocol header.
+type ProxyProtocolConfig struct {
+	IPNets []string `json:"ipnets"`
 }
 
 type TrustedProxyHeaderAuthConfig struct {

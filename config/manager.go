@@ -32,6 +32,7 @@ type Manager struct {
 	realtimeEnabled         bool
 	trustedProxySet         *iplist.Set
 	trustedProxySources     map[string]*iplist.Set
+	proxyProtocolSet        *iplist.Set
 	callbacks               []func(*Config)
 	watcher                 *fsnotify.Watcher
 	stopWatcher             chan struct{}

@@ -355,3 +355,32 @@ func TestExtractIPsRecordsProxyProtocolPeerAsProxy(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractIPsIgnoresForwardingHeadersMarkedUntrusted(t *testing.T) {
+	manager := newIPLookupTestConfigManager(t, `{
+  "ipnets": ["10.0.0.5"],
+  "header_auth": {
+    "values": ["proxy-secret"]
+  }
+}`)
+	ipLookup := &IPLookupMiddleware{configMgr: manager}
+
+	for _, header := range []string{"X-Forwarded-For", "X-Real-IP"} {
+		t.Run(header, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+			req.RemoteAddr = "10.0.0.5:51000"
+			req.Header.Set(header, "192.0.2.66")
+			req.Header.Set(config.DefaultTrustedProxyHeaderAuthHeader, "proxy-secret")
+			req = req.WithContext(ContextWithUntrustedForwardingHeaders(req.Context()))
+
+			clientIP, proxyIP := ipLookup.extractIPs(req)
+
+			if clientIP != "10.0.0.5" || proxyIP != "" {
+				t.Fatalf("got client %q proxy %q, want the peer as client and no proxy", clientIP, proxyIP)
+			}
+			if got := req.Header.Get(config.DefaultTrustedProxyHeaderAuthHeader); got != "" {
+				t.Fatalf("expected trusted proxy auth header to be stripped, got %q", got)
+			}
+		})
+	}
+}

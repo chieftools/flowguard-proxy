@@ -18,11 +18,12 @@ import (
 // PROXY protocol (v1 and v2) support for layer 4 load balancers in front of
 // FlowGuard, as specified in https://www.haproxy.org/download/3.0/doc/proxy-protocol.txt.
 //
-// A header is honoured only when the TCP peer is a trusted proxy. Those peers
-// can already set the client address through X-Forwarded-For, so this gives
-// them nothing new. The header is optional so that trusted HTTP proxies such as
-// CDNs keep working without one. A header from any other peer is read and
-// discarded, and the connection keeps its real peer address.
+// A header is honoured only when the TCP peer is a configured load balancer
+// (trusted_proxies.proxy_protocol). A header from any other peer is read and
+// discarded, and the connection keeps its real peer address. The header is
+// optional, so health checks and listeners without the PROXY protocol keep
+// working; see Server.withLoadBalancer for how forwarding headers are treated
+// on those connections.
 
 var (
 	proxyProtocolV1Prefix    = []byte("PROXY ")
@@ -49,9 +50,9 @@ type proxyProtocolConnContextKey struct{}
 type proxyProtocolListener struct {
 	net.Listener
 
-	// trusted reports whether a peer may set the client address. Nil trusts
-	// no peer.
-	trusted func(netip.Addr) bool
+	// loadBalancer reports whether a peer may set the client address. Nil
+	// trusts no peer.
+	loadBalancer func(netip.Addr) bool
 	// headerTimeout bounds how long the header may take to arrive, starting
 	// when it is first needed.
 	headerTimeout time.Duration
@@ -68,7 +69,7 @@ func (l proxyProtocolListener) Accept() (net.Conn, error) {
 
 	return &proxyProtocolConn{
 		Conn:          conn,
-		trusted:       l.trusted,
+		loadBalancer:  l.loadBalancer,
 		headerTimeout: l.headerTimeout,
 	}, nil
 }
@@ -76,14 +77,16 @@ func (l proxyProtocolListener) Accept() (net.Conn, error) {
 type proxyProtocolConn struct {
 	net.Conn
 
-	trusted       func(netip.Addr) bool
+	loadBalancer  func(netip.Addr) bool
 	headerTimeout time.Duration
 
-	once   sync.Once
-	err    error
-	reader *bufio.Reader
-	remote net.Addr
-	peer   netip.Addr
+	once         sync.Once
+	err          error
+	reader       *bufio.Reader
+	remote       net.Addr
+	peer         netip.Addr
+	loadBalanced bool
+	headerUsed   bool
 
 	deadlineMu   sync.Mutex
 	readDeadline time.Time
@@ -113,10 +116,11 @@ func (c *proxyProtocolConn) RemoteAddr() net.Addr {
 	return c.remote
 }
 
-// proxyPeer returns the trusted peer that sent an honoured header.
-func (c *proxyProtocolConn) proxyPeer() (netip.Addr, bool) {
+// loadBalancerPeer reports whether the peer is a configured load balancer and
+// whether its header set the client address.
+func (c *proxyProtocolConn) loadBalancerPeer() (peer netip.Addr, headerUsed, ok bool) {
 	c.once.Do(c.readHeader)
-	return c.peer, c.peer.IsValid()
+	return c.peer, c.headerUsed, c.loadBalanced
 }
 
 func (c *proxyProtocolConn) SetDeadline(t time.Time) error {
@@ -164,20 +168,18 @@ func (c *proxyProtocolConn) readHeader() {
 		c.err = err
 		return
 	}
-	if !ok || c.trusted == nil {
-		return
-	}
 
 	tcpAddr, isTCP := c.remote.(*net.TCPAddr)
-	if !isTCP {
+	if !isTCP || c.loadBalancer == nil {
 		return
 	}
-	peer := tcpAddr.AddrPort().Addr().Unmap()
-	if !c.trusted(peer) {
+	c.peer = tcpAddr.AddrPort().Addr().Unmap()
+	c.loadBalanced = c.loadBalancer(c.peer)
+	if !ok || !c.loadBalanced {
 		return
 	}
 
-	c.peer = peer
+	c.headerUsed = true
 	c.remote = net.TCPAddrFromAddrPort(client)
 }
 

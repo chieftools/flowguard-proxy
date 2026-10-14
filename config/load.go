@@ -87,8 +87,14 @@ func (m *Manager) Load() error {
 
 	trustedProxySet := iplist.NewSet(nil)
 	trustedProxySources := make(map[string]*iplist.Set)
+	proxyProtocolSet := iplist.NewSet(nil)
 	if config.TrustedProxies != nil {
 		trustedProxySet, trustedProxySources, err = m.buildTrustedProxySet(config.TrustedProxies, false)
+		if err != nil {
+			m.trustedProxyUpdateMu.Unlock()
+			return fmt.Errorf("failed to parse trusted proxies: %w", err)
+		}
+		proxyProtocolSet, err = buildProxyProtocolSet(config.TrustedProxies.ProxyProtocol)
 		if err != nil {
 			m.trustedProxyUpdateMu.Unlock()
 			return fmt.Errorf("failed to parse trusted proxies: %w", err)
@@ -103,6 +109,7 @@ func (m *Manager) Load() error {
 	m.sortedRules = sortedRules
 	m.trustedProxySet = trustedProxySet
 	m.trustedProxySources = trustedProxySources
+	m.proxyProtocolSet = proxyProtocolSet
 	m.lastModified = info.ModTime()
 	m.currentConfigID = config.ID
 

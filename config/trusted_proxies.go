@@ -36,13 +36,17 @@ func (m *Manager) IsTrustedProxy(ip string) bool {
 		return false
 	}
 
-	return m.IsTrustedProxyAddr(addr)
-}
-
-// IsTrustedProxyAddr checks if an address is from a trusted proxy.
-func (m *Manager) IsTrustedProxyAddr(addr netip.Addr) bool {
 	m.mu.RLock()
 	set := m.trustedProxySet
+	m.mu.RUnlock()
+	return set.Contains(addr)
+}
+
+// IsProxyProtocolPeer checks if an address is a load balancer that may set the
+// client address with a PROXY protocol header.
+func (m *Manager) IsProxyProtocolPeer(addr netip.Addr) bool {
+	m.mu.RLock()
+	set := m.proxyProtocolSet
 	m.mu.RUnlock()
 	return set.Contains(addr)
 }
@@ -238,8 +242,8 @@ func validateTrustedProxiesConfig(config *TrustedProxiesConfig) error {
 		return nil
 	}
 
-	if len(config.IPNets) == 0 && config.HeaderAuth == nil {
-		return fmt.Errorf("trusted_proxies must configure ipnets or header_auth")
+	if len(config.IPNets) == 0 && config.HeaderAuth == nil && config.ProxyProtocol == nil {
+		return fmt.Errorf("trusted_proxies must configure ipnets, header_auth or proxy_protocol")
 	}
 
 	if config.HeaderAuth == nil {
@@ -263,6 +267,30 @@ func validateTrustedProxiesConfig(config *TrustedProxiesConfig) error {
 	}
 
 	return nil
+}
+
+// buildProxyProtocolSet parses the PROXY protocol peers. Load balancer
+// addresses are fixed, so only addresses and CIDRs are accepted, not URLs.
+func buildProxyProtocolSet(config *ProxyProtocolConfig) (*iplist.Set, error) {
+	if config == nil {
+		return iplist.NewSet(nil), nil
+	}
+	if len(config.IPNets) == 0 {
+		return nil, fmt.Errorf("trusted_proxies.proxy_protocol.ipnets must contain at least one address or CIDR")
+	}
+
+	prefixes := make([]netip.Prefix, 0, len(config.IPNets))
+	for i, source := range config.IPNets {
+		if isHTTPSource(source) {
+			return nil, fmt.Errorf("trusted_proxies.proxy_protocol.ipnets[%d] must be an address or CIDR, not a URL", i)
+		}
+		prefix, err := iplist.ParsePrefix(source)
+		if err != nil {
+			return nil, fmt.Errorf("trusted_proxies.proxy_protocol.ipnets[%d]: %w", i, err)
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	return iplist.NewSet(prefixes), nil
 }
 
 func trustedProxyHeaderAuthHeader(config *TrustedProxyHeaderAuthConfig) string {

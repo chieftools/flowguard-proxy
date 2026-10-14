@@ -311,7 +311,7 @@ func TestLoadRejectsTrustedProxiesWithoutTrustSource(t *testing.T) {
 }`)
 
 	_, err := loadTestManager(configPath)
-	if err == nil || err.Error() != "trusted_proxies must configure ipnets or header_auth" {
+	if err == nil || err.Error() != "trusted_proxies must configure ipnets, header_auth or proxy_protocol" {
 		t.Fatalf("expected missing trust source error, got %v", err)
 	}
 }
@@ -344,5 +344,92 @@ func TestLoadRejectsEmptyTrustedProxyHeaderAuthValue(t *testing.T) {
 	_, err := loadTestManager(configPath)
 	if err == nil || err.Error() != "trusted_proxies.header_auth.values[1] must not be empty" {
 		t.Fatalf("expected empty value error, got %v", err)
+	}
+}
+
+func TestLoadSeparatesProxyProtocolPeersFromTrustedProxies(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "trusted_proxies": {
+    "ipnets": ["198.51.100.10"],
+    "proxy_protocol": {
+      "ipnets": ["10.0.0.0/24", "2001:db8::/64"]
+    }
+  }
+}`)
+
+	manager, err := loadTestManager(configPath)
+	if err != nil {
+		t.Fatalf("load manager: %v", err)
+	}
+
+	for addr, want := range map[string]bool{
+		"10.0.0.5":        true,
+		"::ffff:10.0.0.5": true,
+		"2001:db8::5":     true,
+		"10.0.1.5":        false,
+		"198.51.100.10":   false,
+		"2001:db8:1::5":   false,
+	} {
+		if got := manager.IsProxyProtocolPeer(netip.MustParseAddr(addr)); got != want {
+			t.Errorf("IsProxyProtocolPeer(%s) = %v, want %v", addr, got, want)
+		}
+	}
+	if manager.IsTrustedProxy("10.0.0.5") {
+		t.Error("expected a PROXY protocol peer not to be trusted for forwarding headers")
+	}
+}
+
+func TestLoadAcceptsProxyProtocolOnly(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "trusted_proxies": {
+    "proxy_protocol": {
+      "ipnets": ["10.0.0.5"]
+    }
+  }
+}`)
+
+	manager, err := loadTestManager(configPath)
+	if err != nil {
+		t.Fatalf("load manager: %v", err)
+	}
+	if !manager.IsProxyProtocolPeer(netip.MustParseAddr("10.0.0.5")) {
+		t.Fatal("expected configured PROXY protocol peer")
+	}
+}
+
+func TestLoadRejectsInvalidProxyProtocolPeers(t *testing.T) {
+	tests := map[string]struct {
+		ipnets  string
+		wantErr string
+	}{
+		"empty": {
+			ipnets:  `[]`,
+			wantErr: "trusted_proxies.proxy_protocol.ipnets must contain at least one address or CIDR",
+		},
+		"url": {
+			ipnets:  `["https://example.com/ips"]`,
+			wantErr: "trusted_proxies.proxy_protocol.ipnets[0] must be an address or CIDR, not a URL",
+		},
+		"invalid": {
+			ipnets:  `["10.0.0.5", "not-an-ip"]`,
+			wantErr: "trusted_proxies.proxy_protocol.ipnets[1]",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			configPath := writeTestConfig(t, `{
+  "trusted_proxies": {
+    "proxy_protocol": {
+      "ipnets": `+tt.ipnets+`
+    }
+  }
+}`)
+
+			_, err := loadTestManager(configPath)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("got error %v, want one containing %q", err, tt.wantErr)
+			}
+		})
 	}
 }

@@ -1038,7 +1038,7 @@
             "properties": {
                 "ipnets": {
                     "type": "array",
-                    "description": "List of trusted proxy networks (CIDR notation or URLs). Peers in these networks may set the client address with forwarding headers or a PROXY protocol header",
+                    "description": "List of trusted proxy networks (CIDR notation or URLs) whose forwarding headers set the client address",
                     "minItems": 1,
                     "items": {
                         "type": "string",
@@ -1061,6 +1061,9 @@
                 "header_auth": {
                     "$ref": "#/definitions/trusted_proxy_header_auth_config"
                 },
+                "proxy_protocol": {
+                    "$ref": "#/definitions/proxy_protocol_config"
+                },
                 "refresh_interval_seconds": {
                     "type": "integer",
                     "minimum": 60,
@@ -1077,7 +1080,40 @@
                     "required": [
                         "header_auth"
                     ]
+                },
+                {
+                    "required": [
+                        "proxy_protocol"
+                    ]
                 }
+            ],
+            "additionalProperties": false
+        },
+        "proxy_protocol_config": {
+            "type": "object",
+            "description": "Layer 4 load balancers that may set the client address with a PROXY protocol header. On HTTPS and HTTP/3, their forwarding headers are never trusted",
+            "properties": {
+                "ipnets": {
+                    "type": "array",
+                    "description": "Load balancer addresses or CIDRs. URLs are not supported",
+                    "minItems": 1,
+                    "items": {
+                        "type": "string",
+                        "oneOf": [
+                            {
+                                "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}(/[0-9]{1,2})?$",
+                                "description": "IPv4 address or CIDR"
+                            },
+                            {
+                                "pattern": "^[0-9a-fA-F:]+(/[0-9]{1,3})?$",
+                                "description": "IPv6 address or CIDR"
+                            }
+                        ]
+                    }
+                }
+            },
+            "required": [
+                "ipnets"
             ],
             "additionalProperties": false
         },

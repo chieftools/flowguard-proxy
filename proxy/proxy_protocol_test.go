@@ -19,6 +19,8 @@ import (
 
 	"flowguard/config"
 	"flowguard/middleware"
+
+	"github.com/quic-go/quic-go/http3"
 )
 
 func proxyProtocolV2Header(command, family byte, addresses []byte, tlvs []byte) []byte {
@@ -190,7 +192,7 @@ type proxyProtocolTestConn struct {
 	client net.Conn
 }
 
-func dialProxyProtocolTestConn(t *testing.T, trusted func(netip.Addr) bool, headerTimeout time.Duration) proxyProtocolTestConn {
+func dialProxyProtocolTestConn(t *testing.T, loadBalancer func(netip.Addr) bool, headerTimeout time.Duration) proxyProtocolTestConn {
 	t.Helper()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -199,7 +201,7 @@ func dialProxyProtocolTestConn(t *testing.T, trusted func(netip.Addr) bool, head
 	}
 	t.Cleanup(func() { listener.Close() })
 
-	wrapped := proxyProtocolListener{Listener: listener, trusted: trusted, headerTimeout: headerTimeout}
+	wrapped := proxyProtocolListener{Listener: listener, loadBalancer: loadBalancer, headerTimeout: headerTimeout}
 
 	client, err := net.Dial("tcp", listener.Addr().String())
 	if err != nil {
@@ -220,7 +222,7 @@ func trustLoopback(addr netip.Addr) bool {
 	return addr.IsLoopback()
 }
 
-func TestProxyProtocolConnUsesHeaderFromTrustedPeer(t *testing.T) {
+func TestProxyProtocolConnUsesHeaderFromLoadBalancer(t *testing.T) {
 	conn := dialProxyProtocolTestConn(t, trustLoopback, time.Second)
 	if _, err := conn.client.Write([]byte("PROXY TCP4 203.0.113.7 198.51.100.1 51000 443\r\nhello")); err != nil {
 		t.Fatalf("write: %v", err)
@@ -229,8 +231,8 @@ func TestProxyProtocolConnUsesHeaderFromTrustedPeer(t *testing.T) {
 	if got := conn.server.RemoteAddr().String(); got != "203.0.113.7:51000" {
 		t.Fatalf("got remote address %q, want the client from the header", got)
 	}
-	if peer, ok := conn.server.proxyPeer(); !ok || peer != netip.MustParseAddr("127.0.0.1") {
-		t.Fatalf("got proxy peer %v ok %v, want 127.0.0.1", peer, ok)
+	if peer, headerUsed, ok := conn.server.loadBalancerPeer(); !ok || !headerUsed || peer != netip.MustParseAddr("127.0.0.1") {
+		t.Fatalf("got load balancer %v header used %v ok %v, want 127.0.0.1 with its header used", peer, headerUsed, ok)
 	}
 
 	buf := make([]byte, 5)
@@ -239,13 +241,13 @@ func TestProxyProtocolConnUsesHeaderFromTrustedPeer(t *testing.T) {
 	}
 }
 
-func TestProxyProtocolConnDiscardsHeaderFromUntrustedPeer(t *testing.T) {
-	for name, trusted := range map[string]func(netip.Addr) bool{
-		"untrusted peer": func(netip.Addr) bool { return false },
-		"no trust check": nil,
+func TestProxyProtocolConnDiscardsHeaderFromOtherPeers(t *testing.T) {
+	for name, loadBalancer := range map[string]func(netip.Addr) bool{
+		"other peer":       func(netip.Addr) bool { return false },
+		"no load balancer": nil,
 	} {
 		t.Run(name, func(t *testing.T) {
-			conn := dialProxyProtocolTestConn(t, trusted, time.Second)
+			conn := dialProxyProtocolTestConn(t, loadBalancer, time.Second)
 			if _, err := conn.client.Write([]byte("PROXY TCP4 203.0.113.7 198.51.100.1 51000 443\r\nhello")); err != nil {
 				t.Fatalf("write: %v", err)
 			}
@@ -253,8 +255,8 @@ func TestProxyProtocolConnDiscardsHeaderFromUntrustedPeer(t *testing.T) {
 			if got := conn.server.RemoteAddr().String(); got != conn.client.LocalAddr().String() {
 				t.Fatalf("got remote address %q, want the real peer %q", got, conn.client.LocalAddr())
 			}
-			if peer, ok := conn.server.proxyPeer(); ok {
-				t.Fatalf("got proxy peer %v, want none", peer)
+			if peer, _, ok := conn.server.loadBalancerPeer(); ok {
+				t.Fatalf("got load balancer %v, want none", peer)
 			}
 
 			buf := make([]byte, 5)
@@ -265,7 +267,7 @@ func TestProxyProtocolConnDiscardsHeaderFromUntrustedPeer(t *testing.T) {
 	}
 }
 
-func TestProxyProtocolConnPassesThroughTrustedPeerWithoutHeader(t *testing.T) {
+func TestProxyProtocolConnPassesThroughLoadBalancerWithoutHeader(t *testing.T) {
 	conn := dialProxyProtocolTestConn(t, trustLoopback, time.Second)
 	request := "POST / HTTP/1.1\r\nHost: example.com\r\n\r\n"
 	if _, err := conn.client.Write([]byte(request)); err != nil {
@@ -275,8 +277,8 @@ func TestProxyProtocolConnPassesThroughTrustedPeerWithoutHeader(t *testing.T) {
 	if got := conn.server.RemoteAddr().String(); got != conn.client.LocalAddr().String() {
 		t.Fatalf("got remote address %q, want the real peer %q", got, conn.client.LocalAddr())
 	}
-	if peer, ok := conn.server.proxyPeer(); ok {
-		t.Fatalf("got proxy peer %v, want none", peer)
+	if _, headerUsed, ok := conn.server.loadBalancerPeer(); !ok || headerUsed {
+		t.Fatalf("got load balancer ok %v header used %v, want a load balancer without a header", ok, headerUsed)
 	}
 
 	buf := make([]byte, len(request))
@@ -331,33 +333,99 @@ func (m *proxyProtocolCaptureMiddleware) Handle(w http.ResponseWriter, r *http.R
 
 func (*proxyProtocolCaptureMiddleware) Stop() {}
 
-func TestServerAppliesProxyProtocolHeader(t *testing.T) {
-	for _, scheme := range []string{"http", "https"} {
-		t.Run(scheme, func(t *testing.T) {
-			terminal := &proxyProtocolCaptureMiddleware{requests: make(chan *http.Request, 1)}
-			chain := middleware.NewChain()
-			chain.Add(terminal)
+// startLoadBalancerTestServer starts a server behind a load balancer on
+// 127.0.0.1 that is also trusted for X-Forwarded-For, as when it runs port 80
+// in HTTP mode. 198.51.100.10 is a trusted CDN.
+func startLoadBalancerTestServer(t *testing.T, scheme string, protocols config.ProtocolSettings) (*Server, *proxyProtocolCaptureMiddleware) {
+	t.Helper()
 
-			var tlsConfig *tls.Config
-			if scheme == "https" {
-				tlsConfig = testServerTLSConfig(t)
-			}
-			server := NewServer(&ServerConfig{
-				scheme:       scheme,
-				bindAddr:     "127.0.0.1",
-				bindPort:     "0",
-				middleware:   chain,
-				protocols:    &config.ProtocolSettings{HTTP1: true},
-				trustedProxy: trustLoopback,
-			})
-			if err := server.Start(tlsConfig, make(chan error, 1)); err != nil {
-				t.Fatalf("start server: %v", err)
-			}
-			t.Cleanup(func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				server.Shutdown(ctx)
-			})
+	configMgr := newProxyTestConfigManager(t, config.Config{TrustedProxies: &config.TrustedProxiesConfig{
+		IPNets:        []string{"127.0.0.1", "198.51.100.10"},
+		ProxyProtocol: &config.ProxyProtocolConfig{IPNets: []string{"127.0.0.1"}},
+	}})
+	t.Cleanup(configMgr.Stop)
+
+	terminal := &proxyProtocolCaptureMiddleware{requests: make(chan *http.Request, 1)}
+	chain := middleware.NewChain()
+	chain.Add(middleware.NewIPLookupMiddleware(configMgr))
+	chain.Add(terminal)
+	t.Cleanup(chain.Stop)
+
+	var tlsConfig *tls.Config
+	if scheme == "https" {
+		tlsConfig = testServerTLSConfig(t)
+	}
+	server := NewServer(&ServerConfig{
+		scheme:       scheme,
+		bindAddr:     "127.0.0.1",
+		bindPort:     "0",
+		middleware:   chain,
+		protocols:    &protocols,
+		loadBalancer: configMgr.IsProxyProtocolPeer,
+	})
+	if err := server.Start(tlsConfig, make(chan error, 1)); err != nil {
+		t.Fatalf("start server: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		server.Shutdown(ctx)
+	})
+
+	return server, terminal
+}
+
+func TestServerResolvesClientBehindLoadBalancer(t *testing.T) {
+	tests := []struct {
+		name         string
+		scheme       string
+		headerClient string
+		forwardedFor string
+		wantClientIP string
+		wantProxyIP  string
+	}{
+		{
+			name:         "https header ignores client forwarding headers",
+			scheme:       "https",
+			headerClient: "203.0.113.7:51000",
+			forwardedFor: "192.0.2.66",
+			wantClientIP: "203.0.113.7",
+			wantProxyIP:  "127.0.0.1",
+		},
+		{
+			name:         "https without header ignores client forwarding headers",
+			scheme:       "https",
+			forwardedFor: "192.0.2.66",
+			wantClientIP: "127.0.0.1",
+		},
+		{
+			name:         "https header from trusted CDN keeps its forwarding headers",
+			scheme:       "https",
+			headerClient: "198.51.100.10:51000",
+			forwardedFor: "203.0.113.9",
+			wantClientIP: "203.0.113.9",
+			wantProxyIP:  "127.0.0.1",
+		},
+		{
+			name:         "http header ignores client forwarding headers",
+			scheme:       "http",
+			headerClient: "203.0.113.7:51000",
+			forwardedFor: "192.0.2.66",
+			wantClientIP: "203.0.113.7",
+			wantProxyIP:  "127.0.0.1",
+		},
+		{
+			name:         "http without header trusts load balancer forwarding headers",
+			scheme:       "http",
+			forwardedFor: "203.0.113.9",
+			wantClientIP: "203.0.113.9",
+			wantProxyIP:  "127.0.0.1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, terminal := startLoadBalancerTestServer(t, tt.scheme, config.ProtocolSettings{HTTP1: true})
 
 			conn, err := net.Dial("tcp", server.listener.Addr().String())
 			if err != nil {
@@ -365,20 +433,22 @@ func TestServerAppliesProxyProtocolHeader(t *testing.T) {
 			}
 			defer conn.Close()
 
-			if _, err := conn.Write(proxyProtocolV2Header(
-				proxyProtocolV2CommandProxy,
-				proxyProtocolV2TCPOverIPv4,
-				proxyProtocolV2Addresses(netip.MustParseAddrPort("203.0.113.7:51000"), netip.MustParseAddrPort("198.51.100.1:443")),
-				nil,
-			)); err != nil {
-				t.Fatalf("write header: %v", err)
+			if tt.headerClient != "" {
+				if _, err := conn.Write(proxyProtocolV2Header(
+					proxyProtocolV2CommandProxy,
+					proxyProtocolV2TCPOverIPv4,
+					proxyProtocolV2Addresses(netip.MustParseAddrPort(tt.headerClient), netip.MustParseAddrPort("198.51.100.1:443")),
+					nil,
+				)); err != nil {
+					t.Fatalf("write header: %v", err)
+				}
 			}
 
 			var stream net.Conn = conn
-			if scheme == "https" {
+			if tt.scheme == "https" {
 				stream = tls.Client(conn, &tls.Config{InsecureSkipVerify: true, ServerName: "example.com"})
 			}
-			if _, err := fmt.Fprint(stream, "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"); err != nil {
+			if _, err := fmt.Fprintf(stream, "GET / HTTP/1.1\r\nHost: example.com\r\nX-Forwarded-For: %s\r\n\r\n", tt.forwardedFor); err != nil {
 				t.Fatalf("write request: %v", err)
 			}
 			resp, err := http.ReadResponse(bufio.NewReader(stream), nil)
@@ -388,15 +458,45 @@ func TestServerAppliesProxyProtocolHeader(t *testing.T) {
 			resp.Body.Close()
 
 			r := <-terminal.requests
-			if r.RemoteAddr != "203.0.113.7:51000" {
-				t.Fatalf("got remote address %q, want the client from the header", r.RemoteAddr)
+			if got := middleware.GetClientIP(r); got != tt.wantClientIP {
+				t.Fatalf("got client IP %q, want %q", got, tt.wantClientIP)
 			}
-			if got := middleware.GetProxyProtocolPeer(r); got != "127.0.0.1" {
-				t.Fatalf("got proxy protocol peer %q, want 127.0.0.1", got)
+			if got := middleware.GetProxyIP(r); got != tt.wantProxyIP {
+				t.Fatalf("got proxy IP %q, want %q", got, tt.wantProxyIP)
 			}
-			if scheme == "https" && middleware.GetJA4Fingerprint(r) == "" {
+			if tt.scheme == "https" && middleware.GetJA4Fingerprint(r) == "" {
 				t.Fatal("expected the JA4 fingerprint to survive the PROXY protocol wrapper")
 			}
 		})
+	}
+}
+
+func TestServerIgnoresForwardingHeadersOverHTTP3FromLoadBalancer(t *testing.T) {
+	server, terminal := startLoadBalancerTestServer(t, "https", config.ProtocolSettings{HTTP3: true})
+
+	transport := &http3.Transport{TLSClientConfig: &tls.Config{
+		InsecureSkipVerify: true, // The server uses a generated test certificate.
+		ServerName:         "example.com",
+	}}
+	t.Cleanup(func() { transport.Close() })
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+
+	req, err := http.NewRequest(http.MethodGet, "https://"+server.udpConn.LocalAddr().String()+"/", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("X-Forwarded-For", "192.0.2.66")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("perform HTTP/3 request: %v", err)
+	}
+	resp.Body.Close()
+
+	r := <-terminal.requests
+	if got := middleware.GetClientIP(r); got != "127.0.0.1" {
+		t.Fatalf("got client IP %q, want the load balancer instead of the forwarded address", got)
+	}
+	if middleware.IsProxied(r) {
+		t.Fatalf("got proxied request via %q, want none", middleware.GetProxyIP(r))
 	}
 }
