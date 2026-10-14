@@ -9,6 +9,16 @@ release.
 
 ## [Unreleased]
 
+## [0.28.1]
+
+### Security
+
+- Fixed clients behind a layer 4 load balancer being able to set their address with `X-Forwarded-For` on HTTPS and HTTP/3. The PROXY protocol now trusts only load balancers listed in the new `trusted_proxies.proxy_protocol.ipnets`, instead of `trusted_proxies.ipnets`. On HTTPS and HTTP/3, forwarding headers on a connection from one of these load balancers are ignored when it sends no PROXY header, as on health checks or listeners without the PROXY protocol, because a load balancer that forwards TLS cannot add them. On HTTP, a load balancer that is also in `trusted_proxies.ipnets` keeps its `X-Forwarded-For` trust, so it can run port 80 in HTTP mode. After upgrading from 0.28.0, move load balancer addresses into `trusted_proxies.proxy_protocol.ipnets`; until then their PROXY headers are discarded. ([7f89ad7c](https://github.com/chieftools/flowguard-proxy/commit/7f89ad7c660b7a6a5335d0e9a946ca6dd186ca5f))
+
+### Fixed
+
+- Fixed requests without a `Host` header, such as HTTP/1.0 load balancer health checks, failing with 502 Bad Gateway. The upstream request now gets the bind address as its `Host`, without FlowGuard's listen port and with IPv6 addresses in brackets, so it reaches the backend's default server as it would without FlowGuard. Rules and logs still see the request as host-less, and no `X-Forwarded-Host` is sent for it. A forwarded IPv6 literal `Host` also keeps its brackets now. ([bc229186](https://github.com/chieftools/flowguard-proxy/commit/bc22918682dac3f7a8405e530b85d21aad7d3803))
+
 ## [0.28.0]
 
 ### Added
@@ -679,7 +689,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.28.1...HEAD
+[0.28.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.28.1
 [0.28.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.28.0
 [0.27.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.27.0
 [0.26.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.26.1
