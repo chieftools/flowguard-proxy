@@ -65,6 +65,9 @@ type ServerConfig struct {
 	transparentPool *transparentTransportPool
 	addressPairs    AddressPairResolution
 	upstreamHeaders *atomic.Pointer[config.UpstreamHeaderSettings]
+	// trustedProxy reports whether a peer may set the client address with a
+	// PROXY protocol header.
+	trustedProxy func(netip.Addr) bool
 }
 
 func NewServer(config *ServerConfig) *Server {
@@ -81,6 +84,12 @@ func NewServer(config *ServerConfig) *Server {
 }
 
 func (s *Server) serve(server *http.Server, listener net.Listener, tlsConfig *tls.Config, errChan chan<- error) {
+	listener = proxyProtocolListener{
+		Listener:      listener,
+		trusted:       s.config.trustedProxy,
+		headerTimeout: server.ReadTimeout,
+	}
+
 	if tlsConfig != nil {
 		listener = ja4Listener{Listener: listener}
 		listener = tls.NewListener(listener, tlsConfig)
@@ -108,6 +117,7 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	r = r.WithContext(middleware.ContextWithUpstreamTelemetry(r.Context()))
 	r = s.withJA4Fingerprint(r)
+	r = s.withProxyProtocolPeer(r)
 
 	// Create the proxy handler that will be called after middleware processing
 	proxyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -169,6 +179,19 @@ func (s *Server) withJA4Fingerprint(r *http.Request) *http.Request {
 
 	if ja4 := s.fingerprints.Get(localAddr.String(), r.RemoteAddr); ja4 != "" {
 		return middleware.WithJA4Fingerprint(r, ja4)
+	}
+
+	return r
+}
+
+func (s *Server) withProxyProtocolPeer(r *http.Request) *http.Request {
+	conn, ok := r.Context().Value(proxyProtocolConnContextKey{}).(*proxyProtocolConn)
+	if !ok {
+		return r
+	}
+
+	if peer, ok := conn.proxyPeer(); ok {
+		return middleware.WithProxyProtocolPeer(r, peer.String())
 	}
 
 	return r
@@ -486,7 +509,12 @@ func (s *Server) tcpConnContext(ctx context.Context, conn net.Conn) context.Cont
 	}
 
 	if ja4Conn, ok := conn.(*ja4Conn); ok {
-		return context.WithValue(ctx, ja4ConnContextKey{}, ja4Conn)
+		ctx = context.WithValue(ctx, ja4ConnContextKey{}, ja4Conn)
+		conn = ja4Conn.Conn
+	}
+
+	if proxyProtocolConn, ok := conn.(*proxyProtocolConn); ok {
+		ctx = context.WithValue(ctx, proxyProtocolConnContextKey{}, proxyProtocolConn)
 	}
 
 	return ctx

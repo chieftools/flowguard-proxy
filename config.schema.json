@@ -1034,11 +1034,11 @@
         },
         "trusted_proxies_config": {
             "type": "object",
-            "description": "Trusted proxy configuration for X-Forwarded-For processing",
+            "description": "Trusted proxy configuration for X-Forwarded-For and PROXY protocol processing",
             "properties": {
                 "ipnets": {
                     "type": "array",
-                    "description": "List of trusted proxy networks (CIDR notation or URLs)",
+                    "description": "List of trusted proxy networks (CIDR notation or URLs). Peers in these networks may set the client address with forwarding headers or a PROXY protocol header",
                     "minItems": 1,
                     "items": {
                         "type": "string",

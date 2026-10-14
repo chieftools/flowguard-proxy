@@ -27,6 +27,7 @@ and request filtering stay on the FlowGuard host.
   or NGINX configuration.
 - Supports canonical forwarding headers and same-host transparent client source
   addresses.
+- Accepts PROXY protocol v1 and v2 headers from trusted layer 4 load balancers.
 - Binds to multiple IPv4 and IPv6 addresses.
 - Removes FlowGuard-owned firewall and routing state during a clean shutdown.
 
@@ -596,6 +597,22 @@ Add the schema URL to your configuration:
 `trusted_proxies.header_auth` uses `FG-Trusted-Proxy-Secret` by default. The
 upstream proxy must strip client-supplied copies and set its own high-entropy
 value. Use `header_auth.header` only for a custom header name.
+
+#### PROXY protocol
+
+FlowGuard reads PROXY protocol v1 and v2 headers on its TCP listeners, so a
+layer 4 load balancer such as AWS NLB or HAProxy in TCP mode can pass the client
+address. Add the load balancer's addresses to `trusted_proxies.ipnets` and
+enable the PROXY protocol on the load balancer. `header_auth` does not apply,
+because the header arrives before any HTTP headers.
+
+The header is optional, so trusted HTTP proxies such as Cloudflare keep working
+without one. FlowGuard uses a header only when the TCP peer is in
+`trusted_proxies.ipnets`, and reads and discards one from any other peer. When a
+header is used, the load balancer is recorded as the immediate proxy
+(`proxy-ip`, `proxy-asn`, `proxy-iplist`). If the address in the header is
+itself a trusted proxy, FlowGuard reads the client from its forwarding headers
+as usual. HTTP/3 does not use the PROXY protocol.
 
 ### Actions
 

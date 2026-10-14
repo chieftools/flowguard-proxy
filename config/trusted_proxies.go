@@ -36,6 +36,11 @@ func (m *Manager) IsTrustedProxy(ip string) bool {
 		return false
 	}
 
+	return m.IsTrustedProxyAddr(addr)
+}
+
+// IsTrustedProxyAddr checks if an address is from a trusted proxy.
+func (m *Manager) IsTrustedProxyAddr(addr netip.Addr) bool {
 	m.mu.RLock()
 	set := m.trustedProxySet
 	m.mu.RUnlock()

@@ -917,6 +917,7 @@ func (p *Manager) startServers(protocols config.ProtocolSettings, advertiseHTTP3
 				transparentPool: p.transparentPool,
 				addressPairs:    p.addressPairs,
 				upstreamHeaders: p.upstreamHeaderSettings,
+				trustedProxy:    p.configManager.IsTrustedProxyAddr,
 			})
 			started = append(started, httpServer)
 
@@ -942,6 +943,7 @@ func (p *Manager) startServers(protocols config.ProtocolSettings, advertiseHTTP3
 			transparentPool: p.transparentPool,
 			addressPairs:    p.addressPairs,
 			upstreamHeaders: p.upstreamHeaderSettings,
+			trustedProxy:    p.configManager.IsTrustedProxyAddr,
 		})
 		started = append(started, httpsServer)
 

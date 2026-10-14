@@ -28,7 +28,32 @@ const (
 	ContextKeyProxyIP       contextKey = "proxyIP"
 	ContextKeyProxyASNInfo  contextKey = "proxyASNInfo"
 	ContextKeyIsProxied     contextKey = "isProxied"
+
+	// ContextKeyProxyProtocolPeer holds the trusted peer that set the
+	// connection's client address with a PROXY protocol header.
+	ContextKeyProxyProtocolPeer contextKey = "proxyProtocolPeer"
 )
+
+// WithProxyProtocolPeer records that r.RemoteAddr came from a PROXY protocol
+// header sent by the trusted peer peerIP.
+func WithProxyProtocolPeer(r *http.Request, peerIP string) *http.Request {
+	if peerIP == "" {
+		return r
+	}
+	return r.WithContext(context.WithValue(r.Context(), ContextKeyProxyProtocolPeer, peerIP))
+}
+
+// GetProxyProtocolPeer returns the trusted peer that sent the PROXY protocol
+// header for the request's connection, if any.
+func GetProxyProtocolPeer(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if peerIP, ok := r.Context().Value(ContextKeyProxyProtocolPeer).(string); ok {
+		return peerIP
+	}
+	return ""
+}
 
 // ASNInfo holds ASN information from the MMDB database
 type ASNInfo struct {
@@ -149,6 +174,22 @@ func (m *IPLookupMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 
 // extractIPs extracts the real client IP and proxy IP (if applicable) from the request
 func (m *IPLookupMiddleware) extractIPs(r *http.Request) (clientIP string, proxyIP string) {
+	clientIP, proxyIP = m.extractForwardedIPs(r)
+
+	// A PROXY protocol header replaced the peer address before the request was
+	// read, so the peer that sent it is the immediate proxy, even when the
+	// address it reported was itself a trusted proxy that sent forwarding
+	// headers.
+	if peerIP := GetProxyProtocolPeer(r); peerIP != "" {
+		proxyIP = peerIP
+	}
+
+	return clientIP, proxyIP
+}
+
+// extractForwardedIPs resolves the client IP from the request's remote address
+// and, for trusted proxies, its forwarding headers.
+func (m *IPLookupMiddleware) extractForwardedIPs(r *http.Request) (clientIP string, proxyIP string) {
 	// Get the immediate remote address
 	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
