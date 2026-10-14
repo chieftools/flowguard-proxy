@@ -9,6 +9,12 @@ release.
 
 ## [Unreleased]
 
+## [0.28.0]
+
+### Added
+
+- Added PROXY protocol v1 and v2 support on the HTTP and HTTPS listeners, so FlowGuard can run behind a layer 4 load balancer such as AWS NLB or HAProxy in TCP mode. A header sets the client address only when the load balancer is in `trusted_proxies.ipnets`, and the load balancer is then logged and matched as the proxy (`proxy-ip`, `proxy-asn`, `proxy-iplist`). The header is optional, so trusted proxies that do not send one keep working, and headers from other peers are discarded. ([5c3c3782](https://github.com/chieftools/flowguard-proxy/commit/5c3c378202c4354972f22c623d7464b5927c70af))
+
 ## [0.27.0]
 
 ### Added
@@ -673,7 +679,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.28.0
 [0.27.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.27.0
 [0.26.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.26.1
 [0.26.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.26.0
