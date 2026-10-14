@@ -92,6 +92,13 @@ ruleLoop:
 				SetRuleMatch(r, rule, action, "log")
 				continue
 
+			case "skip_log":
+				// Skip the log entry unless a later rule acts on the request
+				// or it fails. Evaluation continues, so later rules still
+				// apply.
+				SetSkipLog(r, rule)
+				continue
+
 			case "allow":
 				// Mark the rule as matched and allow the request
 				SetRuleMatch(r, rule, action, "proxy")

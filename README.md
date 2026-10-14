@@ -635,6 +635,7 @@ both for that reason. HTTP/3 does not use the PROXY protocol.
 | Action | Behavior |
 | --- | --- |
 | `log` | Records the match and continues to later rules. |
+| `skip_log` | Continues to later rules and leaves the request out of the logs, for noise such as load balancer health checks. The request is still logged if another rule logs, blocks, challenges or rate-limits it, or if the response status is 400 or higher, including aborted requests. |
 | `allow` | Allows the request and stops rule evaluation. |
 | `block` | Returns the configured status and message. |
 | `rate_limit` | Applies the configured request limit and time window per bucket. `partition_by` chooses the bucket dimensions (`client.ip`, `connection.id`, `request.fingerprint.ja4`, `request.url.domain`, `request.url.path`); omitted, each client gets its own bucket, and `[]` shares one bucket per rule. IPv6 clients are grouped by /64. |

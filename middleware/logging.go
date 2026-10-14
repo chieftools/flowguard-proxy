@@ -33,6 +33,7 @@ const (
 	ContextKeyRateLimitApplied  contextKey = "rate_limit_applied"
 	ContextKeyMiddlewareEndTime contextKey = "middleware_end_time"
 	ContextKeyFail2BanInfo      contextKey = "fail2ban_info"
+	ContextKeySkipLog           contextKey = "skip_log"
 )
 
 type RequestLogEntryIPInfo struct {
@@ -281,7 +282,7 @@ func (lm *LoggingMiddleware) logRequest(r *http.Request, wrapper *ResponseWriter
 	lm.mu.RLock()
 	defer lm.mu.RUnlock()
 
-	if !lm.enabled {
+	if !lm.enabled || shouldSkipLog(r, wrapper.StatusCode) {
 		return
 	}
 
@@ -415,6 +416,24 @@ func SetRuleMatch(r *http.Request, rule *config.Rule, action *config.RuleAction,
 	ctx = context.WithValue(ctx, ContextKeyAction, action)
 	ctx = context.WithValue(ctx, ContextKeyRuleResult, result)
 	*r = *r.WithContext(ctx)
+}
+
+// SetSkipLog marks a request whose log entry is skipped if it ends up proxied
+// with a successful response.
+func SetSkipLog(r *http.Request, rule *config.Rule) {
+	ctx := context.WithValue(r.Context(), ContextKeySkipLog, rule)
+	*r = *r.WithContext(ctx)
+}
+
+// shouldSkipLog reports whether a request marked by a skip_log rule can go
+// unlogged. A request that another rule logged, blocked, challenged or rate
+// limited, or that failed, is always logged, so skipping never hides
+// enforcement or errors.
+func shouldSkipLog(r *http.Request, status int) bool {
+	if _, ok := r.Context().Value(ContextKeySkipLog).(*config.Rule); !ok {
+		return false
+	}
+	return GetRuleResult(r) == "proxy" && status < http.StatusBadRequest
 }
 
 func SetRuleResult(r *http.Request, result string) {

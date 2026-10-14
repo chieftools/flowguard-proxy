@@ -434,12 +434,13 @@
                     "type": "string",
                     "enum": [
                         "log",
+                        "skip_log",
                         "allow",
                         "block",
                         "rate_limit",
                         "challenge"
                     ],
-                    "description": "The type of action to take."
+                    "description": "The type of action to take. skip_log continues rule evaluation and leaves the request out of the logs if it is proxied with a status below 400 and no other rule logs, blocks, challenges or rate limits it."
                 },
                 "status": {
                     "type": "integer",

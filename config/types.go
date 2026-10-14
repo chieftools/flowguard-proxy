@@ -172,7 +172,7 @@ type Rule struct {
 type RuleAction struct {
 	ID                string                     // Action ID from the map key
 	Name              string                     `json:"name"`
-	Action            string                     `json:"action"`                        // "log", "allow", "block", "rate_limit", or "challenge"
+	Action            string                     `json:"action"`                        // "log", "skip_log", "allow", "block", "rate_limit", or "challenge"
 	Status            int                        `json:"status,omitempty"`              // HTTP status code (for block actions)
 	Message           string                     `json:"message,omitempty"`             // Response message (for block actions)
 	WindowSeconds     int                        `json:"window_seconds,omitempty"`      // Time window in seconds (for rate_limit actions)
