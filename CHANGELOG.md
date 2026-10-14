@@ -9,6 +9,12 @@ release.
 
 ## [Unreleased]
 
+## [0.28.2]
+
+### Added
+
+- Added a `skip_log` action that leaves matching requests out of the request logs, for noise such as load balancer health checks. Rule evaluation continues, so later rules still apply. A matched request is still logged if another rule logs, blocks, challenges or rate-limits it, or if its response status is 400 or higher, so failing health checks stay visible. ([162587b3](https://github.com/chieftools/flowguard-proxy/commit/162587b380c852b18a66d14f443898e08d8f56fc))
+
 ## [0.28.1]
 
 ### Security
@@ -689,7 +695,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.28.1...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.28.2...HEAD
+[0.28.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.28.2
 [0.28.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.28.1
 [0.28.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.28.0
 [0.27.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.27.0
