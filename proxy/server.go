@@ -125,6 +125,14 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		if host, _, err := net.SplitHostPort(r.Host); err == nil {
 			proxyHost = host
 		}
+		if proxyHost == "" {
+			// HTTP/1.0 clients such as load balancer health checks may omit
+			// Host, but the upstream request needs one. The bind address
+			// reaches the backend's default server, as the request would
+			// without FlowGuard. It never carries FlowGuard's listen port, so
+			// absolute URLs built from it do not point at that port.
+			proxyHost = s.upstreamHost()
+		}
 
 		// Keep the requested host in the upstream URL for Host/SNI while
 		// the transport dials the configured local upstream address.
@@ -230,7 +238,7 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 			out.URL.Host = maybeFormatV6Addr(proxyHost)
 			out.URL.Scheme = target.Scheme
 			out.URL.RawQuery = proxyRequest.In.URL.RawQuery
-			out.Host = proxyHost
+			out.Host = maybeFormatV6Addr(proxyHost)
 
 			clientIP := canonicalRequestClientIP(proxyRequest.In)
 			stripForwardingHeaders(out.Header)
@@ -238,7 +246,9 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 				out.Header.Set("X-Forwarded-For", clientIP)
 				out.Header.Set("X-Real-IP", clientIP)
 			}
-			out.Header.Set("X-Forwarded-Host", proxyRequest.In.Host)
+			if proxyRequest.In.Host != "" {
+				out.Header.Set("X-Forwarded-Host", proxyRequest.In.Host)
+			}
 			out.Header.Set("X-Forwarded-Proto", s.config.scheme)
 			headers := s.upstreamHeaderSettings()
 			if headers.StreamID {

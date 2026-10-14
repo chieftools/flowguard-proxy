@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ecdsa"
@@ -1361,4 +1362,114 @@ func mustNewRequest(t *testing.T, method, url string, body io.Reader) *http.Requ
 
 func retryableDialError(errno syscall.Errno) error {
 	return fmt.Errorf("dial tcp: connect: %w", errno)
+}
+
+func TestReverseProxyGivesHostlessRequestsTheBindAddress(t *testing.T) {
+	tests := []struct {
+		name            string
+		bindAddr        string
+		request         string
+		wantHost        string
+		wantForwardHost string
+	}{
+		{
+			name:     "HTTP/1.0 without Host",
+			bindAddr: "127.0.0.1",
+			request:  "GET /healthz HTTP/1.0\r\n\r\n",
+			wantHost: "127.0.0.1",
+		},
+		{
+			name:     "HTTP/1.0 with empty Host",
+			bindAddr: "127.0.0.1",
+			request:  "GET /healthz HTTP/1.0\r\nHost:\r\n\r\n",
+			wantHost: "127.0.0.1",
+		},
+		{
+			name:     "HTTP/1.1 with empty Host",
+			bindAddr: "127.0.0.1",
+			request:  "GET /healthz HTTP/1.1\r\nHost:\r\nConnection: close\r\n\r\n",
+			wantHost: "127.0.0.1",
+		},
+		{
+			name:     "HTTP/1.0 without Host on IPv6",
+			bindAddr: "::1",
+			request:  "GET /healthz HTTP/1.0\r\n\r\n",
+			wantHost: "[::1]",
+		},
+		{
+			name:            "IPv6 literal Host keeps its brackets",
+			bindAddr:        "127.0.0.1",
+			request:         "GET /healthz HTTP/1.1\r\nHost: [2001:db8::1]:11080\r\nConnection: close\r\n\r\n",
+			wantHost:        "[2001:db8::1]",
+			wantForwardHost: "[2001:db8::1]:11080",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			type upstreamRequest struct {
+				host, forwardedHost string
+				hasForwardedHost    bool
+			}
+			received := make(chan upstreamRequest, 1)
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				received <- upstreamRequest{
+					host:             r.Host,
+					forwardedHost:    r.Header.Get("X-Forwarded-Host"),
+					hasForwardedHost: len(r.Header.Values("X-Forwarded-Host")) > 0,
+				}
+				io.WriteString(w, "pong")
+			}))
+			defer backend.Close()
+
+			server := NewServer(&ServerConfig{scheme: "http", bindAddr: tt.bindAddr, bindPort: "0", middleware: middleware.NewChain()})
+			backendTransport := &http.Transport{
+				DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+					return (&net.Dialer{}).DialContext(ctx, network, backend.Listener.Addr().String())
+				},
+			}
+			t.Cleanup(backendTransport.CloseIdleConnections)
+			server.upstreamTransport = &upstreamRetryTransport{server: server, next: backendTransport}
+			if err := server.Start(nil, make(chan error, 1)); err != nil {
+				if strings.Contains(tt.bindAddr, ":") {
+					t.Skipf("IPv6 loopback unavailable: %v", err)
+				}
+				t.Fatalf("start server: %v", err)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				server.Shutdown(ctx)
+			})
+
+			conn, err := net.Dial("tcp", server.listener.Addr().String())
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			defer conn.Close()
+			if _, err := io.WriteString(conn, tt.request); err != nil {
+				t.Fatalf("write request: %v", err)
+			}
+			resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+			if err != nil {
+				t.Fatalf("read response: %v", err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK || string(body) != "pong" {
+				t.Fatalf("got %d %q, want 200 pong", resp.StatusCode, body)
+			}
+
+			got := <-received
+			if got.host != tt.wantHost {
+				t.Fatalf("got upstream Host %q, want %q", got.host, tt.wantHost)
+			}
+			if tt.wantForwardHost == "" && got.hasForwardedHost {
+				t.Fatalf("got X-Forwarded-Host %q, want none for a host-less request", got.forwardedHost)
+			}
+			if tt.wantForwardHost != "" && got.forwardedHost != tt.wantForwardHost {
+				t.Fatalf("got X-Forwarded-Host %q, want %q", got.forwardedHost, tt.wantForwardHost)
+			}
+		})
+	}
 }

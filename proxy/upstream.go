@@ -622,11 +622,16 @@ func newUpstreamDialer(source string, pinSource bool) *net.Dialer {
 }
 
 func (s *Server) upstreamAddress() string {
+	return net.JoinHostPort(s.upstreamHost(), s.upstreamPort())
+}
+
+// upstreamHost returns the bind address without brackets.
+func (s *Server) upstreamHost() string {
 	host := s.config.bindAddr
 	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
 		host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
 	}
-	return net.JoinHostPort(host, s.upstreamPort())
+	return host
 }
 
 func (s *Server) upstreamPort() string {
