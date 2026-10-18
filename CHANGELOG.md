@@ -12,6 +12,11 @@ release.
 ### Added
 
 - Added a Caddy plugin that runs FlowGuard inside Caddy instead of in front of it. Build it with `xcaddy build --with go.chief.tools/flowguard-proxy/caddy`. Caddy keeps listening, terminating TLS with its own certificates and storage, and proxying. FlowGuard evaluates rules, writes request logs, and stays connected to the control panel. Use the `flowguard` global option with a host key (`key {$FLOWGUARD_KEY}`) or a configuration file, and add the `flowguard` directive to each site. List the `flowguard` listener wrapper before `tls` to get JA4 fingerprints for HTTP/1.1 and HTTP/2. A `caddy reload` keeps rate limits, log buffers and the control panel connection. See [Run inside Caddy](README.md#run-inside-caddy). ([d84a0547](https://github.com/chieftools/flowguard-proxy/commit/d84a054727f5ac0d4c53e41aa7223bc13c8a87ba))
+- Added an instance ID, so several instances can share one host key, such as the machines of a Fly.io app or the replicas of a container deployment. FlowGuard takes it from `FLOWGUARD_INSTANCE_ID`, then `FLY_MACHINE_ID`, then the hostname. It is sent to the control panel and the ingest gateway, and logged as `host.instance`. Heartbeats also report the hostname and region (`FLOWGUARD_REGION` or `FLY_REGION`), and an instance tells the control panel when it shuts down. ([d43784f4](https://github.com/chieftools/flowguard-proxy/commit/d43784f4b0ec87a0f077fdfdc783255da23ecdbb))
+
+### Fixed
+
+- Fixed heartbeats from the Caddy plugin sending `bind_addresses` as `null`, which the control panel rejected. An empty list is now sent. ([d43784f4](https://github.com/chieftools/flowguard-proxy/commit/d43784f4b0ec87a0f077fdfdc783255da23ecdbb))
 
 ## [0.28.2]
 
