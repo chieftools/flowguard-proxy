@@ -41,6 +41,9 @@ type RequestLogEntryIPInfo struct {
 	IP            string `json:"ip"`
 	NetworkPrefix string `json:"network_prefix,omitempty"`
 	Country       string `json:"country,omitempty"`
+	// StreamID is the Stream ID a FlowGuard acting as the proxy assigned to
+	// the request, so its log entry can be found. It is only set for proxies.
+	StreamID string `json:"stream_id,omitempty"`
 
 	AS *RequestLogEntryIPASInfo `json:"as,omitempty"`
 }
@@ -575,7 +578,8 @@ func getRuleInfo(r *http.Request) RequestLogEntryRuleInfo {
 
 func getProxyInfo(r *http.Request) *RequestLogEntryIPInfo {
 	proxyInfo := RequestLogEntryIPInfo{
-		IP: GetProxyIP(r),
+		IP:       GetProxyIP(r),
+		StreamID: GetProxyStreamID(r),
 	}
 
 	if proxyInfo.IP == "" {

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -382,5 +383,119 @@ func TestExtractIPsIgnoresForwardingHeadersMarkedUntrusted(t *testing.T) {
 				t.Fatalf("expected trusted proxy auth header to be stripped, got %q", got)
 			}
 		})
+	}
+}
+
+func TestIPLookupRecordsStreamIDFromForwardingProxy(t *testing.T) {
+	manager := newIPLookupTestConfigManager(t, `{
+  "ipnets": ["198.51.100.10"],
+  "header_auth": {
+    "values": ["proxy-secret"]
+  }
+}`)
+	ipLookup := &IPLookupMiddleware{configMgr: manager}
+
+	tests := []struct {
+		name          string
+		remoteAddr    string
+		proxyPeer     string
+		headerSecret  bool
+		streamIDs     []string
+		wantStreamID  string
+		wantProxiedIP string
+	}{
+		{
+			name:          "proxy trusted by header secret",
+			remoteAddr:    "192.0.2.20:51000",
+			headerSecret:  true,
+			streamIDs:     []string{"5dbf71a28e7feb02"},
+			wantStreamID:  "5dbf71a28e7feb02",
+			wantProxiedIP: "192.0.2.20",
+		},
+		{
+			name:          "proxy trusted by address",
+			remoteAddr:    "198.51.100.10:51000",
+			streamIDs:     []string{"5dbf71a28e7feb02"},
+			wantStreamID:  "5dbf71a28e7feb02",
+			wantProxiedIP: "198.51.100.10",
+		},
+		{
+			name:       "untrusted client",
+			remoteAddr: "203.0.113.9:51000",
+			streamIDs:  []string{"5dbf71a28e7feb02"},
+		},
+		{
+			name:          "load balancer without trusted forwarding headers",
+			remoteAddr:    "203.0.113.9:51000",
+			proxyPeer:     "10.0.0.5",
+			streamIDs:     []string{"5dbf71a28e7feb02"},
+			wantProxiedIP: "10.0.0.5",
+		},
+		{
+			name:          "repeated header",
+			remoteAddr:    "198.51.100.10:51000",
+			streamIDs:     []string{"5dbf71a28e7feb02", "ab5d7ef259a2957a"},
+			wantProxiedIP: "198.51.100.10",
+		},
+		{
+			name:          "not a stream ID",
+			remoteAddr:    "198.51.100.10:51000",
+			streamIDs:     []string{`5dbf71a2" injected`},
+			wantProxiedIP: "198.51.100.10",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+			req.RemoteAddr = tt.remoteAddr
+			req.Header.Set("X-Forwarded-For", "203.0.113.50")
+			for _, streamID := range tt.streamIDs {
+				req.Header.Add("FG-Stream", streamID)
+			}
+			if tt.headerSecret {
+				req.Header.Set(config.DefaultTrustedProxyHeaderAuthHeader, "proxy-secret")
+			}
+			if tt.proxyPeer != "" {
+				req = WithProxyProtocolPeer(req, tt.proxyPeer)
+			}
+
+			var gotStreamID, gotProxyIP string
+			ipLookup.Handle(httptest.NewRecorder(), req, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotStreamID = GetProxyStreamID(r)
+				gotProxyIP = GetProxyIP(r)
+			}))
+
+			if gotStreamID != tt.wantStreamID {
+				t.Fatalf("proxy stream ID = %q, want %q", gotStreamID, tt.wantStreamID)
+			}
+			if gotProxyIP != tt.wantProxiedIP {
+				t.Fatalf("proxy IP = %q, want %q", gotProxyIP, tt.wantProxiedIP)
+			}
+		})
+	}
+}
+
+func TestProxyLogInfoIncludesForwardingProxyStreamID(t *testing.T) {
+	manager := newIPLookupTestConfigManager(t, `{"ipnets": ["198.51.100.10"]}`)
+	ipLookup := &IPLookupMiddleware{configMgr: manager}
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+	req.RemoteAddr = "198.51.100.10:51000"
+	req.Header.Set("X-Forwarded-For", "203.0.113.50")
+	req.Header.Set("FG-Stream", "5dbf71a28e7feb02")
+
+	var encoded []byte
+	ipLookup.Handle(httptest.NewRecorder(), req, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The proxy replaces FG-Stream with its own Stream ID before the
+		// request is logged, so the captured value must not depend on it.
+		r.Header.Set("FG-Stream", "ffffffffffffffff")
+		var err error
+		if encoded, err = json.Marshal(getProxyInfo(r)); err != nil {
+			t.Fatalf("marshal proxy info: %v", err)
+		}
+	}))
+
+	if want := `{"ip":"198.51.100.10","stream_id":"5dbf71a28e7feb02"}`; string(encoded) != want {
+		t.Fatalf("proxy log info = %s, want %s", encoded, want)
 	}
 }

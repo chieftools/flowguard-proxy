@@ -441,6 +441,13 @@ enabled by default and can be turned off for backend requests under
 Changes apply without a restart. Responses to the client always include
 `FG-Stream`, whatever these settings are.
 
+When FlowGuard runs behind another FlowGuard, for example the Caddy plugin at
+the edge in front of a FlowGuard on the origin, the response carries both
+Stream IDs, edge first. The origin logs the edge's Stream ID at
+`proxy.stream_id`, so you can find the same request in both logs. FlowGuard
+only takes this value from proxies it trusts for forwarding headers, through
+`trusted_proxies.ipnets` or `trusted_proxies.header_auth`.
+
 ## Fail2Ban integration
 
 On Linux hosts, FlowGuard can mirror the addresses currently banned by every

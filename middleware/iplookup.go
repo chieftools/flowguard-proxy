@@ -29,6 +29,10 @@ const (
 	ContextKeyProxyASNInfo  contextKey = "proxyASNInfo"
 	ContextKeyIsProxied     contextKey = "isProxied"
 
+	// ContextKeyProxyStreamID holds the Stream ID that a FlowGuard in front of
+	// this one assigned to the request, from a trusted proxy's FG-Stream header.
+	ContextKeyProxyStreamID contextKey = "proxyStreamID"
+
 	// ContextKeyProxyProtocolPeer holds the trusted peer that set the
 	// connection's client address with a PROXY protocol header.
 	ContextKeyProxyProtocolPeer contextKey = "proxyProtocolPeer"
@@ -158,7 +162,7 @@ func (m *IPLookupMiddleware) loadASNDatabase() error {
 // Handle enriches the request with IP and ASN information using HTTP middleware pattern
 func (m *IPLookupMiddleware) Handle(w http.ResponseWriter, r *http.Request, next http.Handler) {
 	// Extract the real client IP considering trusted proxies
-	clientIP, proxyIP := m.extractIPs(r)
+	clientIP, proxyIP, forwardingProxyIP := m.resolveIPs(r)
 
 	// Create a new context with IP information
 	ctx := r.Context()
@@ -180,6 +184,15 @@ func (m *IPLookupMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 		if proxyASNInfo := m.lookupASN(proxyIP); proxyASNInfo != nil {
 			ctx = context.WithValue(ctx, ContextKeyProxyASNInfo, proxyASNInfo)
 		}
+
+		// Only a proxy trusted for its forwarding headers vouches for FG-Stream.
+		// A PROXY protocol load balancer does not set it, so on its own there
+		// the header came from the client.
+		if forwardingProxyIP != "" {
+			if streamID := forwardedStreamID(r); streamID != "" {
+				ctx = context.WithValue(ctx, ContextKeyProxyStreamID, streamID)
+			}
+		}
 	} else {
 		ctx = context.WithValue(ctx, ContextKeyIsProxied, false)
 	}
@@ -190,7 +203,16 @@ func (m *IPLookupMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 
 // extractIPs extracts the real client IP and proxy IP (if applicable) from the request
 func (m *IPLookupMiddleware) extractIPs(r *http.Request) (clientIP string, proxyIP string) {
-	clientIP, proxyIP = m.extractForwardedIPs(r)
+	clientIP, proxyIP, _ = m.resolveIPs(r)
+	return clientIP, proxyIP
+}
+
+// resolveIPs is extractIPs that also returns the proxy whose forwarding
+// headers were trusted, which is empty when only a PROXY protocol header set
+// the client address.
+func (m *IPLookupMiddleware) resolveIPs(r *http.Request) (clientIP, proxyIP, forwardingProxyIP string) {
+	clientIP, forwardingProxyIP = m.extractForwardedIPs(r)
+	proxyIP = forwardingProxyIP
 
 	// A PROXY protocol header replaced the peer address before the request was
 	// read, so the peer that sent it is the immediate proxy, even when the
@@ -200,7 +222,28 @@ func (m *IPLookupMiddleware) extractIPs(r *http.Request) (clientIP string, proxy
 		proxyIP = peerIP
 	}
 
-	return clientIP, proxyIP
+	return clientIP, proxyIP, forwardingProxyIP
+}
+
+// forwardedStreamID returns the FG-Stream value a FlowGuard in front of this
+// one set, or "" when it is missing, repeated or not a Stream ID.
+func forwardedStreamID(r *http.Request) string {
+	values := r.Header.Values("FG-Stream")
+	if len(values) != 1 {
+		return ""
+	}
+
+	streamID := strings.TrimSpace(values[0])
+	if len(streamID) == 0 || len(streamID) > 64 {
+		return ""
+	}
+	for _, c := range streamID {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return ""
+		}
+	}
+
+	return streamID
 }
 
 // extractForwardedIPs resolves the client IP from the request's remote address
@@ -423,6 +466,15 @@ func GetClientASN(r *http.Request) *ASNInfo {
 func GetProxyIP(r *http.Request) string {
 	if ip, ok := r.Context().Value(ContextKeyProxyIP).(string); ok {
 		return ip
+	}
+	return ""
+}
+
+// GetProxyStreamID returns the Stream ID that a FlowGuard in front of this one
+// assigned to the request, or "" when it did not come through one.
+func GetProxyStreamID(r *http.Request) string {
+	if streamID, ok := r.Context().Value(ContextKeyProxyStreamID).(string); ok {
+		return streamID
 	}
 	return ""
 }
