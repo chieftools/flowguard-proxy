@@ -9,6 +9,8 @@ release.
 
 ## [Unreleased]
 
+## [0.29.0]
+
 ### Added
 
 - Added a Caddy plugin that runs FlowGuard inside Caddy instead of in front of it. Build it with `xcaddy build --with go.chief.tools/flowguard-proxy/caddy`. Caddy keeps listening, terminating TLS with its own certificates and storage, and proxying. FlowGuard evaluates rules, writes request logs, and stays connected to the control panel. Use the `flowguard` global option with a host key (`key {$FLOWGUARD_KEY}`) or a configuration file, and add the `flowguard` directive to each site. List the `flowguard` listener wrapper before `tls` to get JA4 fingerprints for HTTP/1.1 and HTTP/2. A `caddy reload` keeps rate limits, log buffers and the control panel connection. See [Run inside Caddy](README.md#run-inside-caddy). ([d84a0547](https://github.com/chieftools/flowguard-proxy/commit/d84a054727f5ac0d4c53e41aa7223bc13c8a87ba))
@@ -704,7 +706,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.28.2...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.29.0
 [0.28.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.28.2
 [0.28.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.28.1
 [0.28.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.28.0
