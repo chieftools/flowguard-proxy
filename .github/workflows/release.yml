@@ -52,6 +52,23 @@ jobs:
           printf 'VERSION=%s\n' "${VERSION}" >> "${GITHUB_OUTPUT}"
           echo "Building version: ${VERSION}"
 
+      - name: Verify Caddy plugin release
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          # Builds outside this repository ignore caddy/go.mod's replace, so the
+          # plugin must require the root module at this release (bin/release.sh).
+          required="$(cd caddy && go list -m -f '{{.Version}}' go.chief.tools/flowguard-proxy)"
+          if [ "${required}" != "v${RELEASE_VERSION}" ]; then
+            echo "::error::caddy/go.mod requires go.chief.tools/flowguard-proxy ${required}, expected v${RELEASE_VERSION}. Release with bin/release.sh."
+            exit 1
+          fi
+
+          caddy_tag="caddy/v${RELEASE_VERSION}"
+          if [ "$(git rev-parse -q --verify "refs/tags/${caddy_tag}^{commit}" || true)" != "$(git rev-parse HEAD)" ]; then
+            echo "::error::Tag ${caddy_tag} does not point at this release's commit. Release with bin/release.sh."
+            exit 1
+          fi
+
       - name: Prepare release notes
         if: startsWith(github.ref, 'refs/tags/')
         env:
