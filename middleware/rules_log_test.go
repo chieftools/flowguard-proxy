@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 func TestRulesMiddleware_LogAction_Basic(t *testing.T) {

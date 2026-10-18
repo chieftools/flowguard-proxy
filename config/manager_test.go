@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"flowguard/api"
+	"go.chief.tools/flowguard-proxy/api"
 )
 
 func TestRemoveOnChangeStopsCallbackFromRunning(t *testing.T) {

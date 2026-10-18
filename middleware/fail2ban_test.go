@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"flowguard/logger"
+	"go.chief.tools/flowguard-proxy/logger"
 )
 
 type staticFail2BanMatcher map[string][]string

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 func tlsNextProtos(settings config.ProtocolSettings) []string {

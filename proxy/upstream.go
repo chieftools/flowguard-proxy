@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"flowguard/middleware"
+	"go.chief.tools/flowguard-proxy/middleware"
 )
 
 const (

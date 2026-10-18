@@ -5,8 +5,8 @@ import (
 	"log"
 	"os"
 
-	"flowguard/certmanager"
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/certmanager"
+	"go.chief.tools/flowguard-proxy/config"
 
 	"github.com/spf13/cobra"
 )

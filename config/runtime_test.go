@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"flowguard/api"
+	"go.chief.tools/flowguard-proxy/api"
 )
 
 func TestShouldReloadConfig(t *testing.T) {

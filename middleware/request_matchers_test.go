@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"testing"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 func TestMethodMatcher(t *testing.T) {

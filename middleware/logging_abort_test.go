@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"flowguard/logger"
+	"go.chief.tools/flowguard-proxy/logger"
 )
 
 func TestLoggingMiddlewareRecordsDeliberatelyAbortedRequest(t *testing.T) {

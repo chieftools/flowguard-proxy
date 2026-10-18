@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"flowguard/fail2ban"
+	"go.chief.tools/flowguard-proxy/fail2ban"
 
 	"github.com/spf13/cobra"
 )

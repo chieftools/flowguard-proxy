@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"flowguard/cmd"
+	"go.chief.tools/flowguard-proxy/cmd"
 )
 
 var Version string

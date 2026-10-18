@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"testing"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 func TestEvaluateMatch_QueryParamSeesPairsGoWouldDrop(t *testing.T) {

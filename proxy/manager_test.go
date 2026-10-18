@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"flowguard/certmanager"
-	"flowguard/config"
-	"flowguard/fail2ban"
-	"flowguard/middleware"
-	"flowguard/updater"
+	"go.chief.tools/flowguard-proxy/certmanager"
+	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/fail2ban"
+	"go.chief.tools/flowguard-proxy/middleware"
+	"go.chief.tools/flowguard-proxy/updater"
 )
 
 func boolPtr(v bool) *bool {

@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 // TestHeaderMatching tests the new header matching functionality with the Key field

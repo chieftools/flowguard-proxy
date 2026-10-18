@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"flowguard/config"
-	"flowguard/normalization"
+	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/normalization"
 )
 
 //go:embed static/blocked.html

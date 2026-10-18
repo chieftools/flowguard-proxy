@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"flowguard/iplist"
+	"go.chief.tools/flowguard-proxy/iplist"
 )
 
 type Options struct {

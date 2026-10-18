@@ -3,7 +3,7 @@ package config
 import (
 	"regexp"
 
-	"flowguard/pusher"
+	"go.chief.tools/flowguard-proxy/pusher"
 )
 
 // Config represents the complete application configuration

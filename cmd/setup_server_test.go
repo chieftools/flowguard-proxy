@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"flowguard/config"
-	"flowguard/proxy"
+	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/proxy"
 )
 
 func TestPromptSetupServerConfigurationDefaultsToTransparentWhenReady(t *testing.T) {

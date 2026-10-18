@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"flowguard/api"
-	"flowguard/certmanager"
-	"flowguard/config"
-	"flowguard/fail2ban"
-	"flowguard/proxy"
+	"go.chief.tools/flowguard-proxy/api"
+	"go.chief.tools/flowguard-proxy/certmanager"
+	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/fail2ban"
+	"go.chief.tools/flowguard-proxy/proxy"
 
 	"github.com/spf13/cobra"
 )

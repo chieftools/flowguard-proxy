@@ -10,8 +10,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"flowguard/cache"
-	"flowguard/iplist"
+	"go.chief.tools/flowguard-proxy/cache"
+	"go.chief.tools/flowguard-proxy/iplist"
 )
 
 func TestTrustedProxySetDeduplicatesLocalEntries(t *testing.T) {

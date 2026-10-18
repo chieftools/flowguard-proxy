@@ -13,15 +13,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"flowguard/api"
-	"flowguard/certmanager"
-	"flowguard/config"
-	"flowguard/fail2ban"
-	"flowguard/iplist"
-	"flowguard/logger"
-	"flowguard/middleware"
-	"flowguard/systemdnotify"
-	"flowguard/updater"
+	"go.chief.tools/flowguard-proxy/api"
+	"go.chief.tools/flowguard-proxy/certmanager"
+	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/fail2ban"
+	"go.chief.tools/flowguard-proxy/iplist"
+	"go.chief.tools/flowguard-proxy/logger"
+	"go.chief.tools/flowguard-proxy/middleware"
+	"go.chief.tools/flowguard-proxy/systemdnotify"
+	"go.chief.tools/flowguard-proxy/updater"
 )
 
 // DefaultShutdownTimeout is how long servers drain in-flight requests on

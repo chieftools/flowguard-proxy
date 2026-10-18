@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"flowguard/iplist"
+	"go.chief.tools/flowguard-proxy/iplist"
 )
 
 const runtimeActionName = "flowguard-runtime"

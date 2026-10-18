@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"flowguard/config"
-	"flowguard/logger"
-	"flowguard/normalization"
+	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/logger"
+	"go.chief.tools/flowguard-proxy/normalization"
 
 	"github.com/oklog/ulid/v2"
 )

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"flowguard/config"
-	"flowguard/logger"
+	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/logger"
 )
 
 func skipLogTestRule(id, action string, sortOrder int, path string) *config.Rule {

@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 func TestTLSNextProtosReflectConfiguredProtocols(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 type fakeFirewallRunner struct {

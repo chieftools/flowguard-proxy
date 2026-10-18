@@ -12,7 +12,7 @@ import (
 	"testing/synctest"
 	"time"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 func newConditionTestRequest(path string) *http.Request {

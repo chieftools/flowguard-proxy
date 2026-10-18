@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"flowguard/api"
+	"go.chief.tools/flowguard-proxy/api"
 )
 
 func writeTestConfig(t *testing.T, body string) string {

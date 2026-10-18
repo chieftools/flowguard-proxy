@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"flowguard/config"
-	"flowguard/middleware"
+	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/middleware"
 )
 
 func TestTransparentUpstreamRouteUsesMatchingAndPairedFamilies(t *testing.T) {

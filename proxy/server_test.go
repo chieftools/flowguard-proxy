@@ -25,8 +25,8 @@ import (
 	"testing"
 	"time"
 
-	"flowguard/config"
-	"flowguard/middleware"
+	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/middleware"
 
 	"github.com/quic-go/quic-go/http3"
 )

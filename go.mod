@@ -1,4 +1,4 @@
-module flowguard
+module go.chief.tools/flowguard-proxy
 
 go 1.27.1
 

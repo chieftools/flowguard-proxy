@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"flowguard/iplist"
+	"go.chief.tools/flowguard-proxy/iplist"
 )
 
 const DefaultEventSocketPath = "/run/flowguard/fail2ban.sock"

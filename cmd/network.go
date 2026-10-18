@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"flowguard/proxy"
+	"go.chief.tools/flowguard-proxy/proxy"
 
 	"github.com/spf13/cobra"
 )

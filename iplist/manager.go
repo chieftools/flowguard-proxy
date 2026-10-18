@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"flowguard/cache"
+	"go.chief.tools/flowguard-proxy/cache"
 )
 
 // ListConfig represents configuration for a single IP list

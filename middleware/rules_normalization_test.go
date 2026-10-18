@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 // mockConfigManager implements a simple mock for testing

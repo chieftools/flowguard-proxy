@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"flowguard/cache"
+	"go.chief.tools/flowguard-proxy/cache"
 )
 
 func TestGetIPDatabaseRefreshInterval(t *testing.T) {

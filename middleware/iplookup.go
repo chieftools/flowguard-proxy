@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 
 	"github.com/oschwald/maxminddb-golang"
 )

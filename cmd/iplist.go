@@ -7,9 +7,9 @@ import (
 	"runtime"
 	"time"
 
-	"flowguard/cache"
-	"flowguard/config"
-	"flowguard/iplist"
+	"go.chief.tools/flowguard-proxy/cache"
+	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/iplist"
 
 	"github.com/spf13/cobra"
 )

@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"flowguard/cache"
+	"go.chief.tools/flowguard-proxy/cache"
 
 	"github.com/spf13/cobra"
 )

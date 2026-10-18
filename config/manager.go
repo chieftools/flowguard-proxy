@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"flowguard/api"
-	"flowguard/cache"
-	"flowguard/iplist"
-	"flowguard/pusher"
+	"go.chief.tools/flowguard-proxy/api"
+	"go.chief.tools/flowguard-proxy/cache"
+	"go.chief.tools/flowguard-proxy/iplist"
+	"go.chief.tools/flowguard-proxy/pusher"
 
 	"github.com/fsnotify/fsnotify"
 )

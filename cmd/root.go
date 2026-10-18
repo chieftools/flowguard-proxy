@@ -1,10 +1,11 @@
 package cmd
 
 import (
-	"flowguard/config"
 	"fmt"
 	"log"
 	"os"
+
+	"go.chief.tools/flowguard-proxy/config"
 
 	"github.com/spf13/cobra"
 )

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"flowguard/normalization"
+	"go.chief.tools/flowguard-proxy/normalization"
 )
 
 const (

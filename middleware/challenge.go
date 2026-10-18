@@ -20,8 +20,8 @@ import (
 	"syscall"
 	"time"
 
-	"flowguard/config"
-	"flowguard/normalization"
+	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/normalization"
 
 	"golang.org/x/crypto/pbkdf2"
 )

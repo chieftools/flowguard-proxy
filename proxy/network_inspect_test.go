@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 type inspectionCommandResult struct {

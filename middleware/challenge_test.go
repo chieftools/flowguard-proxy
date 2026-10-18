@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 type challengeMockConfigProvider struct {

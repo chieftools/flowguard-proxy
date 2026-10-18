@@ -7,7 +7,7 @@ import (
 	"os"
 	"sort"
 
-	"flowguard/iplist"
+	"go.chief.tools/flowguard-proxy/iplist"
 )
 
 // Load loads or reloads the configuration from disk

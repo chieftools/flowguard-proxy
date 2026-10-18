@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 type NetworkPrerequisite struct {

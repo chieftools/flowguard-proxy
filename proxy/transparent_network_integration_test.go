@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 func TestTransparentNetworkSourceRoundTripIntegration(t *testing.T) {

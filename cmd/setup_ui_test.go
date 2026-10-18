@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"flowguard/api"
-	"flowguard/config"
-	"flowguard/proxy"
+	"go.chief.tools/flowguard-proxy/api"
+	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/proxy"
 
 	"charm.land/huh/v2"
 )

@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 func TestProxyIPMatcher(t *testing.T) {

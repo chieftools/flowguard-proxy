@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"flowguard/cache"
+	"go.chief.tools/flowguard-proxy/cache"
 )
 
 func TestParseSetForManager(t *testing.T) {

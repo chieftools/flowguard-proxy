@@ -19,10 +19,10 @@ import (
 	"testing"
 	"time"
 
-	"flowguard/api"
-	"flowguard/config"
-	"flowguard/fail2ban"
-	"flowguard/proxy"
+	"go.chief.tools/flowguard-proxy/api"
+	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/fail2ban"
+	"go.chief.tools/flowguard-proxy/proxy"
 )
 
 func resetSetupTestGlobals(t *testing.T) {

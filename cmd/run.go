@@ -8,10 +8,10 @@ import (
 	"syscall"
 	"time"
 
-	"flowguard/config"
-	"flowguard/proxy"
-	"flowguard/systemdnotify"
-	"flowguard/updater"
+	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/proxy"
+	"go.chief.tools/flowguard-proxy/systemdnotify"
+	"go.chief.tools/flowguard-proxy/updater"
 
 	"github.com/spf13/cobra"
 )

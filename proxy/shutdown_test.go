@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"flowguard/middleware"
+	"go.chief.tools/flowguard-proxy/middleware"
 
 	"github.com/gorilla/websocket"
 )

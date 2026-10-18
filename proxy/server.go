@@ -17,9 +17,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"flowguard/config"
-	"flowguard/fingerprint"
-	"flowguard/middleware"
+	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/fingerprint"
+	"go.chief.tools/flowguard-proxy/middleware"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"

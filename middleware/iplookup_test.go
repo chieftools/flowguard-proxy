@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"flowguard/config"
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 func newIPLookupTestConfigManager(t *testing.T, trustedProxiesJSON string) *config.Manager {

@@ -3,7 +3,7 @@ package cmd
 import (
 	"testing"
 
-	"flowguard/fail2ban"
+	"go.chief.tools/flowguard-proxy/fail2ban"
 )
 
 func TestFail2BanEventCommandTreatsDashPrefixedJailAsPayload(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"flowguard/normalization"
+	"go.chief.tools/flowguard-proxy/normalization"
 )
 
 // compileConditionRegex recursively compiles regex patterns in conditions
