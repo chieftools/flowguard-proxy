@@ -28,12 +28,21 @@ type ConnectionSnapshot struct {
 	PeakInFlight int64  `json:"peak_in_flight"`
 }
 
-func ContextWithConnectionInfo(ctx context.Context) context.Context {
-	info := &ConnectionInfo{
+// NewConnectionInfo creates the info for a newly accepted connection.
+func NewConnectionInfo() *ConnectionInfo {
+	return &ConnectionInfo{
 		ID:       "connection_" + strings.ToLower(ulid.Make().String()),
 		OpenedAt: time.Now(),
 	}
+}
 
+func ContextWithConnectionInfo(ctx context.Context) context.Context {
+	return ContextWithExistingConnectionInfo(ctx, NewConnectionInfo())
+}
+
+// ContextWithExistingConnectionInfo attaches info to ctx, for servers that
+// track connections outside the request context, such as the Caddy plugin.
+func ContextWithExistingConnectionInfo(ctx context.Context, info *ConnectionInfo) context.Context {
 	return context.WithValue(ctx, connectionInfoContextKey{}, info)
 }
 

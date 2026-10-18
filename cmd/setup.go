@@ -570,26 +570,7 @@ func plural(count int, singular, plural string) string {
 }
 
 func writeSetupConfig(body []byte) error {
-	// Ensure directory exists
-	dir := filepath.Dir(configFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	// Write to temporary file first for atomic update
-	tmpFile := configFile + ".tmp"
-	if err := os.WriteFile(tmpFile, body, 0644); err != nil {
-		return fmt.Errorf("failed to write configuration: %w", err)
-	}
-
-	// Atomically rename to final location
-	if err := os.Rename(tmpFile, configFile); err != nil {
-		// Clean up temp file if rename fails (ignore cleanup errors)
-		_ = os.Remove(tmpFile)
-		return fmt.Errorf("failed to save configuration: %w", err)
-	}
-
-	return nil
+	return config.WriteFile(configFile, body)
 }
 
 func isTerminal(file *os.File) bool {
