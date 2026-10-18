@@ -130,20 +130,12 @@ func TestStartWaitsForInitialFail2BanSnapshotBeforeOpeningListeners(t *testing.T
 			HTTP3: boolPtr(false),
 		}},
 	})
-	proxyConfig := newProxyTestConfig()
-	proxyConfig.Updater = &updater.Updater{}
-	manager, err := NewManager(configMgr, proxyConfig)
-	if err != nil {
-		configMgr.Stop()
-		t.Fatalf("new manager: %v", err)
-	}
-
 	eventPath := filepath.Join(t.TempDir(), "occupied-event-path")
 	if err := os.WriteFile(eventPath, []byte("reserved"), 0o600); err != nil {
 		t.Fatalf("create occupied event path: %v", err)
 	}
 	runner := &blockingInitialFail2BanRunner{started: make(chan struct{}), release: make(chan struct{})}
-	manager.fail2banManager = fail2ban.NewManager(fail2ban.Options{
+	fail2banManager := fail2ban.NewManager(fail2ban.Options{
 		ClientPath:      "fail2ban-client",
 		FlowGuardPath:   "/usr/bin/flowguard",
 		EventSocketPath: eventPath,
@@ -151,6 +143,15 @@ func TestStartWaitsForInitialFail2BanSnapshotBeforeOpeningListeners(t *testing.T
 		CommandTimeout:  time.Second,
 		Runner:          runner,
 	})
+
+	proxyConfig := newProxyTestConfig()
+	proxyConfig.Updater = &updater.Updater{}
+	proxyConfig.Fail2Ban = fail2banManager
+	manager, err := NewManager(configMgr, proxyConfig)
+	if err != nil {
+		configMgr.Stop()
+		t.Fatalf("new manager: %v", err)
+	}
 
 	startResult := make(chan error, 1)
 	startResultConsumed := false
@@ -199,7 +200,7 @@ func TestStartWaitsForInitialFail2BanSnapshotBeforeOpeningListeners(t *testing.T
 	case <-time.After(3 * time.Second):
 		t.Fatal("proxy startup did not finish after the initial snapshot")
 	}
-	if got := manager.fail2banManager.MatchingJails("198.51.100.157"); len(got) != 1 || got[0] != "request-limit" {
+	if got := fail2banManager.MatchingJails("198.51.100.157"); len(got) != 1 || got[0] != "request-limit" {
 		t.Fatalf("initial Fail2Ban snapshot was not active at startup: %#v", got)
 	}
 }

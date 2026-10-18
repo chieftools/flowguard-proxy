@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math/rand/v2"
 	"os"
 	"reflect"
 	"runtime"
@@ -16,9 +15,8 @@ import (
 	"go.chief.tools/flowguard-proxy/api"
 	"go.chief.tools/flowguard-proxy/certmanager"
 	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/engine"
 	"go.chief.tools/flowguard-proxy/fail2ban"
-	"go.chief.tools/flowguard-proxy/iplist"
-	"go.chief.tools/flowguard-proxy/logger"
 	"go.chief.tools/flowguard-proxy/middleware"
 	"go.chief.tools/flowguard-proxy/systemdnotify"
 	"go.chief.tools/flowguard-proxy/updater"
@@ -40,6 +38,8 @@ type Config struct {
 	AdvertiseHTTP3       bool
 	UpstreamClientIPMode string
 	Updater              *updater.Updater
+	// Fail2Ban replaces the default Fail2Ban manager, mainly for tests.
+	Fail2Ban *fail2ban.Manager
 	// ShutdownTimeout is how long servers drain in-flight requests before
 	// remaining connections, including WebSockets, are closed.
 	ShutdownTimeout time.Duration
@@ -49,11 +49,9 @@ type Manager struct {
 	config                 *Config
 	servers                []*Server
 	updater                *updater.Updater
-	startedAt              time.Time
+	engine                 *engine.Engine
 	certManager            *certmanager.Manager
 	configManager          *config.Manager
-	ipListManager          *iplist.Manager
-	fail2banManager        *fail2ban.Manager
 	firewallState          api.FirewallHeartbeat
 	middlewareChain        *middleware.Chain
 	upstreamMode           string
@@ -65,8 +63,6 @@ type Manager struct {
 	upstreamHeaderSettings *atomic.Pointer[config.UpstreamHeaderSettings]
 
 	serveErrChan        chan error
-	stopHeartbeat       chan struct{}
-	forceHeartbeat      chan struct{}
 	stopFirewallMonitor chan struct{}
 
 	mu       sync.RWMutex
@@ -74,27 +70,17 @@ type Manager struct {
 }
 
 func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
-	// Start config file watcher for hot-reload
-	configMgr.StartWatcher()
-
-	// Start API refresh if host key is configured (default 15 minutes)
-	if configMgr.GetConfig().Host != nil && configMgr.GetConfig().Host.Key != "" {
-		configMgr.StartAPIRefresh(15 * time.Minute)
-	}
-
-	// Create middleware chain with config-based middleware
-	middlewareChain := middleware.NewChain()
-	fail2banManager := fail2ban.NewManager(fail2ban.Options{Verbose: cfg.Verbose})
-
-	// Add middleware in the order they should execute
-	// Timing middleware MUST be first to capture the full middleware stack timing
-	middlewareChain.Add(middleware.NewTimingMiddleware())                  // Captures precise timing for all middleware (must be first!)
-	middlewareChain.Add(middleware.NewIPLookupMiddleware(configMgr))       // Enriches request with IP/ASN data
-	middlewareChain.Add(middleware.NewBehaviorTracker())                   // Tracks rolling request behavior for logs and rules
-	middlewareChain.Add(middleware.NewLoggingMiddleware(configMgr))        // Logs request and response with enriched data
-	middlewareChain.Add(middleware.NewFail2BanMiddleware(fail2banManager)) // Enforces synchronized Fail2Ban bans
-	rulesMiddleware := middleware.NewRulesMiddleware(configMgr)            // Evaluates user defined rules
-	middlewareChain.Add(rulesMiddleware)
+	// The heartbeat reads the manager's state, which exists only after the
+	// manager is built below.
+	var pm *Manager
+	flowguard := engine.New(configMgr, engine.Options{
+		Verbose:  cfg.Verbose,
+		Version:  cfg.Version,
+		Fail2Ban: cfg.Fail2Ban,
+		Heartbeat: func() engine.HeartbeatDetails {
+			return pm.heartbeatDetails()
+		},
+	})
 
 	// Determine bind addresses based on configuration
 	autoDetectedBindAddrs := len(cfg.BindAddrs) == 0
@@ -166,12 +152,11 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 		transparentNet = newTransparentNetworkManager(upstreamSettings, cfg.BindAddrs)
 	}
 
-	pm := &Manager{
+	pm = &Manager{
 		config:                 cfg,
-		startedAt:              time.Now(),
+		engine:                 flowguard,
 		configManager:          configMgr,
-		fail2banManager:        fail2banManager,
-		middlewareChain:        middlewareChain,
+		middlewareChain:        flowguard.Chain(),
 		upstreamMode:           upstreamMode,
 		upstreamModeOverride:   cfg.UpstreamClientIPMode,
 		upstreamSettings:       upstreamSettings,
@@ -190,26 +175,14 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 		}),
 
 		serveErrChan:        make(chan error, max(1, len(cfg.BindAddrs)*2)),
-		stopHeartbeat:       make(chan struct{}),
-		forceHeartbeat:      make(chan struct{}, 1),
 		stopFirewallMonitor: make(chan struct{}),
 	}
 	pm.setUpstreamHeaderSettings(configMgr.GetConfig().UpstreamHeaderSettings())
 
-	// Initialize IP list manager with current config
-	pm.initializeIPListManager(configMgr.GetConfig(), rulesMiddleware)
-
-	// Register callback to handle IP list configuration changes
+	// Register callback to handle server configuration changes
 	configMgr.OnChange(func(newConfig *config.Config) {
-		pm.handleIPListConfigChange(newConfig, rulesMiddleware)
 		pm.handleServerConfigChange(newConfig)
 		pm.setUpstreamHeaderSettings(newConfig.UpstreamHeaderSettings())
-		pm.fail2banManager.SetEnabled(newConfig.Fail2BanEnabled())
-	})
-
-	// Register callback to handle IP list update events from WebSocket
-	configMgr.OnIPListUpdate(func(listIDs []string) {
-		pm.handleIPListUpdateEvent(listIDs)
 	})
 
 	// Initialize updater for remote package upgrades (non-fatal if detection fails)
@@ -235,7 +208,7 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 
 	if err := pm.validateCertificateSources(certPath, acmePath, nginxConfigPath); err != nil {
 		pm.certManager.Stop()
-		pm.middlewareChain.Stop()
+		pm.engine.StopChain()
 		return nil, err
 	}
 
@@ -265,116 +238,6 @@ func (p *Manager) validateCertificateSources(certPath, acmePath, nginxConfigPath
 	}
 
 	return fmt.Errorf("no certificate sources configured")
-}
-
-// initializeIPListManager creates and initializes the IP list manager from config
-func (p *Manager) initializeIPListManager(cfg *config.Config, rulesMiddleware *middleware.RulesMiddleware) {
-	if cfg == nil || cfg.IPLists == nil || len(*cfg.IPLists) == 0 {
-		log.Printf("[ip_list] No IP lists configured")
-		return
-	}
-
-	// Convert config.IPListConfig to iplist.ListConfig
-	listsConfig := make(map[string]iplist.ListConfig)
-	for name, listCfg := range *cfg.IPLists {
-		listsConfig[name] = iplist.ListConfig{
-			URL:                    listCfg.URL,
-			Path:                   listCfg.Path,
-			RefreshIntervalSeconds: listCfg.RefreshIntervalSeconds,
-		}
-	}
-
-	// Create the IP list manager with the cache instance
-	ipListMgr, err := iplist.New(listsConfig, p.configManager.GetCache(), p.config.Verbose)
-	if err != nil {
-		log.Printf("[ip_list] Failed to initialize IP list manager: %v", err)
-		return
-	}
-
-	// Store and set the IP list manager
-	p.mu.Lock()
-	oldManager := p.ipListManager
-	p.ipListManager = ipListMgr
-	p.mu.Unlock()
-
-	// Stop the old manager if it exists
-	if oldManager != nil {
-		oldManager.Stop()
-	}
-
-	// Set the IP list manager on the rules middleware
-	rulesMiddleware.SetIPListManager(ipListMgr)
-	listCount, entryCount := ipListMgr.Stats()
-	listLabel := "lists"
-	if listCount == 1 {
-		listLabel = "list"
-	}
-	entryLabel := "entries"
-	if entryCount == 1 {
-		entryLabel = "entry"
-	}
-	log.Printf("[ip_list] Initialized %d %s with %d total %s", listCount, listLabel, entryCount, entryLabel)
-}
-
-// handleIPListConfigChange handles changes to IP list configuration during hot-reload
-func (p *Manager) handleIPListConfigChange(newConfig *config.Config, rulesMiddleware *middleware.RulesMiddleware) {
-	// Check if IP lists configuration exists and has changed
-	hasIPLists := newConfig != nil && newConfig.IPLists != nil && len(*newConfig.IPLists) > 0
-
-	p.mu.RLock()
-	hadIPListManager := p.ipListManager != nil
-	p.mu.RUnlock()
-
-	// Case 1: IP lists were added (didn't have manager, now have config)
-	if !hadIPListManager && hasIPLists {
-		log.Printf("[ip_list] IP lists added to configuration, initializing manager")
-		p.initializeIPListManager(newConfig, rulesMiddleware)
-		return
-	}
-
-	// Case 2: IP lists were removed (had manager, now no config)
-	if hadIPListManager && !hasIPLists {
-		log.Printf("[ip_list] IP lists removed from configuration, stopping manager")
-		p.mu.Lock()
-		oldManager := p.ipListManager
-		p.ipListManager = nil
-		p.mu.Unlock()
-
-		if oldManager != nil {
-			oldManager.Stop()
-		}
-		rulesMiddleware.SetIPListManager(nil)
-		return
-	}
-
-	// Case 3: IP lists were modified (had manager, still have config)
-	if hadIPListManager && hasIPLists {
-		log.Printf("[ip_list] IP lists configuration changed, reinitializing manager")
-		p.initializeIPListManager(newConfig, rulesMiddleware)
-		return
-	}
-
-	// Case 4: No IP lists before or after - nothing to do
-}
-
-// handleIPListUpdateEvent handles IP list updates triggered by WebSocket events
-func (p *Manager) handleIPListUpdateEvent(listIDs []string) {
-	p.mu.RLock()
-	ipListMgr := p.ipListManager
-	p.mu.RUnlock()
-
-	if ipListMgr == nil {
-		log.Printf("[ip_list] No IP list manager initialized, ignoring update event for lists: %v", listIDs)
-		return
-	}
-
-	log.Printf("[ip_list] Processing update event for %d list(s): %v", len(listIDs), listIDs)
-
-	for _, listID := range listIDs {
-		if err := ipListMgr.RefreshListsByBaseID(listID); err != nil {
-			log.Printf("[ip_list] Failed to refresh list %s: %v", listID, err)
-		}
-	}
 }
 
 func (p *Manager) setUpstreamHeaderSettings(settings config.UpstreamHeaderSettings) {
@@ -581,9 +444,16 @@ func (p *Manager) updateFirewallState(next api.FirewallHeartbeat) {
 }
 
 func (p *Manager) requestImmediateHeartbeat() {
-	select {
-	case p.forceHeartbeat <- struct{}{}:
-	default:
+	if p.engine != nil {
+		p.engine.RequestHeartbeat()
+	}
+}
+
+func (p *Manager) heartbeatDetails() engine.HeartbeatDetails {
+	return engine.HeartbeatDetails{
+		Firewall:      p.getFirewallState(),
+		HostnameCount: p.certManager.HostnameCount(),
+		BindAddresses: p.config.BindAddrs,
 	}
 }
 
@@ -762,139 +632,6 @@ func (p *Manager) runFirewallMonitor() {
 	}
 }
 
-func (p *Manager) runHeartbeat() {
-	// Read heartbeat config defaults
-	const defaultInterval = 300 // 5 minutes
-	const defaultJitter = 30    // 30 seconds
-
-	getConfig := func() (enabled bool, interval, jitter int) {
-		hbCfg := p.configManager.GetConfig().Heartbeat
-
-		enabled = true
-		interval = defaultInterval
-		jitter = defaultJitter
-
-		if hbCfg != nil {
-			if hbCfg.Enabled != nil {
-				enabled = *hbCfg.Enabled
-			}
-			if hbCfg.IntervalSeconds > 0 {
-				interval = hbCfg.IntervalSeconds
-			}
-			if hbCfg.JitterSeconds > 0 {
-				jitter = hbCfg.JitterSeconds
-			}
-		}
-
-		return
-	}
-
-	enabled, _, _ := getConfig()
-	if !enabled {
-		if p.config.Verbose {
-			log.Println("[heartbeat] Disabled by configuration")
-		}
-		// Still listen for stop signal, but also re-check config each default interval
-		// in case it gets re-enabled
-		for {
-			timer := time.NewTimer(time.Duration(defaultInterval) * time.Second)
-			select {
-			case <-p.stopHeartbeat:
-				timer.Stop()
-				return
-			case <-p.forceHeartbeat:
-				timer.Stop()
-				continue
-			case <-timer.C:
-				enabled, _, _ = getConfig()
-				if enabled {
-					log.Println("[heartbeat] Re-enabled by configuration")
-					break
-				}
-				continue
-			}
-			break
-		}
-	}
-
-	if p.config.Verbose {
-		log.Println("[heartbeat] Started")
-	}
-
-	// Send immediately on startup
-	p.sendHeartbeat()
-
-	for {
-		enabled, interval, jitter := getConfig()
-		if !enabled {
-			if p.config.Verbose {
-				log.Println("[heartbeat] Disabled by configuration, pausing")
-			}
-			// Wait until re-enabled or stopped
-			timer := time.NewTimer(time.Duration(defaultInterval) * time.Second)
-			select {
-			case <-p.stopHeartbeat:
-				timer.Stop()
-				if p.config.Verbose {
-					log.Println("[heartbeat] Stopped")
-				}
-				return
-			case <-p.forceHeartbeat:
-				timer.Stop()
-				continue
-			case <-timer.C:
-				continue
-			}
-		}
-
-		// Apply jitter: interval +/- jitter (uniform random)
-		jitteredInterval := interval
-		if jitter > 0 {
-			jitteredInterval += rand.IntN(2*jitter+1) - jitter
-		}
-		if jitteredInterval < 1 {
-			jitteredInterval = 1
-		}
-
-		timer := time.NewTimer(time.Duration(jitteredInterval) * time.Second)
-		select {
-		case <-p.stopHeartbeat:
-			timer.Stop()
-			if p.config.Verbose {
-				log.Println("[heartbeat] Stopped")
-			}
-			return
-		case <-p.forceHeartbeat:
-			timer.Stop()
-			p.sendHeartbeat()
-		case <-timer.C:
-			p.sendHeartbeat()
-		}
-	}
-}
-
-func (p *Manager) sendHeartbeat() {
-	payload := api.HeartbeatPayload{
-		OS:            runtime.GOOS,
-		Arch:          runtime.GOARCH,
-		Version:       p.config.Version,
-		Capabilities:  []string{logger.FlowGuardIngestCapability},
-		Firewall:      p.getFirewallState(),
-		StartedAt:     p.startedAt.Unix(),
-		HostnameCount: p.certManager.HostnameCount(),
-		BindAddresses: p.config.BindAddrs,
-	}
-
-	if err := p.configManager.GetAPIClient().SendHeartbeat(payload); err != nil {
-		log.Printf("[heartbeat] Failed to send: %v", err)
-		return
-	}
-
-	if p.config.Verbose {
-		log.Println("[heartbeat] Sent successfully")
-	}
-}
-
 func (p *Manager) startServers(protocols config.ProtocolSettings, advertiseHTTP3 bool) ([]*Server, error) {
 	started := make([]*Server, 0, len(p.config.BindAddrs)*2)
 
@@ -1006,15 +743,7 @@ func (p *Manager) Start() error {
 			log.Printf("[proxy] WARNING: %s", warning)
 		}
 	}
-	p.configManager.StartTrustedProxyRefresh()
-	if p.fail2banManager != nil {
-		fail2banEnabled := p.configManager.GetConfig().Fail2BanEnabled()
-		p.fail2banManager.SetEnabled(fail2banEnabled)
-		initialAttempt := p.fail2banManager.Start()
-		if fail2banEnabled {
-			<-initialAttempt
-		}
-	}
+	p.engine.Start()
 
 	if p.transparentNet != nil {
 		if err := p.transparentNet.Setup(); err != nil {
@@ -1048,11 +777,6 @@ func (p *Manager) Start() error {
 
 	p.setInitialFirewallState(p.initialFirewallState())
 
-	cfg := p.configManager.GetConfig()
-	if cfg.Host != nil && cfg.Host.Key != "" {
-		go p.runHeartbeat()
-	}
-
 	if p.managesFirewall() {
 		go p.runFirewallMonitor()
 	}
@@ -1061,7 +785,7 @@ func (p *Manager) Start() error {
 	case err := <-p.serveErrChan:
 		return err
 	default:
-		p.configManager.StartRealtime()
+		p.engine.StartPanel()
 		return nil
 	}
 }
@@ -1082,23 +806,12 @@ func (p *Manager) Shutdown() error {
 	}
 	p.serverMu.Unlock()
 
-	// Stop the heartbeat goroutine
-	close(p.stopHeartbeat)
+	// Stop the heartbeat, Fail2Ban, configuration updates and IP list refreshes
 	close(p.stopFirewallMonitor)
-	if p.fail2banManager != nil {
-		p.fail2banManager.Stop()
-	}
-
-	// Stop the configuration manager
-	p.configManager.Stop()
+	p.engine.StopBackground()
 
 	// Stop the certificate manager
 	p.certManager.Stop()
-
-	// Stop the IP list manager if initialized
-	if p.ipListManager != nil {
-		p.ipListManager.Stop()
-	}
 
 	// Small delay before we shut down the servers
 	time.Sleep(100 * time.Millisecond)
@@ -1112,7 +825,7 @@ func (p *Manager) Shutdown() error {
 	}
 
 	// Stop the middleware chain
-	p.middlewareChain.Stop()
+	p.engine.StopChain()
 
 	log.Println("FlowGuard shutdown complete")
 	return nil
