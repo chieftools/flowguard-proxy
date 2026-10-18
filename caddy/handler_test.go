@@ -16,6 +16,7 @@ import (
 
 	"go.chief.tools/flowguard-proxy/config"
 	"go.chief.tools/flowguard-proxy/engine"
+	"go.chief.tools/flowguard-proxy/middleware"
 )
 
 // writeTestConfig writes a configuration that blocks /blocked and logs every
@@ -260,5 +261,108 @@ func TestErrorStatus(t *testing.T) {
 		if got := errorStatus(tc.err); got != tc.want {
 			t.Errorf("errorStatus(%v) = %d, want %d", tc.err, got, tc.want)
 		}
+	}
+}
+
+// TestStreamIDIsSharedWithOriginFlowGuard runs the plugin at the edge in front
+// of a FlowGuard on the origin that trusts it, as a Fly edge in front of the
+// standalone proxy, and checks one Stream ID identifies the request at both.
+func TestStreamIDIsSharedWithOriginFlowGuard(t *testing.T) {
+	edge, readEdgeLog := newTestHandler(t)
+
+	originDir := t.TempDir()
+	originLogPath := filepath.Join(originDir, "requests.log")
+	originConfig := `{
+		"trusted_proxies": {"header_auth": {"values": ["edge-secret"]}},
+		"logging": {"sinks": {"file": {"type": "file", "path": "` + originLogPath + `"}}}
+	}`
+	originConfigPath := filepath.Join(originDir, "config.json")
+	if err := os.WriteFile(originConfigPath, []byte(originConfig), 0o644); err != nil {
+		t.Fatalf("write origin config: %v", err)
+	}
+	originConfigMgr, err := config.NewManager(originConfigPath, "FlowGuard/test", "test", "", false)
+	if err != nil {
+		t.Fatalf("new origin config manager: %v", err)
+	}
+	originEngine := engine.New(originConfigMgr, engine.Options{})
+	var originStopped atomic.Bool
+	stopOrigin := func() {
+		if originStopped.CompareAndSwap(false, true) {
+			originEngine.Stop()
+		}
+	}
+	t.Cleanup(stopOrigin)
+
+	// The origin proxies to the app as the standalone proxy does: it sends its
+	// Stream ID upstream and adds it to the response.
+	var appStreamID string
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originEngine.Chain().ServeHTTPWithHandler(w, r, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			appStreamID = middleware.GetStreamID(r)
+			middleware.AddStreamIDHeader(w.Header(), r)
+			w.WriteHeader(http.StatusOK)
+		}))
+	}))
+	t.Cleanup(origin.Close)
+
+	req := httptest.NewRequest(http.MethodGet, "https://example.test/allowed", nil)
+	w := httptest.NewRecorder()
+	err = edge.ServeHTTP(w, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		// What reverse_proxy does: forward the request headers with the
+		// client address and secret, then add the response headers.
+		outbound, err := http.NewRequestWithContext(r.Context(), r.Method, origin.URL+r.URL.Path, nil)
+		if err != nil {
+			return err
+		}
+		outbound.Header = r.Header.Clone()
+		outbound.Header.Set("X-Forwarded-For", "203.0.113.50")
+		outbound.Header.Set("FG-Trusted-Proxy-Secret", "edge-secret")
+		resp, err := origin.Client().Do(outbound)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		for name, values := range resp.Header {
+			for _, value := range values {
+				w.Header().Add(name, value)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP: %v", err)
+	}
+
+	edgeEntries := readEdgeLog()
+	stopOrigin()
+	originData, err := os.ReadFile(originLogPath)
+	if err != nil {
+		t.Fatalf("read origin log: %v", err)
+	}
+	var originEntry map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(originData))), &originEntry); err != nil {
+		t.Fatalf("decode origin log: %v", err)
+	}
+
+	if len(edgeEntries) != 1 {
+		t.Fatalf("unexpected edge log entries: %v", edgeEntries)
+	}
+	streamID, _ := edgeEntries[0]["stream_id"].(string)
+	if streamID == "" {
+		t.Fatal("edge logged no stream ID")
+	}
+	if originEntry["stream_id"] != streamID {
+		t.Fatalf("origin stream ID = %v, want the edge's %q", originEntry["stream_id"], streamID)
+	}
+	if appStreamID != streamID {
+		t.Fatalf("app saw stream ID %q, want the edge's %q", appStreamID, streamID)
+	}
+	if got := w.Header().Values("FG-Stream"); len(got) != 1 || got[0] != streamID {
+		t.Fatalf("response FG-Stream = %v, want only %q", got, streamID)
+	}
+	client, _ := originEntry["client"].(map[string]any)
+	if client["ip"] != "203.0.113.50" {
+		t.Fatalf("origin client IP = %v, want the forwarded client", client["ip"])
 	}
 }

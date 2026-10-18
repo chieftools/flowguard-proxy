@@ -107,7 +107,7 @@ func (h *Handler) serveNext(w http.ResponseWriter, r *http.Request, next caddyht
 	if headers.IPCountry {
 		r.Header.Set("FG-IPCountry", clientCountryCode(r))
 	}
-	w.Header().Add("FG-Stream", streamID)
+	middleware.AddStreamIDHeader(w.Header(), r)
 
 	active := h.activeUpstream.Add(1)
 	defer h.activeUpstream.Add(-1)

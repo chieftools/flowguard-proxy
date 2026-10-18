@@ -773,7 +773,7 @@ func writeBlockedResponse(w http.ResponseWriter, r *http.Request, status int, me
 
 	// Add Via header to blocked responses to match proxied responses and our stream ID
 	w.Header().Add("Via", fmt.Sprintf("%d.%d flowguard", r.ProtoMajor, r.ProtoMinor))
-	w.Header().Add("FG-Stream", streamID)
+	AddStreamIDHeader(w.Header(), r)
 
 	if acceptsHTML(r) {
 		// Replace placeholders in the HTML template

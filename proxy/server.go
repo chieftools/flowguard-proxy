@@ -326,7 +326,7 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 
 		// Add Via header to indicate proxying and our stream ID
 		resp.Header.Add("Via", fmt.Sprintf("%d.%d flowguard", resp.ProtoMajor, resp.ProtoMinor))
-		resp.Header.Add("FG-Stream", middleware.GetStreamID(resp.Request))
+		middleware.AddStreamIDHeader(resp.Header, resp.Request)
 
 		return nil
 	}

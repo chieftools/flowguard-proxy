@@ -442,11 +442,12 @@ Changes apply without a restart. Responses to the client always include
 `FG-Stream`, whatever these settings are.
 
 When FlowGuard runs behind another FlowGuard, for example the Caddy plugin at
-the edge in front of a FlowGuard on the origin, the response carries both
-Stream IDs, edge first. The origin logs the edge's Stream ID at
-`proxy.stream_id`, so you can find the same request in both logs. FlowGuard
-only takes this value from proxies it trusts for forwarding headers, through
-`trusted_proxies.ipnets` or `trusted_proxies.header_auth`.
+the edge in front of a FlowGuard on the origin, the origin keeps the edge's
+Stream ID instead of creating its own. One Stream ID then appears in both logs,
+on block pages, in the response's `FG-Stream` header, and in the `FG-Stream`
+header your backend receives. FlowGuard only takes the ID from proxies it trusts
+for forwarding headers, through `trusted_proxies.ipnets` or
+`trusted_proxies.header_auth`.
 
 ## Fail2Ban integration
 

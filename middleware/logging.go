@@ -41,9 +41,6 @@ type RequestLogEntryIPInfo struct {
 	IP            string `json:"ip"`
 	NetworkPrefix string `json:"network_prefix,omitempty"`
 	Country       string `json:"country,omitempty"`
-	// StreamID is the Stream ID a FlowGuard acting as the proxy assigned to
-	// the request, so its log entry can be found. It is only set for proxies.
-	StreamID string `json:"stream_id,omitempty"`
 
 	AS *RequestLogEntryIPASInfo `json:"as,omitempty"`
 }
@@ -412,6 +409,20 @@ func GetStreamID(r *http.Request) string {
 	return ""
 }
 
+// contextKeyStreamIDFromProxy marks a Stream ID taken over from a FlowGuard
+// acting as the request's proxy.
+const contextKeyStreamIDFromProxy contextKey = "streamIDFromProxy"
+
+// AddStreamIDHeader adds the request's Stream ID to response headers as
+// FG-Stream. It is left out when the ID came from a FlowGuard in front of this
+// one, which adds the same ID to the response itself.
+func AddStreamIDHeader(header http.Header, r *http.Request) {
+	if fromProxy, _ := r.Context().Value(contextKeyStreamIDFromProxy).(bool); fromProxy {
+		return
+	}
+	header.Add("FG-Stream", GetStreamID(r))
+}
+
 func GetStartTime(r *http.Request) time.Time {
 	if startTime, ok := r.Context().Value(ContextKeyStartTime).(time.Time); ok {
 		return startTime
@@ -578,8 +589,7 @@ func getRuleInfo(r *http.Request) RequestLogEntryRuleInfo {
 
 func getProxyInfo(r *http.Request) *RequestLogEntryIPInfo {
 	proxyInfo := RequestLogEntryIPInfo{
-		IP:       GetProxyIP(r),
-		StreamID: GetProxyStreamID(r),
+		IP: GetProxyIP(r),
 	}
 
 	if proxyInfo.IP == "" {

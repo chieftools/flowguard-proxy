@@ -29,10 +29,6 @@ const (
 	ContextKeyProxyASNInfo  contextKey = "proxyASNInfo"
 	ContextKeyIsProxied     contextKey = "isProxied"
 
-	// ContextKeyProxyStreamID holds the Stream ID that a FlowGuard in front of
-	// this one assigned to the request, from a trusted proxy's FG-Stream header.
-	ContextKeyProxyStreamID contextKey = "proxyStreamID"
-
 	// ContextKeyProxyProtocolPeer holds the trusted peer that set the
 	// connection's client address with a PROXY protocol header.
 	ContextKeyProxyProtocolPeer contextKey = "proxyProtocolPeer"
@@ -185,12 +181,14 @@ func (m *IPLookupMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 			ctx = context.WithValue(ctx, ContextKeyProxyASNInfo, proxyASNInfo)
 		}
 
-		// Only a proxy trusted for its forwarding headers vouches for FG-Stream.
-		// A PROXY protocol load balancer does not set it, so on its own there
-		// the header came from the client.
+		// Behind another FlowGuard, keep its Stream ID so one ID identifies
+		// the request in both logs. Only a proxy trusted for its forwarding
+		// headers vouches for FG-Stream: a PROXY protocol load balancer does
+		// not set it, so on its own there the header came from the client.
 		if forwardingProxyIP != "" {
 			if streamID := forwardedStreamID(r); streamID != "" {
-				ctx = context.WithValue(ctx, ContextKeyProxyStreamID, streamID)
+				ctx = context.WithValue(ctx, ContextKeyStreamID, streamID)
+				ctx = context.WithValue(ctx, contextKeyStreamIDFromProxy, true)
 			}
 		}
 	} else {
@@ -466,15 +464,6 @@ func GetClientASN(r *http.Request) *ASNInfo {
 func GetProxyIP(r *http.Request) string {
 	if ip, ok := r.Context().Value(ContextKeyProxyIP).(string); ok {
 		return ip
-	}
-	return ""
-}
-
-// GetProxyStreamID returns the Stream ID that a FlowGuard in front of this one
-// assigned to the request, or "" when it did not come through one.
-func GetProxyStreamID(r *http.Request) string {
-	if streamID, ok := r.Context().Value(ContextKeyProxyStreamID).(string); ok {
-		return streamID
 	}
 	return ""
 }

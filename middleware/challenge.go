@@ -273,7 +273,7 @@ func (cm *ChallengeManager) ChallengeRequest(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("X-FlowGuard-Action", "challenge")
 	w.Header().Set("X-FlowGuard-Challenge-URL", challengeURL)
 	w.Header().Add("Via", fmt.Sprintf("%d.%d flowguard", r.ProtoMajor, r.ProtoMinor))
-	w.Header().Add("FG-Stream", GetStreamID(r))
+	AddStreamIDHeader(w.Header(), r)
 
 	if isInteractiveChallengeRequest(r) {
 		status := action.Status
