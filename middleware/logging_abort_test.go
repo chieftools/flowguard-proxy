@@ -72,3 +72,67 @@ func TestLoggingMiddlewareRecordsDeliberatelyAbortedRequest(t *testing.T) {
 		t.Fatalf("unexpected HTTP response: headers=%v body=%q", w.Header(), w.Body.String())
 	}
 }
+
+func TestLoggingMiddlewareUsesRecordedStatusWhenNothingWasWritten(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		handler http.HandlerFunc
+		want    int
+	}{
+		{
+			name: "recorded status without response",
+			handler: func(_ http.ResponseWriter, r *http.Request) {
+				RecordResponseStatus(r, http.StatusBadGateway)
+			},
+			want: http.StatusBadGateway,
+		},
+		{
+			name: "written status wins",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusTeapot)
+				RecordResponseStatus(r, http.StatusBadGateway)
+			},
+			want: http.StatusTeapot,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logPath := filepath.Join(t.TempDir(), "requests.log")
+			loggerManager := logger.NewManager("FlowGuard/test")
+			if err := loggerManager.UpdateSinks(map[string]map[string]interface{}{
+				"status_test": {
+					"type": "file",
+					"path": logPath,
+				},
+			}); err != nil {
+				t.Fatalf("configure test logger: %v", err)
+			}
+
+			lm := &LoggingMiddleware{
+				loggerManager: loggerManager,
+				enabled:       true,
+				version:       "test",
+			}
+			req := httptest.NewRequest(http.MethodGet, "https://example.test/", nil)
+			lm.Handle(httptest.NewRecorder(), req, tc.handler)
+			if err := loggerManager.Close(); err != nil {
+				t.Fatalf("close test logger: %v", err)
+			}
+
+			data, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatalf("read request log: %v", err)
+			}
+			var entry struct {
+				Response struct {
+					Status int `json:"status"`
+				} `json:"response"`
+			}
+			if err := json.Unmarshal([]byte(strings.TrimSpace(string(data))), &entry); err != nil {
+				t.Fatalf("decode request log: %v", err)
+			}
+			if entry.Response.Status != tc.want {
+				t.Fatalf("logged response status = %d, want %d", entry.Response.Status, tc.want)
+			}
+		})
+	}
+}

@@ -53,3 +53,41 @@ jobs:
 
       - name: Build
         run: go build -trimpath ./...
+
+  caddy:
+    name: Caddy plugin
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: caddy
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: caddy/go.mod
+          cache: true
+          cache-dependency-path: caddy/go.sum
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: go test -race -count=1 ./...
+
+      - name: Build Caddy with the plugin
+        working-directory: .
+        run: |
+          go run github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.7 build v2.11.7 \
+            --output "${RUNNER_TEMP}/caddy" \
+            --with go.chief.tools/flowguard-proxy/caddy=./caddy \
+            --replace go.chief.tools/flowguard-proxy=.
+          "${RUNNER_TEMP}/caddy" list-modules | grep -x http.handlers.flowguard

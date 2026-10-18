@@ -59,9 +59,30 @@ func TraceUpstreamAttempt(r *http.Request) *http.Request {
 	telemetry.snapshot.Attempts++
 	telemetry.mu.Unlock()
 
+	return traceUpstream(r, telemetry, false)
+}
+
+// TraceUpstreamAttempts traces every upstream round trip made with r's
+// context, counting an attempt each time the transport asks for a
+// connection. Servers that proxy with their own transport, such as Caddy's
+// reverse_proxy, use it instead of TraceUpstreamAttempt, so a response that
+// never reached an upstream reports no attempts.
+func TraceUpstreamAttempts(r *http.Request) *http.Request {
+	telemetry := upstreamTelemetryForRequest(r)
+	if telemetry == nil {
+		return r
+	}
+
+	return traceUpstream(r, telemetry, true)
+}
+
+func traceUpstream(r *http.Request, telemetry *upstreamTelemetry, countAttempts bool) *http.Request {
 	trace := &httptrace.ClientTrace{
 		GetConn: func(string) {
 			telemetry.mu.Lock()
+			if countAttempts {
+				telemetry.snapshot.Attempts++
+			}
 			telemetry.waitStartedAt = time.Now()
 			telemetry.mu.Unlock()
 		},

@@ -180,6 +180,83 @@ friendly prompts. Use the global `--no-tui` flag or set `FLOWGUARD_NO_TUI` to
 force line-oriented prompts; FlowGuard also falls back to these prompts when
 input or output is redirected or `TERM=dumb`.
 
+## Run inside Caddy
+
+When Caddy already serves your sites, FlowGuard can run as a Caddy plugin
+instead of in front of it. Caddy keeps listening, terminating TLS with its own
+certificates and storage, and proxying. FlowGuard evaluates rules, writes
+request logs, and stays connected to the control panel, as it does standalone.
+No `iptables` redirects, certificate paths, or root access are needed.
+
+Build Caddy with the plugin using [xcaddy](https://github.com/caddyserver/xcaddy):
+
+```bash
+xcaddy build --with go.chief.tools/flowguard-proxy/caddy
+```
+
+Then add FlowGuard to your Caddyfile:
+
+```caddyfile
+{
+	flowguard {
+		key {$FLOWGUARD_KEY}
+	}
+	servers {
+		listener_wrappers {
+			flowguard
+			tls
+		}
+	}
+}
+
+example.com {
+	flowguard
+	reverse_proxy localhost:8080
+}
+```
+
+The `flowguard` directive filters a site's requests. Add it to every site
+block, or to a snippet that every site imports. It runs early in each route,
+before `header`, `rewrite`, and the handlers that respond.
+
+The `flowguard` global option accepts:
+
+| Option | Description |
+| --- | --- |
+| `key` | Host key from the control panel. FlowGuard downloads the host configuration on first start and keeps it updated, so `flowguard setup` is not needed. Use an environment variable such as `{$FLOWGUARD_KEY}` because Caddy's admin API shows the key in its configuration. |
+| `config` | Configuration file path. Defaults to `/etc/flowguard/config.json`, as written by `flowguard setup`, or with `key` to `flowguard/config.json` in Caddy's data directory. |
+| `cache_dir` | Directory for downloaded IP lists and the IP database. Defaults to `flowguard/cache` in Caddy's data directory. |
+| `verbose` | Enables verbose FlowGuard logging. |
+
+Without a `flowguard` global option, the plugin reads
+`/etc/flowguard/config.json`. If `key` is set and no configuration has been
+downloaded yet, Caddy does not start until the control panel is reachable. This
+stops a new host from serving requests without its rules. Changes to these
+options apply when Caddy restarts. A `caddy reload` keeps FlowGuard running,
+including its rate limits, log buffers, and control panel connection.
+
+The `flowguard` listener wrapper adds [JA4 fingerprints](#ja4-fingerprints) for
+HTTP/1.1 and HTTP/2. It must come before `tls`. If you use Caddy's
+`proxy_protocol` wrapper, list `flowguard` after it. Caddy does not expose
+HTTP/3 ClientHellos to plugins, so HTTP/3 requests have no JA4 fingerprint.
+Without the wrapper, everything else still works.
+
+Some things work differently under Caddy:
+
+- FlowGuard's `trusted_proxies` determine the client IP for rules and logs.
+  Caddy sets the `X-Forwarded-For` header it sends to your backend from its own
+  `trusted_proxies` server option, so configure both when FlowGuard runs behind
+  a CDN.
+- For load balancers, use Caddy's `proxy_protocol` listener wrapper.
+  FlowGuard's own PROXY protocol settings do not apply.
+- FlowGuard adds `FG-Stream` and `FG-IPCountry` request headers, as described
+  in [Request ID and country headers](#request-id-and-country-headers), and
+  strips client-sent copies.
+- Certificate, firewall, transparent upstream, protocol, and bind settings are
+  ignored. Caddy handles them.
+- Upgrades from the control panel are ignored. Upgrade the Caddy binary
+  instead.
+
 ## Backend client IP
 
 FlowGuard sits in front of your existing backend and can pass the validated

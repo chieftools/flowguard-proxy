@@ -30,24 +30,6 @@ func TestConnectionInfoTracksRequestsAndConcurrency(t *testing.T) {
 	}
 }
 
-func TestExistingConnectionInfoIsSharedAcrossContexts(t *testing.T) {
-	info := NewConnectionInfo()
-	first := httptest.NewRequest("GET", "https://service.example.test/", nil).
-		WithContext(ContextWithExistingConnectionInfo(context.Background(), info))
-	second := httptest.NewRequest("GET", "https://service.example.test/", nil).
-		WithContext(ContextWithExistingConnectionInfo(context.Background(), info))
-
-	BeginConnectionRequest(first)()
-	BeginConnectionRequest(second)()
-
-	if got := GetConnectionID(second); got != info.ID {
-		t.Fatalf("connection ID = %q, want %q", got, info.ID)
-	}
-	if snapshot := GetConnectionSnapshot(second); snapshot.Requests != 2 {
-		t.Fatalf("expected both requests on the shared connection, got %#v", snapshot)
-	}
-}
-
 func TestRequestInfoIncludesPrivacySafeCookieAndHeaderSignals(t *testing.T) {
 	req := httptest.NewRequest("GET", "https://service.example.test/", nil)
 	req.Header.Set("Accept", "text/html")

@@ -249,6 +249,10 @@ func (lm *LoggingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next
 		if websocket.opened {
 			wrapper.StatusCode = http.StatusSwitchingProtocols
 			phase = "close"
+		} else if status, ok := responseStatusRecordedFor(r); ok && !wrapper.GotHeaders {
+			// An embedding server such as Caddy writes the error
+			// response itself, after the chain has returned.
+			wrapper.StatusCode = status
 		}
 		lm.logRequest(r, wrapper, phase)
 	}
