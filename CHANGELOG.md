@@ -9,6 +9,8 @@ release.
 
 ## [Unreleased]
 
+## [0.29.1]
+
 ### Changed
 
 - When FlowGuard runs behind another FlowGuard, such as the Caddy plugin at the edge in front of FlowGuard on the origin, the origin now keeps the edge's Stream ID instead of creating its own. One Stream ID identifies the request in both logs, on block pages, and in the `FG-Stream` headers of the response and the backend request, and the response carries it once. The ID is only taken from proxies trusted for forwarding headers through `trusted_proxies.ipnets` or `trusted_proxies.header_auth`. ([9646db33](https://github.com/chieftools/flowguard-proxy/commit/9646db336a80915a3f7bffc2637ed9b14debb963))
@@ -710,7 +712,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.29.1...HEAD
+[0.29.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.29.1
 [0.29.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.29.0
 [0.28.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.28.2
 [0.28.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.28.1
