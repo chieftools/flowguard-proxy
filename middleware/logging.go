@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/instance"
 	"go.chief.tools/flowguard-proxy/logger"
 	"go.chief.tools/flowguard-proxy/normalization"
 
@@ -45,10 +46,11 @@ type RequestLogEntryIPInfo struct {
 }
 
 type RequestLogEntryHostInfo struct {
-	ID      string `json:"id,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Team    string `json:"team,omitempty"`
-	Version string `json:"version"`
+	ID       string `json:"id,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Team     string `json:"team,omitempty"`
+	Instance string `json:"instance,omitempty"`
+	Version  string `json:"version"`
 }
 
 type RequestLogEntryRuleInfo struct {
@@ -376,10 +378,11 @@ func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
 	// Update host info
 	if cfg.Host != nil {
 		lm.hostInfo = &RequestLogEntryHostInfo{
-			ID:      cfg.Host.ID,
-			Name:    cfg.Host.Name,
-			Team:    cfg.Host.Team,
-			Version: lm.version,
+			ID:       cfg.Host.ID,
+			Name:     cfg.Host.Name,
+			Team:     cfg.Host.Team,
+			Instance: instance.ID(),
+			Version:  lm.version,
 		}
 	} else {
 		lm.hostInfo = &RequestLogEntryHostInfo{

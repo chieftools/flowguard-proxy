@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+
+	"go.chief.tools/flowguard-proxy/instance"
 )
 
 func TestUserAgent(t *testing.T) {
@@ -18,8 +20,8 @@ func TestUserAgent(t *testing.T) {
 		{"standalone", &Config{}, "FlowGuard/99.0.0"},
 		{"no key", &Config{Host: &HostConfig{ID: "server_synthetic-a"}}, "FlowGuard/99.0.0"},
 		{"no id", &Config{Host: &HostConfig{Key: "synthetic-key"}}, "FlowGuard/99.0.0"},
-		{"prefixed id", &Config{Host: &HostConfig{ID: "server_synthetic-a", Key: "synthetic-key"}}, "FlowGuard/99.0.0 server/synthetic-a"},
-		{"raw id", &Config{Host: &HostConfig{ID: "synthetic-a", Key: "synthetic-key"}}, "FlowGuard/99.0.0 server/synthetic-a"},
+		{"prefixed id", &Config{Host: &HostConfig{ID: "server_synthetic-a", Key: "synthetic-key"}}, "FlowGuard/99.0.0 server/synthetic-a instance/" + instance.ID()},
+		{"raw id", &Config{Host: &HostConfig{ID: "synthetic-a", Key: "synthetic-key"}}, "FlowGuard/99.0.0 server/synthetic-a instance/" + instance.ID()},
 		{"invalid token", &Config{Host: &HostConfig{ID: "bad id", Key: "synthetic-key"}}, "FlowGuard/99.0.0"},
 	}
 
@@ -60,7 +62,7 @@ func TestLoadUpdatesManagedRequestIdentity(t *testing.T) {
 			}
 		}
 
-		want := "FlowGuard/99.0.0 server/synthetic-" + identity
+		want := "FlowGuard/99.0.0 server/synthetic-" + identity + " instance/" + instance.ID()
 		if manager.GetUserAgent() != want {
 			t.Fatalf("manager user agent = %q", manager.GetUserAgent())
 		}

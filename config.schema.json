@@ -112,6 +112,11 @@
                 "default_hostname": {
                     "type": "string",
                     "description": "Default hostname to use when a certificate is not found"
+                },
+                "deployment": {
+                    "type": "string",
+                    "enum": ["host", "fleet"],
+                    "description": "Whether this server runs on a single host or as a fleet of instances sharing one key. Set by the control panel."
                 }
             },
             "additionalProperties": false

@@ -1,14 +1,19 @@
 package engine
 
 import (
+	"context"
 	"log"
 	"math/rand/v2"
 	"runtime"
 	"time"
 
 	"go.chief.tools/flowguard-proxy/api"
+	"go.chief.tools/flowguard-proxy/instance"
 	"go.chief.tools/flowguard-proxy/logger"
 )
+
+// heartbeatStopTimeout bounds the stop notification sent on shutdown.
+const heartbeatStopTimeout = 2 * time.Second
 
 // HeartbeatDetails holds the heartbeat fields that depend on how the host
 // receives traffic.
@@ -146,15 +151,39 @@ func (e *Engine) heartbeatPayload() api.HeartbeatPayload {
 		details = e.options.Heartbeat()
 	}
 
+	// Older panels require a list, so never send null
+	bindAddresses := details.BindAddresses
+	if bindAddresses == nil {
+		bindAddresses = []string{}
+	}
+
 	return api.HeartbeatPayload{
 		OS:            runtime.GOOS,
 		Arch:          runtime.GOARCH,
 		Version:       e.options.Version,
 		Capabilities:  append([]string{logger.FlowGuardIngestCapability}, details.Capabilities...),
+		Hostname:      instance.Hostname(),
+		Region:        instance.Region(),
 		Firewall:      details.Firewall,
 		StartedAt:     e.startedAt.Unix(),
 		HostnameCount: details.HostnameCount,
-		BindAddresses: details.BindAddresses,
+		BindAddresses: bindAddresses,
+	}
+}
+
+// sendHeartbeatStop tells the panel this instance stopped. It is best effort and
+// bounded, so an unreachable panel never delays shutdown for long.
+func (e *Engine) sendHeartbeatStop() {
+	ctx, cancel := context.WithTimeout(context.Background(), heartbeatStopTimeout)
+	defer cancel()
+
+	if err := e.configManager.GetAPIClient().SendHeartbeatStop(ctx); err != nil {
+		log.Printf("[heartbeat] Failed to send stop: %v", err)
+		return
+	}
+
+	if e.options.Verbose {
+		log.Println("[heartbeat] Sent stop")
 	}
 }
 

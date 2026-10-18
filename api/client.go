@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go.chief.tools/flowguard-proxy/instance"
 )
 
 // Client represents a FlowGuard API client
@@ -135,6 +138,7 @@ func (c *Client) GetConfig(etag string) ([]byte, error) {
 
 	req.Header.Set("Authorization", "Bearer "+hostKey)
 	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set(instance.Header, instance.ID())
 
 	// Add If-None-Match header if etag is provided
 	if etag != "" {
@@ -199,6 +203,7 @@ func (c *Client) PatchConfig(payload ConfigPatch) error {
 	req.Header.Set("Authorization", "Bearer "+hostKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set(instance.Header, instance.ID())
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -245,6 +250,8 @@ type HeartbeatPayload struct {
 	Arch          string            `json:"arch"`
 	Version       string            `json:"version"`
 	Capabilities  []string          `json:"capabilities,omitempty"`
+	Hostname      string            `json:"hostname,omitempty"`
+	Region        string            `json:"region,omitempty"`
 	Firewall      FirewallHeartbeat `json:"firewall"`
 	StartedAt     int64             `json:"started_at"`
 	HostnameCount int               `json:"hostname_count"`
@@ -268,6 +275,7 @@ func (c *Client) SendHeartbeat(payload HeartbeatPayload) error {
 	req.Header.Set("Authorization", "Bearer "+hostKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set(instance.Header, instance.ID())
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -277,6 +285,33 @@ func (c *Client) SendHeartbeat(payload HeartbeatPayload) error {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("heartbeat returned status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// SendHeartbeatStop tells the API this instance is shutting down, so it stops
+// counting towards the server right away instead of after its heartbeat expires.
+func (c *Client) SendHeartbeatStop(ctx context.Context) error {
+	hostKey, userAgent := c.identity()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.buildURL("heartbeat/stop"), nil)
+	if err != nil {
+		return fmt.Errorf("failed to create heartbeat stop request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+hostKey)
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set(instance.Header, instance.ID())
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send heartbeat stop: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("heartbeat stop returned status %d", resp.StatusCode)
 	}
 
 	return nil

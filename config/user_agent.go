@@ -1,8 +1,13 @@
 package config
 
-import "strings"
+import (
+	"strings"
 
-// UserAgent identifies managed servers while preserving the caller's product version.
+	"go.chief.tools/flowguard-proxy/instance"
+)
+
+// UserAgent identifies managed servers, and the instance of the server that
+// sends the request, while preserving the caller's product version.
 func (c *Config) UserAgent(base string) string {
 	if c == nil || c.Host == nil || c.Host.Key == "" {
 		return base
@@ -22,5 +27,5 @@ func (c *Config) UserAgent(base string) string {
 		}
 	}
 
-	return base + " server/" + serverID
+	return base + " server/" + serverID + " instance/" + instance.ID()
 }

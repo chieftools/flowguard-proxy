@@ -2,11 +2,14 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+
+	"go.chief.tools/flowguard-proxy/instance"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -424,6 +427,9 @@ func TestManagedIdentityOnAPIRequests(t *testing.T) {
 		if request.UserAgent() != "FlowGuard/99.0.0 server/synthetic-a" || request.Header.Get("Authorization") != "Bearer managed-key" {
 			t.Errorf("unexpected request identity: %v", request.Header)
 		}
+		if request.Header.Get(instance.Header) != instance.ID() {
+			t.Errorf("request without instance identity: %v", request.Header)
+		}
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
 	})}
 
@@ -436,7 +442,10 @@ func TestManagedIdentityOnAPIRequests(t *testing.T) {
 	if err := client.SendHeartbeat(HeartbeatPayload{Version: "99.0.0"}); err != nil {
 		t.Fatal(err)
 	}
-	if requests != 3 {
-		t.Fatalf("sent %d requests, want 3", requests)
+	if err := client.SendHeartbeatStop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 4 {
+		t.Fatalf("sent %d requests, want 4", requests)
 	}
 }

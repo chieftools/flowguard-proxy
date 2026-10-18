@@ -7,6 +7,7 @@ package engine
 import (
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.chief.tools/flowguard-proxy/config"
@@ -35,10 +36,11 @@ type Engine struct {
 	mu            sync.RWMutex
 	ipListManager *iplist.Manager
 
-	stopHeartbeat  chan struct{}
-	forceHeartbeat chan struct{}
-	stopBackground sync.Once
-	stopChain      sync.Once
+	stopHeartbeat    chan struct{}
+	forceHeartbeat   chan struct{}
+	heartbeatStarted atomic.Bool
+	stopBackground   sync.Once
+	stopChain        sync.Once
 }
 
 // New builds the middleware chain and starts watching the configuration.
@@ -131,6 +133,7 @@ func (e *Engine) Start() {
 func (e *Engine) StartPanel() {
 	cfg := e.configManager.GetConfig()
 	if cfg.Host != nil && cfg.Host.Key != "" {
+		e.heartbeatStarted.Store(true)
 		go e.runHeartbeat()
 	}
 
@@ -142,6 +145,9 @@ func (e *Engine) StartPanel() {
 func (e *Engine) StopBackground() {
 	e.stopBackground.Do(func() {
 		close(e.stopHeartbeat)
+		if e.heartbeatStarted.Load() {
+			e.sendHeartbeatStop()
+		}
 		e.fail2ban.Stop()
 
 		// Stop the configuration manager
