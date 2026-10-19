@@ -9,10 +9,38 @@ import (
 	"strings"
 )
 
-// Certificate represents a certificate and key file pair from NGINX config
+// Certificate represents a certificate and key file pair from NGINX config or
+// a DirectAdmin installation. ChainPath optionally names a separate file with
+// the intermediate certificates.
 type Certificate struct {
-	CertPath string
-	KeyPath  string
+	CertPath  string
+	ChainPath string
+	KeyPath   string
+}
+
+// readCertificatePair combines a certificate pair into one PEM document for
+// parseCombinedPEM. A missing chain file is skipped.
+func readCertificatePair(pair Certificate) ([]byte, error) {
+	paths := []string{pair.CertPath}
+	if pair.ChainPath != "" && fileExists(pair.ChainPath) {
+		paths = append(paths, pair.ChainPath)
+	}
+	paths = append(paths, pair.KeyPath)
+
+	var combined []byte
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		// Ensure there's a newline between the files
+		if len(combined) > 0 && combined[len(combined)-1] != '\n' {
+			combined = append(combined, '\n')
+		}
+		combined = append(combined, data...)
+	}
+
+	return combined, nil
 }
 
 // parser parses NGINX configuration files to extract SSL certificate information

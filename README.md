@@ -496,7 +496,10 @@ FlowGuard can load certificates from any combination of these sources:
 
 - `host.cert_path` points to a directory of combined PEM files. Each file must
   contain a certificate chain and its private key. FlowGuard reads hostnames
-  from the certificate, so filenames do not need to match them.
+  from the certificate, so filenames do not need to match them. On a
+  DirectAdmin server, point it at the installation (`/usr/local/directadmin`)
+  instead. FlowGuard then loads each domain's certificate and the server
+  hostname's certificate, whichever web server DirectAdmin runs.
 - `host.acme_path` points to a Traefik v2 or v3 `acme.json` file. FlowGuard reads
   this file without changing it.
 - `host.nginx_config_path` points to an NGINX configuration. FlowGuard follows

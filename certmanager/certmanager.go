@@ -344,8 +344,14 @@ func (cm *Manager) TestCertificates() {
 	successCount := 0
 	failCount := 0
 
-	// Test certificates from directory if provided
-	if cm.config.CertPath != "" {
+	// Test certificates from a DirectAdmin installation or directory if provided
+	if cm.config.CertPath != "" && IsDirectAdminRoot(cm.config.CertPath) {
+		log.Printf("Testing certificates from DirectAdmin installation %s...\n", cm.config.CertPath)
+
+		success, fail := cm.testCertificatePairs(directAdminCertificates(cm.config.CertPath))
+		successCount += success
+		failCount += fail
+	} else if cm.config.CertPath != "" {
 		files, err := os.ReadDir(cm.config.CertPath)
 		if err != nil {
 			log.Printf("Warning: Error reading certificate directory %s: %v", cm.config.CertPath, err)
@@ -451,55 +457,9 @@ func (cm *Manager) TestCertificates() {
 		} else {
 			log.Printf("\nTesting certificates from NGINX config %s...\n", cm.config.NginxConfigPath)
 
-			for _, pair := range pairs {
-				// Read cert and key files
-				certPEM, err := os.ReadFile(pair.CertPath)
-				if err != nil {
-					log.Printf("✗ %s: Failed to read certificate: %v", pair.CertPath, err)
-					failCount++
-					continue
-				}
-
-				keyPEM, err := os.ReadFile(pair.KeyPath)
-				if err != nil {
-					log.Printf("✗ %s: Failed to read key: %v", pair.KeyPath, err)
-					failCount++
-					continue
-				}
-
-				// Combine and parse
-				// Ensure there's a newline between cert and key
-				combinedPEM := certPEM
-				if len(certPEM) > 0 && certPEM[len(certPEM)-1] != '\n' {
-					combinedPEM = append(combinedPEM, '\n')
-				}
-				combinedPEM = append(combinedPEM, keyPEM...)
-				cert, err := cm.parseCombinedPEM(combinedPEM)
-				if err != nil {
-					log.Printf("✗ %s + %s: Failed to parse: %v", pair.CertPath, pair.KeyPath, err)
-					failCount++
-					continue
-				}
-
-				if cert.Leaf != nil {
-					hostnames := cm.getCertificateHostnames(cert.Leaf)
-					notAfter := cert.Leaf.NotAfter.Format("2006-01-02")
-
-					if time.Now().After(cert.Leaf.NotAfter) {
-						log.Printf("✗ %s: EXPIRED (expired %s) - Hosts: %v", pair.CertPath, notAfter, hostnames)
-						failCount++
-					} else if time.Now().Add(30 * 24 * time.Hour).After(cert.Leaf.NotAfter) {
-						log.Printf("⚠ %s: EXPIRING SOON (expires %s) - Hosts: %v", pair.CertPath, notAfter, hostnames)
-						successCount++
-					} else {
-						log.Printf("✓ %s: Valid until %s - Hosts: %v", pair.CertPath, notAfter, hostnames)
-						successCount++
-					}
-				} else {
-					log.Printf("✓ %s: Loaded successfully", pair.CertPath)
-					successCount++
-				}
-			}
+			success, fail := cm.testCertificatePairs(pairs)
+			successCount += success
+			failCount += fail
 		}
 	}
 
@@ -520,6 +480,47 @@ func (cm *Manager) TestCertificates() {
 			}
 		}
 	}
+}
+
+// testCertificatePairs logs the status of each certificate pair and returns
+// the number of usable and failed pairs.
+func (cm *Manager) testCertificatePairs(pairs []Certificate) (successCount, failCount int) {
+	for _, pair := range pairs {
+		combinedPEM, err := readCertificatePair(pair)
+		if err != nil {
+			log.Printf("✗ %s: Failed to read: %v", pair.CertPath, err)
+			failCount++
+			continue
+		}
+
+		cert, err := cm.parseCombinedPEM(combinedPEM)
+		if err != nil {
+			log.Printf("✗ %s + %s: Failed to parse: %v", pair.CertPath, pair.KeyPath, err)
+			failCount++
+			continue
+		}
+
+		if cert.Leaf != nil {
+			hostnames := cm.getCertificateHostnames(cert.Leaf)
+			notAfter := cert.Leaf.NotAfter.Format("2006-01-02")
+
+			if time.Now().After(cert.Leaf.NotAfter) {
+				log.Printf("✗ %s: EXPIRED (expired %s) - Hosts: %v", pair.CertPath, notAfter, hostnames)
+				failCount++
+			} else if time.Now().Add(30 * 24 * time.Hour).After(cert.Leaf.NotAfter) {
+				log.Printf("⚠ %s: EXPIRING SOON (expires %s) - Hosts: %v", pair.CertPath, notAfter, hostnames)
+				successCount++
+			} else {
+				log.Printf("✓ %s: Valid until %s - Hosts: %v", pair.CertPath, notAfter, hostnames)
+				successCount++
+			}
+		} else {
+			log.Printf("✓ %s: Loaded successfully", pair.CertPath)
+			successCount++
+		}
+	}
+
+	return successCount, failCount
 }
 
 // Stop gracefully shuts down the certificate manager
@@ -553,8 +554,24 @@ func (cm *Manager) setupWatches() {
 		}
 	}
 
-	// Watch certificate directory if provided
-	if cm.config.CertPath != "" {
+	// Watch a DirectAdmin installation's certificate directories, or the
+	// certificate directory, if provided
+	if cm.config.CertPath != "" && IsDirectAdminRoot(cm.config.CertPath) {
+		for _, dir := range directAdminWatchDirs(cm.config.CertPath) {
+			if cm.watchedDirs[dir] {
+				continue
+			}
+			err := cm.watcher.Add(dir)
+			if err != nil {
+				log.Printf("[cert_manager] Warning: Failed to watch DirectAdmin directory %s: %v", dir, err)
+			} else {
+				cm.watchedDirs[dir] = true
+				if cm.config.Verbose {
+					log.Printf("[cert_manager] Watching DirectAdmin directory %s for changes", dir)
+				}
+			}
+		}
+	} else if cm.config.CertPath != "" {
 		if !cm.watchedDirs[cm.config.CertPath] {
 			err := cm.watcher.Add(cm.config.CertPath)
 			if err != nil {
@@ -682,10 +699,23 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	fromDir := 0
 	fromACME := 0
 	fromNginx := 0
+	fromDirectAdmin := 0
 	nginxConfigLoaded := false
 
-	// Load from certificate directory if provided
-	if cm.config.CertPath != "" {
+	// Load from a DirectAdmin installation or a certificate directory if provided
+	if cm.config.CertPath != "" && IsDirectAdminRoot(cm.config.CertPath) {
+		for _, pair := range directAdminCertificates(cm.config.CertPath) {
+			metadata, hostnames := cm.loadCertificatePair(pair, verbose)
+			if metadata == nil {
+				continue
+			}
+			for _, name := range hostnames {
+				tempHostnameCache[name] = append(tempHostnameCache[name], metadata)
+			}
+			successCount++
+			fromDirectAdmin++
+		}
+	} else if cm.config.CertPath != "" {
 		files, err := os.ReadDir(cm.config.CertPath)
 		if err != nil {
 			log.Printf("[cert_manager] Error reading certificate directory %s: %v", cm.config.CertPath, err)
@@ -786,61 +816,15 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 			cm.nginxCertFiles = certFiles
 
 			for _, pair := range pairs {
-				// Read cert and key files separately
-				certPEM, err := os.ReadFile(pair.CertPath)
-				if err != nil {
-					if verbose {
-						log.Printf("[cert_manager] Failed to read certificate file %s: %v", pair.CertPath, err)
-					}
+				metadata, hostnames := cm.loadCertificatePair(pair, verbose)
+				if metadata == nil {
 					continue
 				}
-
-				keyPEM, err := os.ReadFile(pair.KeyPath)
-				if err != nil {
-					if verbose {
-						log.Printf("[cert_manager] Failed to read key file %s: %v", pair.KeyPath, err)
-					}
-					continue
+				for _, name := range hostnames {
+					tempHostnameCache[name] = append(tempHostnameCache[name], metadata)
 				}
-
-				// Combine cert and key
-				// Ensure there's a newline between cert and key
-				combinedPEM := certPEM
-				if len(certPEM) > 0 && certPEM[len(certPEM)-1] != '\n' {
-					combinedPEM = append(combinedPEM, '\n')
-				}
-				combinedPEM = append(combinedPEM, keyPEM...)
-
-				cert, err := cm.parseCombinedPEM(combinedPEM)
-				if err != nil {
-					if verbose {
-						log.Printf("[cert_manager] Failed to parse certificate pair %s + %s: %v", pair.CertPath, pair.KeyPath, err)
-					}
-					continue
-				}
-
-				// Check if certificate is expired
-				if cert.Leaf != nil && time.Now().After(cert.Leaf.NotAfter) {
-					if verbose {
-						log.Printf("[cert_manager] Skipping expired certificate %s (expired %s)", pair.CertPath, cert.Leaf.NotAfter.Format("2006-01-02"))
-					}
-					continue
-				}
-
-				// Map the certificate to all its valid hostnames
-				if cert.Leaf != nil {
-					hostnames := cm.getCertificateHostnames(cert.Leaf)
-					if len(hostnames) > 0 {
-						metadata := cm.extractCertificateMetadata(cert, pair.CertPath, hostnames)
-						if metadata != nil {
-							for _, name := range hostnames {
-								tempHostnameCache[name] = append(tempHostnameCache[name], metadata)
-							}
-							successCount++
-							fromNginx++
-						}
-					}
-				}
+				successCount++
+				fromNginx++
 			}
 		}
 	}
@@ -857,6 +841,9 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	if fromDir > 0 {
 		sources = append(sources, fmt.Sprintf("%d from directory", fromDir))
 	}
+	if fromDirectAdmin > 0 {
+		sources = append(sources, fmt.Sprintf("%d from DirectAdmin", fromDirectAdmin))
+	}
 	if fromACME > 0 {
 		sources = append(sources, fmt.Sprintf("%d from Traefik ACME storage", fromACME))
 	}
@@ -869,6 +856,43 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	}
 
 	log.Printf("[cert_manager] Loaded %d certificates (%s) covering %d hostnames", successCount, sourceMsg, len(tempHostnameCache))
+}
+
+// loadCertificatePair reads and parses a certificate pair. It returns nil when
+// the pair cannot be read or parsed, is expired, or names no valid hostname.
+func (cm *Manager) loadCertificatePair(pair Certificate, verbose bool) (*certificateWithMetadata, []string) {
+	combinedPEM, err := readCertificatePair(pair)
+	if err != nil {
+		if verbose {
+			log.Printf("[cert_manager] Failed to read certificate pair %s + %s: %v", pair.CertPath, pair.KeyPath, err)
+		}
+		return nil, nil
+	}
+
+	cert, err := cm.parseCombinedPEM(combinedPEM)
+	if err != nil {
+		if verbose {
+			log.Printf("[cert_manager] Failed to parse certificate pair %s + %s: %v", pair.CertPath, pair.KeyPath, err)
+		}
+		return nil, nil
+	}
+	if cert.Leaf == nil {
+		return nil, nil
+	}
+
+	if time.Now().After(cert.Leaf.NotAfter) {
+		if verbose {
+			log.Printf("[cert_manager] Skipping expired certificate %s (expired %s)", pair.CertPath, cert.Leaf.NotAfter.Format("2006-01-02"))
+		}
+		return nil, nil
+	}
+
+	hostnames := cm.getCertificateHostnames(cert.Leaf)
+	if len(hostnames) == 0 {
+		return nil, nil
+	}
+
+	return cm.extractCertificateMetadata(cert, pair.CertPath, hostnames), hostnames
 }
 
 func (cm *Manager) getCertificateHostnames(cert *x509.Certificate) []string {

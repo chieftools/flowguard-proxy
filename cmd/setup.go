@@ -38,6 +38,7 @@ var (
 	setupNginxConfigPath   = "/etc/nginx/nginx.conf"
 	setupNginxRunning      = nginxIsRunning
 	setupPleskRootFallback = []string{"/opt/psa", "/usr/local/psa"}
+	setupDirectAdminRoot   = "/usr/local/directadmin"
 )
 
 type setupAPIClient interface {
@@ -231,6 +232,10 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, r
 			var diagnostics []string
 			certCandidate, hasCertCandidate, diagnostics = discoverPleskCertificatePath()
 			discoveryDiagnostics = append(discoveryDiagnostics, diagnostics...)
+			if !hasCertCandidate {
+				certCandidate, hasCertCandidate, diagnostics = discoverDirectAdminCertificatePath()
+				discoveryDiagnostics = append(discoveryDiagnostics, diagnostics...)
+			}
 			acmeCandidate, hasACMECandidate, diagnostics = discoverTraefikACMEPath()
 			discoveryDiagnostics = append(discoveryDiagnostics, diagnostics...)
 			nginxCandidate, hasNginxCandidate, diagnostics = discoverNginxConfigPath()
@@ -402,6 +407,30 @@ func discoverPleskCertificatePath() (setupDiscoveryCandidate, bool, []string) {
 	return setupDiscoveryCandidate{}, false, diagnostics
 }
 
+// discoverDirectAdminCertificatePath offers the DirectAdmin installation as
+// host.cert_path, which loads its certificates whichever web server it runs.
+func discoverDirectAdminCertificatePath() (setupDiscoveryCandidate, bool, []string) {
+	path := setupDirectAdminRoot
+	if !certmanager.IsDirectAdminRoot(path) {
+		return setupDiscoveryCandidate{}, false, []string{fmt.Sprintf("DirectAdmin certificates: rejected %s: not a DirectAdmin installation", path)}
+	}
+
+	summary, err := certmanager.ProbeCertificateDirectorySummary(path)
+	if err != nil {
+		return setupDiscoveryCandidate{}, false, []string{fmt.Sprintf("DirectAdmin certificates: rejected %s: %v", path, err)}
+	}
+
+	diagnostic := fmt.Sprintf(
+		"DirectAdmin certificates: accepted %s (%d usable certificate(s), %d hostname(s))",
+		path, summary.CertificateCount, summary.HostnameCount,
+	)
+	return setupDiscoveryCandidate{
+		kind:    "directadmin",
+		path:    path,
+		summary: summary,
+	}, true, []string{diagnostic}
+}
+
 func setupPleskRoots() []string {
 	var roots []string
 	if root, err := readPleskProductRoot(setupPsaConfPath); err == nil && root != "" {
@@ -510,6 +539,8 @@ func printSetupDiscoveryCandidate(candidate setupDiscoveryCandidate) {
 	switch candidate.kind {
 	case "certificate":
 		fmt.Fprintf(setupOutput, "  ✓ Discovered Plesk certificate directory: %s\n", candidate.path)
+	case "directadmin":
+		fmt.Fprintf(setupOutput, "  ✓ Discovered DirectAdmin installation: %s\n", candidate.path)
 	case "acme":
 		fmt.Fprintf(setupOutput, "  ✓ Discovered Traefik ACME storage: %s\n", candidate.path)
 	case "nginx":

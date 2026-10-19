@@ -45,6 +45,7 @@ func resetSetupTestGlobals(t *testing.T) {
 	oldNginxConfigPath := setupNginxConfigPath
 	oldNginxRunning := setupNginxRunning
 	oldPleskRootFallback := setupPleskRootFallback
+	oldDirectAdminRoot := setupDirectAdminRoot
 
 	configFile = filepath.Join(t.TempDir(), "config.json")
 	setupDiscover = false
@@ -73,6 +74,7 @@ func resetSetupTestGlobals(t *testing.T) {
 	setupNginxConfigPath = filepath.Join(t.TempDir(), "missing-nginx.conf")
 	setupNginxRunning = func() bool { return true }
 	setupPleskRootFallback = nil
+	setupDirectAdminRoot = filepath.Join(t.TempDir(), "missing-directadmin")
 
 	t.Cleanup(func() {
 		configFile = oldConfigFile
@@ -92,6 +94,7 @@ func resetSetupTestGlobals(t *testing.T) {
 		setupNginxConfigPath = oldNginxConfigPath
 		setupNginxRunning = oldNginxRunning
 		setupPleskRootFallback = oldPleskRootFallback
+		setupDirectAdminRoot = oldDirectAdminRoot
 	})
 }
 
@@ -444,6 +447,55 @@ func TestSetupHostDeclinedCertificateFallsBackToNginx(t *testing.T) {
 			}
 			if payload.Host.NginxConfigPath != nginxConfigPath {
 				t.Fatalf("unexpected nginx path: %s", payload.Host.NginxConfigPath)
+			}
+			return nil
+		},
+	}
+
+	if err := setupHostWithClient(client); err != nil {
+		t.Fatalf("setupHostWithClient: %v", err)
+	}
+}
+
+func TestSetupHostDiscoversDirectAdminBeforeNginx(t *testing.T) {
+	resetSetupTestGlobals(t)
+
+	root := t.TempDir()
+	domains := filepath.Join(root, "data", "users", "alice", "domains")
+	if err := os.MkdirAll(filepath.Join(root, "conf"), 0o755); err != nil {
+		t.Fatalf("create conf dir: %v", err)
+	}
+	if err := os.MkdirAll(domains, 0o755); err != nil {
+		t.Fatalf("create domains dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "conf", "directadmin.conf"), []byte("ssl=1\n"), 0o644); err != nil {
+		t.Fatalf("write directadmin.conf: %v", err)
+	}
+	certPEM, keyPEM := makeSetupTestCertificatePEM(t)
+	if err := os.WriteFile(filepath.Join(domains, "example.com.cert.combined"), certPEM, 0o644); err != nil {
+		t.Fatalf("write certificate: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(domains, "example.com.key"), keyPEM, 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	setupDirectAdminRoot = root
+
+	nginxConfigPath := filepath.Join(t.TempDir(), "nginx.conf")
+	if err := os.WriteFile(nginxConfigPath, []byte("events {}\nhttp {}\n"), 0o644); err != nil {
+		t.Fatalf("write nginx config: %v", err)
+	}
+	setupNginxConfigPath = nginxConfigPath
+	setupInput = strings.NewReader(strings.Repeat("\n", 7))
+
+	client := &fakeSetupClient{
+		initialConfig: `{"host":{}}`,
+		updatedConfig: `{"host":{"cert_path":"` + root + `"}}`,
+		patchFunc: func(payload api.ConfigPatch) error {
+			if payload.Host == nil {
+				t.Fatal("expected host patch")
+			}
+			if payload.Host.CertPath != root || payload.Host.NginxConfigPath != "" {
+				t.Fatalf("expected only the DirectAdmin cert path, got %#v", payload.Host)
 			}
 			return nil
 		},

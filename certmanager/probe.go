@@ -30,6 +30,14 @@ func ProbeCertificateDirectorySummary(path string) (ProbeSummary, error) {
 		return summary, fmt.Errorf("certificate directory path is required")
 	}
 
+	if IsDirectAdminRoot(path) {
+		probeCertificatePairs(&summary, directAdminCertificates(path))
+		if summary.CertificateCount == 0 {
+			return summary, fmt.Errorf("no valid certificates found in DirectAdmin installation %s", path)
+		}
+		return summary, nil
+	}
+
 	info, err := os.Stat(path)
 	if err != nil {
 		return summary, fmt.Errorf("certificate directory is not readable: %w", err)
@@ -143,24 +151,21 @@ func ProbeNginxConfigSummary(path string) (ProbeSummary, error) {
 	}
 	summary.ConfigFileCount = len(configFiles)
 
+	probeCertificatePairs(&summary, pairs)
+
+	return summary, nil
+}
+
+// probeCertificatePairs counts the usable certificate pairs and the hostnames
+// they cover.
+func probeCertificatePairs(summary *ProbeSummary, pairs []Certificate) {
 	cm := &Manager{}
 	hostnames := make(map[string]bool)
 	for _, pair := range pairs {
-		certPEM, err := os.ReadFile(pair.CertPath)
+		combinedPEM, err := readCertificatePair(pair)
 		if err != nil {
 			continue
 		}
-
-		keyPEM, err := os.ReadFile(pair.KeyPath)
-		if err != nil {
-			continue
-		}
-
-		combinedPEM := certPEM
-		if len(certPEM) > 0 && certPEM[len(certPEM)-1] != '\n' {
-			combinedPEM = append(combinedPEM, '\n')
-		}
-		combinedPEM = append(combinedPEM, keyPEM...)
 
 		certHostnames, ok := probeCertificateHostnames(cm, combinedPEM)
 		if !ok {
@@ -173,8 +178,6 @@ func ProbeNginxConfigSummary(path string) (ProbeSummary, error) {
 		}
 	}
 	summary.HostnameCount = len(hostnames)
-
-	return summary, nil
 }
 
 func probeCertificateHostnames(cm *Manager, pemData []byte) ([]string, bool) {
