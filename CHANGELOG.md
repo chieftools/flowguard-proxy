@@ -9,6 +9,8 @@ release.
 
 ## [Unreleased]
 
+## [0.30.0]
+
 ### Added
 
 - The install script now supports CloudLinux. It also recognizes other distributions derived from Debian, Ubuntu or RHEL, such as Linux Mint or Oracle Linux, by the parent distributions they list in `ID_LIKE` in `/etc/os-release`.
@@ -725,7 +727,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.29.1...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.30.0...HEAD
+[0.30.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.30.0
 [0.29.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.29.1
 [0.29.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.29.0
 [0.28.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.28.2
