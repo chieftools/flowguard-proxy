@@ -323,7 +323,9 @@ func (m *transparentNetworkManager) setupFamily(family int) error {
 }
 
 func isManagedTransparentChainLine(line string, mark uint32) bool {
-	if line == "-N "+transparentFirewallChain {
+	// iptables-nft prints notices such as "# Warning: iptables-legacy tables
+	// present" alongside the rules; they are not rules.
+	if line == "-N "+transparentFirewallChain || strings.HasPrefix(line, "#") {
 		return true
 	}
 	fields := strings.Fields(line)

@@ -148,6 +148,7 @@ func TestTransparentNetworkRejectsPolicyPriorityConflict(t *testing.T) {
 
 func TestManagedTransparentChainLinesAcceptsIptablesOutput(t *testing.T) {
 	for _, line := range []string{
+		"# Warning: iptables-legacy tables present, use iptables-legacy to see them",
 		"-A FLOWGUARD_UPSTREAM -m mark --mark 0x4647 -j CONNMARK --save-mark",
 		"-A FLOWGUARD_UPSTREAM -m connmark --mark 0x4647/0xffffffff -j CONNMARK --restore-mark",
 		"-A FLOWGUARD_UPSTREAM -m mark --mark 17991 -j CONNMARK --save-mark --nfmask 0xffffffff --ctmask 0xffffffff",

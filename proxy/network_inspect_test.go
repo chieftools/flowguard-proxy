@@ -92,6 +92,21 @@ func TestInspectMangleIdentityHandlesNftablesMissingChainBug(t *testing.T) {
 			wantCommands: []string{ipv6Inspect, ipv6Nft},
 		},
 		{
+			name:    "iptables 1.8.5 false error for missing IPv4 chain",
+			family:  4,
+			command: "iptables",
+			responses: map[string]inspectionCommandResult{
+				ipv4Inspect: {
+					output: "# Warning: iptables-legacy tables present, use iptables-legacy to see them\niptables: Incompatible with this kernel.",
+					err:    exitError,
+				},
+				ipv4Nft: {output: "Error: No such file or directory", err: exitError},
+			},
+			wantReady:    true,
+			wantDetails:  []string{"available", "verified with nftables"},
+			wantCommands: []string{ipv4Inspect, ipv4Nft},
+		},
+		{
 			name:    "native chain exists",
 			family:  4,
 			command: "iptables",
@@ -150,6 +165,25 @@ func TestInspectMangleIdentityHandlesNftablesMissingChainBug(t *testing.T) {
 					"-A FLOWGUARD_UPSTREAM -m connmark --mark 0x4647 -j CONNMARK --restore-mark",
 				}, "\n")},
 				ipv4Output: {output: "-P OUTPUT ACCEPT"},
+			},
+			wantReady:    true,
+			wantDetails:  []string{"FlowGuard-compatible"},
+			wantCommands: []string{ipv4Inspect, ipv4Output},
+		},
+		{
+			name:    "existing compatible chain with legacy tables warning",
+			family:  4,
+			command: "iptables",
+			responses: map[string]inspectionCommandResult{
+				ipv4Inspect: {output: strings.Join([]string{
+					"# Warning: iptables-legacy tables present, use iptables-legacy to see them",
+					"-N FLOWGUARD_UPSTREAM",
+					"-A FLOWGUARD_UPSTREAM -m mark --mark 0x4647 -j CONNMARK --save-mark",
+				}, "\n")},
+				ipv4Output: {output: strings.Join([]string{
+					"# Warning: iptables-legacy tables present, use iptables-legacy to see them",
+					"-P OUTPUT ACCEPT",
+				}, "\n")},
 			},
 			wantReady:    true,
 			wantDetails:  []string{"FlowGuard-compatible"},

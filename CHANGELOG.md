@@ -13,6 +13,11 @@ release.
 
 - The install script now supports CloudLinux. It also recognizes other distributions derived from Debian, Ubuntu or RHEL, such as Linux Mint or Oracle Linux, by the parent distributions they list in `ID_LIKE` in `/etc/os-release`.
 
+### Fixed
+
+- Fixed `flowguard setup` reporting transparent mode as unavailable on EL8 systems such as CloudLinux 8 and Rocky Linux 8. Their iptables 1.8.5 reports a missing chain as "Incompatible with this kernel", which is now verified with `nft` instead.
+- Fixed transparent mode refusing to start, and `flowguard setup` reporting it as unavailable, when iptables prints "# Warning: iptables-legacy tables present" while listing an existing `FLOWGUARD_UPSTREAM` chain. The warning was mistaken for an unmanaged rule.
+
 ## [0.29.1]
 
 ### Changed

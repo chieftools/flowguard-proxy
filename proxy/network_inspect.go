@@ -289,10 +289,13 @@ func isMissingFirewallResource(output string) bool {
 		strings.Contains(lower, "no such file")
 }
 
+// isNftablesCompatibilityError recognizes iptables-nft errors that can hide a
+// missing chain: 1.8.7 reports "is incompatible, use 'nft' tool", and 1.8.5
+// (EL8) reports "Incompatible with this kernel" for any chain it cannot find.
 func isNftablesCompatibilityError(output string) bool {
 	lower := strings.ToLower(output)
-	return strings.Contains(lower, "incompatible") &&
-		strings.Contains(lower, "use 'nft' tool")
+	return (strings.Contains(lower, "incompatible") && strings.Contains(lower, "use 'nft' tool")) ||
+		strings.Contains(lower, "incompatible with this kernel")
 }
 
 func commandFailureDetails(output []byte, err error) string {
