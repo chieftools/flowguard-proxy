@@ -4,9 +4,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -156,5 +158,57 @@ func TestProbeCertificateDirectoryAcceptsDirectAdminRoot(t *testing.T) {
 	}
 	if summary.CertificateCount != 2 || summary.HostnameCount != 2 {
 		t.Fatalf("expected 2 certificates covering 2 hostnames, got %d covering %d", summary.CertificateCount, summary.HostnameCount)
+	}
+}
+
+func writeDirectAdminIP(t *testing.T, root, ip, linkedIPs string) {
+	t.Helper()
+	body := "status=server\nvalue=1\n"
+	if linkedIPs != "" {
+		body = "linked_ips=" + linkedIPs + "\n" + body
+	}
+	writeDirectAdminFile(t, filepath.Join(root, "data", "admin", "ips", ip), []byte(body))
+}
+
+func TestDiscoverDirectAdminAddressPairs(t *testing.T) {
+	root := writeDirectAdminTestRoot(t)
+	// Copied from a DirectAdmin server, which percent-encodes every character.
+	writeDirectAdminIP(t, root, "185.133.88.5", "%32a%31%30%3A%37%31%38%30%3A%31%30%30%3A%30%3A%31%38%35%3A%31%33%33%3A%38%38%3A%35=apache%3Dyes%26dns%3Dyes")
+	writeDirectAdminIP(t, root, "2a10:7180:100:0:185:133:88:5", "")
+	// Linked from the IPv6 side only.
+	writeDirectAdminIP(t, root, "2001:db8::20", url.Values{"192.0.2.20": {"apache=yes&dns=no"}}.Encode())
+	writeDirectAdminIP(t, root, "192.0.2.20", "")
+	// Not applied to the web server.
+	writeDirectAdminIP(t, root, "192.0.2.30", url.Values{"2001:db8::30": {"apache=no&dns=yes"}}.Encode())
+
+	pairs, warnings, diagnostics := DiscoverDirectAdminAddressPairs(root)
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	want := []AddressPair{
+		{IPv4: "185.133.88.5", IPv6: "2a10:7180:100:0:185:133:88:5"},
+		{IPv4: "192.0.2.20", IPv6: "2001:db8::20"},
+	}
+	if !reflect.DeepEqual(pairs, want) {
+		t.Fatalf("pairs = %#v, want %#v", pairs, want)
+	}
+	if joined := strings.Join(diagnostics, "\n"); !strings.Contains(joined, "ignored link 192.0.2.30 <-> 2001:db8::30 because it does not apply to the web server") {
+		t.Fatalf("expected a diagnostic for the ignored link, got:\n%s", joined)
+	}
+}
+
+func TestDiscoverDirectAdminAddressPairsRejectsAmbiguousLinks(t *testing.T) {
+	root := writeDirectAdminTestRoot(t)
+	writeDirectAdminIP(t, root, "192.0.2.10", url.Values{
+		"2001:db8::10": {"apache=yes"},
+		"2001:db8::11": {"apache=yes"},
+	}.Encode())
+
+	pairs, warnings, _ := DiscoverDirectAdminAddressPairs(root)
+	if len(pairs) != 0 {
+		t.Fatalf("expected no pairs, got %#v", pairs)
+	}
+	if len(warnings) != 2 || !strings.Contains(warnings[0], "ambiguous") {
+		t.Fatalf("expected two ambiguity warnings, got %v", warnings)
 	}
 }

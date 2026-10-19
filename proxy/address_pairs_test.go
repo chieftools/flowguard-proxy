@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -68,6 +69,40 @@ http {
 	}
 	if !resolution.Complete() {
 		t.Fatalf("expected the one remaining pair to resolve, got %v", resolution.Unresolved)
+	}
+}
+
+func TestResolveAddressPairsUsesDirectAdminLinks(t *testing.T) {
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"conf/directadmin.conf":         "ssl=1\n",
+		"data/admin/ips/192.0.2.10":     "linked_ips=" + url.Values{"2001:db8::20": {"apache=yes&dns=yes"}}.Encode() + "\n",
+		"data/admin/ips/2001:db8::20":   "status=shared\n",
+		"data/users/alice/user.conf":    "",
+		"data/admin/ips/not-an-address": "linked_ips=\n",
+	} {
+		path = filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	cfg := &config.Config{Host: &config.HostConfig{CertPath: root}}
+
+	resolution, err := ResolveAddressPairs(cfg, []string{
+		"192.0.2.10", "192.0.2.20", "2001:db8::10", "2001:db8::20",
+	})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	want := []ResolvedAddressPair{
+		{IPv4: "192.0.2.10", IPv6: "2001:db8::20", Provenance: "directadmin"},
+		{IPv4: "192.0.2.20", IPv6: "2001:db8::10", Provenance: "single-pair"},
+	}
+	if !reflect.DeepEqual(resolution.Pairs, want) {
+		t.Fatalf("unexpected pairs:\n got: %#v\nwant: %#v", resolution.Pairs, want)
 	}
 }
 

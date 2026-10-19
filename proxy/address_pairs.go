@@ -97,6 +97,47 @@ func ResolveAddressPairs(cfg *config.Config, bindAddrs []string) (AddressPairRes
 		resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf("explicit: accepted %s <-> %s", v4.Unmap(), v6.Unmap()))
 	}
 
+	addDiscoveredPairs := func(source string, discovered []certmanager.AddressPair) {
+		for _, pair := range discovered {
+			v4, _ := netip.ParseAddr(pair.IPv4)
+			v6, _ := netip.ParseAddr(pair.IPv6)
+			if !bindSet[v4] || !bindSet[v6] {
+				var missing []string
+				if !bindSet[v4] {
+					missing = append(missing, v4.String())
+				}
+				if !bindSet[v6] {
+					missing = append(missing, v6.String())
+				}
+				resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf(
+					"%s: ignored discovered pair %s <-> %s because %s are not FlowGuard bind addresses",
+					source, v4, v6, strings.Join(missing, ", "),
+				))
+				continue
+			}
+			if _, v4Assigned := resolution.counterparts[v4]; v4Assigned {
+				resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf(
+					"%s: ignored discovered pair %s <-> %s because %s already has a counterpart",
+					source, v4, v6, v4,
+				))
+				continue
+			}
+			if _, v6Assigned := resolution.counterparts[v6]; v6Assigned {
+				resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf(
+					"%s: ignored discovered pair %s <-> %s because %s already has a counterpart",
+					source, v4, v6, v6,
+				))
+				continue
+			}
+			if err := addPair(v4, v6, source); err != nil {
+				resolution.Warnings = append(resolution.Warnings, err.Error())
+				resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf("%s: rejected %s <-> %s: %v", source, v4, v6, err))
+			} else {
+				resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf("%s: applied %s <-> %s", source, v4, v6))
+			}
+		}
+	}
+
 	if cfg != nil && cfg.Host != nil && cfg.Host.NginxConfigPath != "" {
 		discovered, warnings, diagnostics, err := certmanager.DiscoverNginxAddressPairsWithDiagnostics(cfg.Host.NginxConfigPath)
 		resolution.Diagnostics = append(resolution.Diagnostics, diagnostics...)
@@ -104,47 +145,19 @@ func ResolveAddressPairs(cfg *config.Config, bindAddrs []string) (AddressPairRes
 			resolution.Warnings = append(resolution.Warnings, err.Error())
 		} else {
 			resolution.Warnings = append(resolution.Warnings, warnings...)
-			for _, pair := range discovered {
-				v4, _ := netip.ParseAddr(pair.IPv4)
-				v6, _ := netip.ParseAddr(pair.IPv6)
-				if !bindSet[v4] || !bindSet[v6] {
-					var missing []string
-					if !bindSet[v4] {
-						missing = append(missing, v4.String())
-					}
-					if !bindSet[v6] {
-						missing = append(missing, v6.String())
-					}
-					resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf(
-						"nginx: ignored discovered pair %s <-> %s because %s are not FlowGuard bind addresses",
-						v4, v6, strings.Join(missing, ", "),
-					))
-					continue
-				}
-				if _, v4Assigned := resolution.counterparts[v4]; v4Assigned {
-					resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf(
-						"nginx: ignored discovered pair %s <-> %s because %s already has a counterpart",
-						v4, v6, v4,
-					))
-					continue
-				}
-				if _, v6Assigned := resolution.counterparts[v6]; v6Assigned {
-					resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf(
-						"nginx: ignored discovered pair %s <-> %s because %s already has a counterpart",
-						v4, v6, v6,
-					))
-					continue
-				}
-				if err := addPair(v4, v6, "nginx"); err != nil {
-					resolution.Warnings = append(resolution.Warnings, err.Error())
-					resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf("nginx: rejected %s <-> %s: %v", v4, v6, err))
-				} else {
-					resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf("nginx: applied %s <-> %s", v4, v6))
-				}
-			}
+			addDiscoveredPairs("nginx", discovered)
 		}
 	} else {
 		resolution.Diagnostics = append(resolution.Diagnostics, "nginx: skipped because host.nginx_config_path is not configured")
+	}
+
+	if cfg != nil && cfg.Host != nil && certmanager.IsDirectAdminRoot(cfg.Host.CertPath) {
+		discovered, warnings, diagnostics := certmanager.DiscoverDirectAdminAddressPairs(cfg.Host.CertPath)
+		resolution.Diagnostics = append(resolution.Diagnostics, diagnostics...)
+		resolution.Warnings = append(resolution.Warnings, warnings...)
+		addDiscoveredPairs("directadmin", discovered)
+	} else {
+		resolution.Diagnostics = append(resolution.Diagnostics, "directadmin: skipped because host.cert_path is not a DirectAdmin installation")
 	}
 
 	var remainingV4 []netip.Addr

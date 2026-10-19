@@ -13,6 +13,7 @@ release.
 
 - The install script now supports CloudLinux. It also recognizes other distributions derived from Debian, Ubuntu or RHEL, such as Linux Mint or Oracle Linux, by the parent distributions they list in `ID_LIKE` in `/etc/os-release`.
 - Added support for DirectAdmin certificates. Set `host.cert_path` to the DirectAdmin installation (`/usr/local/directadmin`) to load each domain's certificate and the server hostname's certificate with its chain, whichever web server DirectAdmin runs. FlowGuard watches the users' `domains` directories, so renewed certificates and new users are picked up without a restart. `flowguard setup` offers it when DirectAdmin is installed. See [Certificate management](README.md#certificate-management).
+- Transparent mode now pairs IPv4 and IPv6 bind addresses using the IPs linked in DirectAdmin when `host.cert_path` points to a DirectAdmin installation. Only links that DirectAdmin applies to the web server are used.
 
 ### Fixed
 

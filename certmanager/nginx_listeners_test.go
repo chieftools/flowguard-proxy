@@ -38,8 +38,8 @@ http {
 		t.Fatalf("unexpected warnings: %v", warnings)
 	}
 	if len(pairs) != 2 ||
-		pairs[0] != (NginxAddressPair{IPv4: "192.0.2.10", IPv6: "2001:db8::10"}) ||
-		pairs[1] != (NginxAddressPair{IPv4: "192.0.2.20", IPv6: "2001:db8::20"}) {
+		pairs[0] != (AddressPair{IPv4: "192.0.2.10", IPv6: "2001:db8::10"}) ||
+		pairs[1] != (AddressPair{IPv4: "192.0.2.20", IPv6: "2001:db8::20"}) {
 		t.Fatalf("unexpected pairs: %#v", pairs)
 	}
 }
@@ -63,7 +63,7 @@ http {
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
 	}
-	if len(pairs) != 1 || pairs[0] != (NginxAddressPair{IPv4: "192.0.2.10", IPv6: "2001:db8::10"}) {
+	if len(pairs) != 1 || pairs[0] != (AddressPair{IPv4: "192.0.2.10", IPv6: "2001:db8::10"}) {
 		t.Fatalf("unexpected pairs: %#v", pairs)
 	}
 	if !strings.Contains(strings.Join(diagnostics, "\n"), "skipped "+missing+" because it does not exist") {
@@ -117,7 +117,7 @@ http {
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
 	}
-	if len(pairs) != 1 || pairs[0] != (NginxAddressPair{IPv4: "10.20.30.20", IPv6: "fd12:3456:789a::20"}) {
+	if len(pairs) != 1 || pairs[0] != (AddressPair{IPv4: "10.20.30.20", IPv6: "fd12:3456:789a::20"}) {
 		t.Fatalf("unexpected pairs: %#v", pairs)
 	}
 	joined := strings.Join(diagnostics, "\n")

@@ -2,6 +2,9 @@ package certmanager
 
 import (
 	"bufio"
+	"fmt"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -85,7 +88,84 @@ func directAdminHostnameCertificate(root string) Certificate {
 	}
 }
 
-// readDirectAdminSettings reads the key=value lines of directadmin.conf.
+// DiscoverDirectAdminAddressPairs reads the IPv4/IPv6 links DirectAdmin keeps
+// in data/admin/ips/<ip> as linked_ips, a URL-encoded list of linked
+// addresses with their options. Only links that DirectAdmin applies to the web
+// server (apache=yes) are used, and an address linked to more than one
+// counterpart is reported as ambiguous rather than guessed.
+func DiscoverDirectAdminAddressPairs(root string) ([]AddressPair, []string, []string) {
+	dir := filepath.Join(root, "data", "admin", "ips")
+	diagnostics := []string{fmt.Sprintf("directadmin: inspecting linked IPs in %s", dir)}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, []string{fmt.Sprintf("could not read DirectAdmin IPs: %v", err)}, diagnostics
+	}
+
+	links := make(map[AddressPair]bool)
+	for _, entry := range entries {
+		ip, err := netip.ParseAddr(entry.Name())
+		if err != nil || entry.IsDir() {
+			continue
+		}
+		ip = ip.Unmap()
+
+		linked, err := url.ParseQuery(readDirectAdminSettings(filepath.Join(dir, entry.Name()))["linked_ips"])
+		if err != nil {
+			diagnostics = append(diagnostics, fmt.Sprintf("directadmin: skipped linked IPs of %s: %v", ip, err))
+			continue
+		}
+		for raw, options := range linked {
+			other, err := netip.ParseAddr(raw)
+			if err != nil {
+				continue
+			}
+			other = other.Unmap()
+			if ip.Is4() == other.Is4() {
+				continue
+			}
+			if values, _ := url.ParseQuery(strings.Join(options, "&")); values.Get("apache") != "yes" {
+				diagnostics = append(diagnostics, fmt.Sprintf("directadmin: ignored link %s <-> %s because it does not apply to the web server", ip, other))
+				continue
+			}
+			pair := AddressPair{IPv4: ip.String(), IPv6: other.String()}
+			if ip.Is6() {
+				pair = AddressPair{IPv4: other.String(), IPv6: ip.String()}
+			}
+			links[pair] = true
+		}
+	}
+
+	counterparts := make(map[string]int)
+	for pair := range links {
+		counterparts[pair.IPv4]++
+		counterparts[pair.IPv6]++
+	}
+
+	var pairs []AddressPair
+	var warnings []string
+	for pair := range links {
+		if counterparts[pair.IPv4] > 1 || counterparts[pair.IPv6] > 1 {
+			warnings = append(warnings, fmt.Sprintf("DirectAdmin link %s <-> %s is ambiguous because an address is linked more than once", pair.IPv4, pair.IPv6))
+			continue
+		}
+		pairs = append(pairs, pair)
+		diagnostics = append(diagnostics, fmt.Sprintf("directadmin: accepted %s <-> %s", pair.IPv4, pair.IPv6))
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].IPv4 < pairs[j].IPv4
+	})
+	sort.Strings(warnings)
+	sort.Strings(diagnostics[1:])
+	if len(pairs) == 0 {
+		diagnostics = append(diagnostics, "directadmin: no linked IPv4/IPv6 pairs were found")
+	}
+
+	return pairs, warnings, diagnostics
+}
+
+// readDirectAdminSettings reads the key=value lines of a DirectAdmin settings
+// file, such as directadmin.conf.
 func readDirectAdminSettings(path string) map[string]string {
 	settings := make(map[string]string)
 

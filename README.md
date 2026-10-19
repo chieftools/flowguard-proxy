@@ -390,8 +390,9 @@ Transparent mode:
 
 For dual-stack servers, FlowGuard must know which IPv4 and IPv6 addresses reach
 the same backend. Explicit `address_pairs` take precedence. FlowGuard then
-checks addresses listed together in one NGINX `server` block, its embedded-IPv4
-heuristic, and a single unambiguous remaining pair. It refuses to start
+checks addresses listed together in one NGINX `server` block, IPs linked in
+DirectAdmin when `host.cert_path` points to it, its embedded-IPv4 heuristic,
+and a single unambiguous remaining pair. It refuses to start
 transparent mode if more than one pairing remains possible:
 
 ```json

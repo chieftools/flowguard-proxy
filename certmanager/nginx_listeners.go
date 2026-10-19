@@ -13,9 +13,9 @@ import (
 	"unicode"
 )
 
-// NginxAddressPair describes an IPv4/IPv6 listener pair explicitly co-listed
+// AddressPair describes an IPv4/IPv6 address pair, such as listeners explicitly co-listed
 // in an NGINX server block.
-type NginxAddressPair struct {
+type AddressPair struct {
 	IPv4 string
 	IPv6 string
 }
@@ -23,14 +23,14 @@ type NginxAddressPair struct {
 // DiscoverNginxAddressPairs conservatively discovers one-to-one address pairs.
 // Blocks with multiple addresses of either family and relationships that are
 // not globally one-to-one are reported as ambiguous rather than guessed.
-func DiscoverNginxAddressPairs(configPath string) ([]NginxAddressPair, []string, error) {
+func DiscoverNginxAddressPairs(configPath string) ([]AddressPair, []string, error) {
 	pairs, warnings, _, err := DiscoverNginxAddressPairsWithDiagnostics(configPath)
 	return pairs, warnings, err
 }
 
 // DiscoverNginxAddressPairsWithDiagnostics also reports each listener parsing
 // and pairing decision for verbose setup output.
-func DiscoverNginxAddressPairsWithDiagnostics(configPath string) ([]NginxAddressPair, []string, []string, error) {
+func DiscoverNginxAddressPairsWithDiagnostics(configPath string) ([]AddressPair, []string, []string, error) {
 	diagnostics := []string{fmt.Sprintf("nginx: inspecting configuration %s", configPath)}
 	_, configFiles, err := parseNginxConfig(configPath, false)
 	if err != nil {
@@ -130,7 +130,7 @@ func DiscoverNginxAddressPairsWithDiagnostics(configPath string) ([]NginxAddress
 		}
 	}
 
-	pairs := make([]NginxAddressPair, 0, len(v4ToV6))
+	pairs := make([]AddressPair, 0, len(v4ToV6))
 	for ipv4, ipv6 := range v4ToV6 {
 		if ambiguousV4[ipv4] || ambiguousV6[ipv6] || v6ToV4[ipv6] != ipv4 {
 			diagnostics = append(diagnostics, fmt.Sprintf(
@@ -139,7 +139,7 @@ func DiscoverNginxAddressPairsWithDiagnostics(configPath string) ([]NginxAddress
 			))
 			continue
 		}
-		pairs = append(pairs, NginxAddressPair{IPv4: ipv4.String(), IPv6: ipv6.String()})
+		pairs = append(pairs, AddressPair{IPv4: ipv4.String(), IPv6: ipv6.String()})
 	}
 	sort.Slice(pairs, func(i, j int) bool {
 		return pairs[i].IPv4 < pairs[j].IPv4
