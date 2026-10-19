@@ -285,8 +285,18 @@ jobs:
               exit 1
           fi
 
-          case $OS in
-              ubuntu|debian)
+          # Derivatives such as CloudLinux or Linux Mint name their parent
+          # distributions in ID_LIKE, so fall back to that when ID is unknown
+          OS_FAMILY=""
+          for CANDIDATE in $ID $ID_LIKE; do
+              case $CANDIDATE in
+                  ubuntu|debian) OS_FAMILY="debian"; break ;;
+                  centos|rhel|rocky|almalinux|fedora|cloudlinux) OS_FAMILY="rhel"; break ;;
+              esac
+          done
+
+          case $OS_FAMILY in
+              debian)
                   echo "Setting up FlowGuard repository for Debian/Ubuntu..."
 
                   # Create a dedicated keyring directory
@@ -327,8 +337,8 @@ jobs:
                   apt-get install -y flowguard
                   ;;
 
-              centos|rhel|rocky|almalinux|fedora)
-                  echo "Setting up FlowGuard repository for RHEL/CentOS/Rocky/Alma/Fedora..."
+              rhel)
+                  echo "Setting up FlowGuard repository for RHEL/CentOS/Rocky/Alma/Fedora/CloudLinux..."
 
                   # Add repository
                   cat > /etc/yum.repos.d/flowguard.repo << EOF

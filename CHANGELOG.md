@@ -9,6 +9,10 @@ release.
 
 ## [Unreleased]
 
+### Added
+
+- The install script now supports CloudLinux. It also recognizes other distributions derived from Debian, Ubuntu or RHEL, such as Linux Mint or Oracle Linux, by the parent distributions they list in `ID_LIKE` in `/etc/os-release`.
+
 ## [0.29.1]
 
 ### Changed
