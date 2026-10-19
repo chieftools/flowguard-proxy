@@ -43,6 +43,7 @@ func resetSetupTestGlobals(t *testing.T) {
 	oldPsaConfPath := setupPsaConfPath
 	oldACMEPaths := setupACMEPaths
 	oldNginxConfigPath := setupNginxConfigPath
+	oldNginxRunning := setupNginxRunning
 	oldPleskRootFallback := setupPleskRootFallback
 
 	configFile = filepath.Join(t.TempDir(), "config.json")
@@ -70,6 +71,7 @@ func resetSetupTestGlobals(t *testing.T) {
 	setupPsaConfPath = filepath.Join(t.TempDir(), "missing-psa.conf")
 	setupACMEPaths = nil
 	setupNginxConfigPath = filepath.Join(t.TempDir(), "missing-nginx.conf")
+	setupNginxRunning = func() bool { return true }
 	setupPleskRootFallback = nil
 
 	t.Cleanup(func() {
@@ -88,6 +90,7 @@ func resetSetupTestGlobals(t *testing.T) {
 		setupPsaConfPath = oldPsaConfPath
 		setupACMEPaths = oldACMEPaths
 		setupNginxConfigPath = oldNginxConfigPath
+		setupNginxRunning = oldNginxRunning
 		setupPleskRootFallback = oldPleskRootFallback
 	})
 }
@@ -441,6 +444,33 @@ func TestSetupHostDeclinedCertificateFallsBackToNginx(t *testing.T) {
 			}
 			if payload.Host.NginxConfigPath != nginxConfigPath {
 				t.Fatalf("unexpected nginx path: %s", payload.Host.NginxConfigPath)
+			}
+			return nil
+		},
+	}
+
+	if err := setupHostWithClient(client); err != nil {
+		t.Fatalf("setupHostWithClient: %v", err)
+	}
+}
+
+func TestSetupHostIgnoresNginxConfigWhenNginxIsNotRunning(t *testing.T) {
+	resetSetupTestGlobals(t)
+
+	nginxConfigPath := filepath.Join(t.TempDir(), "nginx.conf")
+	if err := os.WriteFile(nginxConfigPath, []byte("events {}\nhttp {}\n"), 0o644); err != nil {
+		t.Fatalf("write nginx config: %v", err)
+	}
+	setupNginxConfigPath = nginxConfigPath
+	setupNginxRunning = func() bool { return false }
+	setupInput = strings.NewReader(strings.Repeat("\n", 6))
+
+	client := &fakeSetupClient{
+		initialConfig: `{"host":{}}`,
+		updatedConfig: `{"host":{}}`,
+		patchFunc: func(payload api.ConfigPatch) error {
+			if payload.Host != nil {
+				t.Fatalf("expected no host patch, got %#v", payload.Host)
 			}
 			return nil
 		},

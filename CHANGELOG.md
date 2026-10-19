@@ -17,6 +17,8 @@ release.
 
 - Fixed `flowguard setup` reporting transparent mode as unavailable on EL8 systems such as CloudLinux 8 and Rocky Linux 8. Their iptables 1.8.5 reports a missing chain as "Incompatible with this kernel", which is now verified with `nft` instead.
 - Fixed transparent mode refusing to start, and `flowguard setup` reporting it as unavailable, when iptables prints "# Warning: iptables-legacy tables present" while listing an existing `FLOWGUARD_UPSTREAM` chain. The warning was mistaken for an unmanaged rule.
+- Fixed `flowguard setup` offering a leftover `/etc/nginx/nginx.conf` on servers that no longer run nginx, such as a DirectAdmin server switched to LiteSpeed. It is now only offered while nginx is running.
+- Fixed a warning for every missing include when checking nginx listeners for transparent mode. Missing includes are skipped, as they already were when loading certificates.
 
 ## [0.29.1]
 

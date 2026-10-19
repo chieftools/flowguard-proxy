@@ -44,6 +44,33 @@ http {
 	}
 }
 
+func TestDiscoverNginxAddressPairsSkipsMissingIncludes(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "users", "removed", "nginx.conf")
+	path := writeNginxListenerConfig(t, `
+events {}
+http {
+    include `+missing+`;
+    server {
+        listen 192.0.2.10:443 ssl;
+        listen [2001:db8::10]:443 ssl;
+    }
+}`)
+
+	pairs, warnings, diagnostics, err := DiscoverNginxAddressPairsWithDiagnostics(path)
+	if err != nil {
+		t.Fatalf("DiscoverNginxAddressPairsWithDiagnostics: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	if len(pairs) != 1 || pairs[0] != (NginxAddressPair{IPv4: "192.0.2.10", IPv6: "2001:db8::10"}) {
+		t.Fatalf("unexpected pairs: %#v", pairs)
+	}
+	if !strings.Contains(strings.Join(diagnostics, "\n"), "skipped "+missing+" because it does not exist") {
+		t.Fatalf("expected a diagnostic for the missing include, got:\n%s", strings.Join(diagnostics, "\n"))
+	}
+}
+
 func TestDiscoverNginxAddressPairsRejectsAmbiguity(t *testing.T) {
 	path := writeNginxListenerConfig(t, `
 events {}

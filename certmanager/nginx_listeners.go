@@ -1,7 +1,9 @@
 package certmanager
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/netip"
 	"os"
@@ -46,6 +48,12 @@ func DiscoverNginxAddressPairsWithDiagnostics(configPath string) ([]NginxAddress
 	var warnings []string
 	for _, path := range configFiles {
 		data, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			// The certificate parser also tolerates missing includes, which
+			// are common in stale control panel configurations.
+			diagnostics = append(diagnostics, fmt.Sprintf("nginx: skipped %s because it does not exist", path))
+			continue
+		}
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("could not inspect nginx listeners in %s: %v", path, err))
 			diagnostics = append(diagnostics, fmt.Sprintf("nginx: skipped %s because it could not be read: %v", path, err))

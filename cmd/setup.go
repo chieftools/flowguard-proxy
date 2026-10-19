@@ -36,6 +36,7 @@ var (
 	setupPsaConfPath       = "/etc/psa/psa.conf"
 	setupACMEPaths         = []string{"/etc/traefik/acme.json", "/var/lib/traefik/acme.json"}
 	setupNginxConfigPath   = "/etc/nginx/nginx.conf"
+	setupNginxRunning      = nginxIsRunning
 	setupPleskRootFallback = []string{"/opt/psa", "/usr/local/psa"}
 )
 
@@ -468,6 +469,12 @@ func discoverTraefikACMEPath() (setupDiscoveryCandidate, bool, []string) {
 }
 
 func discoverNginxConfigPath() (setupDiscoveryCandidate, bool, []string) {
+	// Control panels that switch to another web server, such as DirectAdmin
+	// moving to LiteSpeed, leave a stale nginx configuration behind.
+	if !setupNginxRunning() {
+		return setupDiscoveryCandidate{}, false, []string{fmt.Sprintf("NGINX configuration: rejected %s: nginx is not running", setupNginxConfigPath)}
+	}
+
 	summary, err := certmanager.ProbeNginxConfigSummary(setupNginxConfigPath)
 	if err == nil {
 		return setupDiscoveryCandidate{
@@ -481,6 +488,22 @@ func discoverNginxConfigPath() (setupDiscoveryCandidate, bool, []string) {
 	}
 
 	return setupDiscoveryCandidate{}, false, []string{fmt.Sprintf("NGINX configuration: rejected %s: %v", setupNginxConfigPath, err)}
+}
+
+// nginxIsRunning reports whether any process is named nginx. Without a
+// readable /proc it cannot tell, and assumes nginx is running.
+func nginxIsRunning() bool {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return true
+	}
+	for _, entry := range entries {
+		comm, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "comm"))
+		if err == nil && strings.TrimSpace(string(comm)) == "nginx" {
+			return true
+		}
+	}
+	return false
 }
 
 func printSetupDiscoveryCandidate(candidate setupDiscoveryCandidate) {
