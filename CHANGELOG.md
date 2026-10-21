@@ -9,6 +9,16 @@ release.
 
 ## [Unreleased]
 
+## [0.30.1]
+
+### Added
+
+- Added `--address-pair IPV4=IPV6` to `flowguard setup` to pair IPv4 and IPv6 bind addresses for transparent mode when they cannot be paired automatically. Repeat it for each pair. Setup checks that both addresses are bind addresses, replaces configured pairs that share an address, and makes transparent mode the default. See [Initial setup](README.md#initial-setup).
+
+### Fixed
+
+- Fixed `flowguard setup` and `flowguard network inspect` reporting transparent mode as unavailable on servers without the `nft` command, such as Ubuntu 22.04 and Debian 11. When iptables reports a missing chain as incompatible and `nft` is not installed, FlowGuard now checks the whole mangle table for the chain instead.
+
 ## [0.30.0]
 
 ### Added
@@ -727,7 +737,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.30.0...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.30.1...HEAD
+[0.30.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.30.1
 [0.30.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.30.0
 [0.29.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.29.1
 [0.29.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.29.0
