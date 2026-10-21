@@ -219,7 +219,7 @@ func inspectMangleIdentityWithRunner(
 			return NetworkPrerequisite{Name: name, Ready: true, Details: "dedicated chain name is available"}
 		}
 		if isNftablesCompatibilityError(string(output)) {
-			return inspectNftablesMangleIdentity(family, name, details, runner)
+			return inspectNftablesMangleIdentity(family, command, name, details, runner)
 		}
 		return NetworkPrerequisite{Name: name, Ready: false, Details: details}
 	}
@@ -249,6 +249,7 @@ func inspectMangleIdentityWithRunner(
 
 func inspectNftablesMangleIdentity(
 	family int,
+	command string,
 	name string,
 	iptablesDetails string,
 	runner networkCommandRunner,
@@ -271,13 +272,33 @@ func inspectNftablesMangleIdentity(
 			Details: "dedicated chain name is available (verified with nftables)",
 		}
 	}
+	nftDetails := commandFailureDetails(output, err)
+
+	// The compatibility bug only affects listing a single chain, so the whole
+	// table still shows whether the chain exists when nft is not installed.
+	tableOutput, tableErr := runner.Output(command, "-t", "mangle", "-S")
+	if tableErr == nil {
+		for _, line := range strings.Split(string(tableOutput), "\n") {
+			if strings.TrimSpace(line) == "-N "+transparentFirewallChain {
+				return NetworkPrerequisite{
+					Name: name, Ready: false,
+					Details: fmt.Sprintf("%s; the mangle table confirms that the chain exists", iptablesDetails),
+				}
+			}
+		}
+		return NetworkPrerequisite{
+			Name: name, Ready: true,
+			Details: "dedicated chain name is available (verified from the mangle table)",
+		}
+	}
 
 	return NetworkPrerequisite{
 		Name: name, Ready: false,
 		Details: fmt.Sprintf(
-			"%s; could not verify the chain with nft; ensure nft is installed and runnable with current privileges: %s",
+			"%s; could not verify the chain with nft (%s) or by listing the mangle table (%s)",
 			iptablesDetails,
-			commandFailureDetails(output, err),
+			nftDetails,
+			commandFailureDetails(tableOutput, tableErr),
 		),
 	}
 }

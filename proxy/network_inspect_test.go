@@ -41,6 +41,7 @@ func TestInspectMangleIdentityHandlesNftablesMissingChainBug(t *testing.T) {
 		ipv4Nft     = "nft list chain ip mangle FLOWGUARD_UPSTREAM"
 		ipv6Nft     = "nft list chain ip6 mangle FLOWGUARD_UPSTREAM"
 		ipv4Output  = "iptables -t mangle -S OUTPUT"
+		ipv4Table   = "iptables -t mangle -S"
 	)
 	compatibilityError := "iptables v1.8.7 (nf_tables): chain `FLOWGUARD_UPSTREAM' in table `mangle' is incompatible, use 'nft' tool."
 	ipv6CompatibilityError := "ip6tables v1.8.7 (nf_tables): chain `FLOWGUARD_UPSTREAM' in table `mangle' is incompatible, use 'nft' tool."
@@ -119,16 +120,43 @@ func TestInspectMangleIdentityHandlesNftablesMissingChainBug(t *testing.T) {
 			wantCommands: []string{ipv4Inspect, ipv4Nft},
 		},
 		{
-			name:    "nft is not installed",
+			name:    "nft is not installed and the mangle table has no chain",
 			family:  4,
 			command: "iptables",
 			responses: map[string]inspectionCommandResult{
 				ipv4Inspect: {output: compatibilityError, err: exitError},
 				ipv4Nft:     {err: errors.New(`exec: "nft": executable file not found in $PATH`)},
+				ipv4Table:   {output: "-P PREROUTING ACCEPT\n-P OUTPUT ACCEPT\n-N KUBE-MARK\n"},
+			},
+			wantReady:    true,
+			wantDetails:  []string{"available", "verified from the mangle table"},
+			wantCommands: []string{ipv4Inspect, ipv4Nft, ipv4Table},
+		},
+		{
+			name:    "nft is not installed and the mangle table has the chain",
+			family:  4,
+			command: "iptables",
+			responses: map[string]inspectionCommandResult{
+				ipv4Inspect: {output: compatibilityError, err: exitError},
+				ipv4Nft:     {err: errors.New(`exec: "nft": executable file not found in $PATH`)},
+				ipv4Table:   {output: "-P OUTPUT ACCEPT\n-N FLOWGUARD_UPSTREAM\n"},
 			},
 			wantReady:    false,
-			wantDetails:  []string{"could not verify the chain with nft", "executable file not found"},
-			wantCommands: []string{ipv4Inspect, ipv4Nft},
+			wantDetails:  []string{"incompatible", "mangle table confirms that the chain exists"},
+			wantCommands: []string{ipv4Inspect, ipv4Nft, ipv4Table},
+		},
+		{
+			name:    "nft is not installed and the mangle table cannot be listed",
+			family:  4,
+			command: "iptables",
+			responses: map[string]inspectionCommandResult{
+				ipv4Inspect: {output: compatibilityError, err: exitError},
+				ipv4Nft:     {err: errors.New(`exec: "nft": executable file not found in $PATH`)},
+				ipv4Table:   {output: "iptables v1.8.7 (nf_tables): table `mangle' is incompatible, use 'nft' tool.", err: exitError},
+			},
+			wantReady:    false,
+			wantDetails:  []string{"could not verify the chain with nft", "executable file not found", "table `mangle' is incompatible"},
+			wantCommands: []string{ipv4Inspect, ipv4Nft, ipv4Table},
 		},
 		{
 			name:    "nft permission failure",
@@ -137,10 +165,11 @@ func TestInspectMangleIdentityHandlesNftablesMissingChainBug(t *testing.T) {
 			responses: map[string]inspectionCommandResult{
 				ipv4Inspect: {output: compatibilityError, err: exitError},
 				ipv4Nft:     {output: "Error: Could not process rule: Operation not permitted", err: exitError},
+				ipv4Table:   {output: "iptables v1.8.7 (nf_tables): Could not fetch rule set generation id: Permission denied", err: exitError},
 			},
 			wantReady:    false,
-			wantDetails:  []string{"could not verify the chain with nft", "Operation not permitted"},
-			wantCommands: []string{ipv4Inspect, ipv4Nft},
+			wantDetails:  []string{"could not verify the chain with nft", "Operation not permitted", "Permission denied"},
+			wantCommands: []string{ipv4Inspect, ipv4Nft, ipv4Table},
 		},
 		{
 			name:    "unexpected nft failure",
@@ -149,10 +178,11 @@ func TestInspectMangleIdentityHandlesNftablesMissingChainBug(t *testing.T) {
 			responses: map[string]inspectionCommandResult{
 				ipv4Inspect: {output: compatibilityError, err: exitError},
 				ipv4Nft:     {output: "Error: cache initialization failed", err: exitError},
+				ipv4Table:   {output: "-P OUTPUT ACCEPT"},
 			},
-			wantReady:    false,
-			wantDetails:  []string{"could not verify the chain with nft", "cache initialization failed"},
-			wantCommands: []string{ipv4Inspect, ipv4Nft},
+			wantReady:    true,
+			wantDetails:  []string{"verified from the mangle table"},
+			wantCommands: []string{ipv4Inspect, ipv4Nft, ipv4Table},
 		},
 		{
 			name:    "existing compatible chain",
