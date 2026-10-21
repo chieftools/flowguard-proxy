@@ -223,6 +223,100 @@ func TestPromptSetupServerConfigurationConfiguresAmbiguousAddressPairs(t *testin
 	}
 }
 
+func TestPromptSetupServerConfigurationUsesCommandLineAddressPairs(t *testing.T) {
+	resetSetupTestGlobals(t)
+	setupAddressPairs = []config.AddressPair{
+		{IPv4: "192.0.2.10", IPv6: "2001:db8::10"},
+		{IPv4: "192.0.2.20", IPv6: "2001:db8::20"},
+	}
+	bindAddrs := []string{"192.0.2.10", "192.0.2.20", "2001:db8::10", "2001:db8::20"}
+	setupInspectNetwork = func(cfg *config.Config, _ []string) (proxy.NetworkInspection, error) {
+		var pairs []proxy.ResolvedAddressPair
+		for _, pair := range cfg.TransparentUpstreamSettings().AddressPairs {
+			pairs = append(pairs, proxy.ResolvedAddressPair{IPv4: pair.IPv4, IPv6: pair.IPv6, Provenance: "explicit"})
+		}
+		return proxy.NetworkInspection{
+			BindAddresses:    bindAddrs,
+			HeaderReady:      true,
+			TransparentReady: len(pairs) == 2,
+			Pairing:          proxy.AddressPairResolution{Pairs: pairs},
+		}, nil
+	}
+	var output bytes.Buffer
+	setupOutput = &output
+	reader := bufio.NewReader(strings.NewReader(strings.Repeat("\n", 5)))
+	cfg := &config.Config{Server: &config.ServerConfig{Upstream: &config.UpstreamConfig{
+		ClientIPMode: config.UpstreamClientIPModeHeaders,
+		Transparent: &config.TransparentUpstreamConfig{AddressPairs: []config.AddressPair{
+			{IPv4: "192.0.2.10", IPv6: "2001:db8::20"},
+		}},
+	}}}
+
+	patch, err := promptSetupServerConfiguration(reader, cfg, true)
+	if err != nil {
+		t.Fatalf("promptSetupServerConfiguration: %v", err)
+	}
+	if patch.Upstream.ClientIPMode != config.UpstreamClientIPModeTransparent {
+		t.Fatalf("expected command-line pairs to make transparent the default, got %s", patch.Upstream.ClientIPMode)
+	}
+	pairs := patch.Upstream.Transparent.AddressPairs
+	if len(pairs) != 2 ||
+		pairs[0].IPv4 != "192.0.2.10" || pairs[0].IPv6 != "2001:db8::10" ||
+		pairs[1].IPv4 != "192.0.2.20" || pairs[1].IPv6 != "2001:db8::20" {
+		t.Fatalf("expected command-line pairs to replace the configured pair, got %+v", pairs)
+	}
+	if strings.Contains(output.String(), "Configure address pairs now?") {
+		t.Fatalf("expected no pairing prompt for paired addresses, got:\n%s", output.String())
+	}
+}
+
+func TestPromptSetupServerConfigurationRejectsCommandLinePairsForUnboundAddresses(t *testing.T) {
+	resetSetupTestGlobals(t)
+	setupAddressPairs = []config.AddressPair{{IPv4: "192.0.2.10", IPv6: "2001:db8::99"}}
+	setupInspectNetwork = func(*config.Config, []string) (proxy.NetworkInspection, error) {
+		return proxy.NetworkInspection{
+			BindAddresses: []string{"192.0.2.10", "2001:db8::10"},
+			HeaderReady:   true,
+		}, nil
+	}
+
+	_, err := promptSetupServerConfiguration(bufio.NewReader(strings.NewReader("")), &config.Config{}, false)
+	if err == nil || !strings.Contains(err.Error(), "2001:db8::99 is not a bind address") {
+		t.Fatalf("expected unbound address error, got %v", err)
+	}
+}
+
+func TestParseSetupAddressPairs(t *testing.T) {
+	pairs, err := parseSetupAddressPairs([]string{"45.151.158.60=2a0b:3c40:1:142:0::1", " ::ffff:45.151.158.61 = 2a0e:5540:12:5c1c::1 "})
+	if err != nil {
+		t.Fatalf("parseSetupAddressPairs: %v", err)
+	}
+	want := []config.AddressPair{
+		{IPv4: "45.151.158.60", IPv6: "2a0b:3c40:1:142::1"},
+		{IPv4: "45.151.158.61", IPv6: "2a0e:5540:12:5c1c::1"},
+	}
+	if len(pairs) != len(want) || pairs[0] != want[0] || pairs[1] != want[1] {
+		t.Fatalf("pairs = %+v, want %+v", pairs, want)
+	}
+
+	for value, wantErr := range map[string]string{
+		"45.151.158.60":                    "expected IPV4=IPV6",
+		"2a0b:3c40:1:142::1=45.151.158.60": "is not an IPv4 address",
+		"45.151.158.60=45.151.158.61":      "is not an IPv6 address",
+		"45.151.158.60=::ffff:1.2.3.4":     "is not an IPv6 address",
+	} {
+		if _, err := parseSetupAddressPairs([]string{value}); err == nil || !strings.Contains(err.Error(), wantErr) {
+			t.Fatalf("parseSetupAddressPairs(%q) error = %v, want %q", value, err, wantErr)
+		}
+	}
+	if _, err := parseSetupAddressPairs([]string{
+		"45.151.158.60=2a0b:3c40:1:142::1",
+		"45.151.158.61=2a0b:3c40:1:142::1",
+	}); err == nil || !strings.Contains(err.Error(), "already paired") {
+		t.Fatalf("expected duplicate address error, got %v", err)
+	}
+}
+
 func TestPromptSetupServerConfigurationSkipsAddressPairingForHeaders(t *testing.T) {
 	resetSetupTestGlobals(t)
 	setupInspectNetwork = func(*config.Config, []string) (proxy.NetworkInspection, error) {

@@ -22,7 +22,9 @@ import (
 )
 
 var (
-	setupDiscover bool
+	setupDiscover         bool
+	setupAddressPairFlags []string
+	setupAddressPairs     []config.AddressPair
 
 	setupInput  io.Reader = os.Stdin
 	setupOutput io.Writer = os.Stdout
@@ -60,7 +62,10 @@ var setupCmd = &cobra.Command{
 
 The host key is provided by the FlowGuard control panel and looks like: fgsvr_...
 If omitted, FlowGuard reuses the host key from the existing configuration and
-rediscovers the local server configuration.`,
+rediscovers the local server configuration.
+
+Use --address-pair IPV4=IPV6 for each IPv4/IPv6 bind address pair that
+transparent mode cannot pair automatically.`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) > 1 {
 			return fmt.Errorf("too many arguments (expected only host key)")
@@ -68,6 +73,13 @@ rediscovers the local server configuration.`,
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
+		pairs, err := parseSetupAddressPairs(setupAddressPairFlags)
+		if err != nil {
+			log.Printf("[ERROR] Failed to setup host: %v", err)
+			os.Exit(1)
+		}
+		setupAddressPairs = pairs
+
 		hostKey, discover, err := resolveSetupInvocation(args)
 		if err != nil {
 			log.Printf("[ERROR] Failed to setup host: %v", err)
@@ -83,6 +95,7 @@ rediscovers the local server configuration.`,
 
 func init() {
 	setupCmd.Flags().BoolVar(&setupDiscover, "discover", false, "Discover and configure certificate or nginx paths even if already configured")
+	setupCmd.Flags().StringArrayVar(&setupAddressPairFlags, "address-pair", nil, "IPv4/IPv6 bind address pair for transparent mode, as IPV4=IPV6 (repeatable)")
 	rootCmd.AddCommand(setupCmd)
 }
 
@@ -209,6 +222,9 @@ func parseSetupConfig(body []byte) (*config.Config, error) {
 func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, rediscover bool) ([]byte, error) {
 	certPath, acmePath, nginxConfigPath := configuredSetupPaths(cfg)
 	if !setupIsInteractive() {
+		if len(setupAddressPairs) > 0 {
+			return nil, fmt.Errorf("--address-pair requires an interactive terminal")
+		}
 		if certPath == "" && acmePath == "" && nginxConfigPath == "" {
 			warnMissingSetupPaths()
 		}

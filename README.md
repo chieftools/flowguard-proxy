@@ -172,6 +172,18 @@ Run `sudo flowguard setup -v` to show each server-source, bind-address, and
 address-pair detection decision, including why NGINX listeners or pairing
 heuristics were rejected.
 
+When transparent mode cannot pair dual-stack bind addresses automatically, pass
+each pair with `--address-pair IPV4=IPV6`. Setup checks that both addresses are
+bind addresses, replaces configured pairs that share an address, makes
+transparent mode the default, and only asks about addresses that remain
+unpaired:
+
+```bash
+sudo flowguard setup \
+  --address-pair 192.0.2.10=2001:db8::10 \
+  --address-pair 192.0.2.20=2001:db8::20
+```
+
 On a capable terminal, setup uses an interactive form: use the arrow keys (or
 `j`/`k`) to move, Space to toggle checkboxes, and Enter to confirm. Address-pair
 configuration always lists IPv4 addresses as the fixed bases and asks for an

@@ -30,6 +30,7 @@ func resetSetupTestGlobals(t *testing.T) {
 
 	oldConfigFile := configFile
 	oldDiscover := setupDiscover
+	oldAddressPairs := setupAddressPairs
 	oldVerbose := verbose
 	oldNoTUI := noTUI
 	oldInput := setupInput
@@ -49,6 +50,7 @@ func resetSetupTestGlobals(t *testing.T) {
 
 	configFile = filepath.Join(t.TempDir(), "config.json")
 	setupDiscover = false
+	setupAddressPairs = nil
 	verbose = false
 	noTUI = false
 	setupInput = strings.NewReader("")
@@ -79,6 +81,7 @@ func resetSetupTestGlobals(t *testing.T) {
 	t.Cleanup(func() {
 		configFile = oldConfigFile
 		setupDiscover = oldDiscover
+		setupAddressPairs = oldAddressPairs
 		verbose = oldVerbose
 		noTUI = oldNoTUI
 		setupInput = oldInput
@@ -594,6 +597,21 @@ func TestSetupHostNonInteractiveNeverPatches(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte(`"host":{}`)) {
 		t.Fatalf("expected original config to be saved, got %s", string(body))
+	}
+}
+
+func TestSetupHostNonInteractiveRejectsAddressPairs(t *testing.T) {
+	resetSetupTestGlobals(t)
+	setupIsInteractive = func() bool { return false }
+	setupAddressPairs = []config.AddressPair{{IPv4: "192.0.2.10", IPv6: "2001:db8::10"}}
+
+	client := &fakeSetupClient{initialConfig: `{"host":{}}`}
+	err := setupHostWithClient(client)
+	if err == nil || !strings.Contains(err.Error(), "--address-pair requires an interactive terminal") {
+		t.Fatalf("expected interactive terminal error, got %v", err)
+	}
+	if _, statErr := os.Stat(configFile); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no configuration to be saved, got %v", statErr)
 	}
 }
 

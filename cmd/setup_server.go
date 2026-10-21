@@ -22,7 +22,13 @@ const (
 )
 
 func promptSetupServerConfiguration(reader *bufio.Reader, cfg *config.Config, rediscover bool) (api.ServerConfigPatch, error) {
+	if len(setupAddressPairs) > 0 {
+		setSetupAddressPairs(cfg, mergeSetupAddressPairs(cfg.TransparentUpstreamSettings().AddressPairs, setupAddressPairs))
+	}
 	inspection := inspectSetupNetwork(cfg)
+	if err := validateSetupAddressPairs(setupAddressPairs, inspection.BindAddresses); err != nil {
+		return api.ServerConfigPatch{}, err
+	}
 	printSetupNetworkOptions(inspection)
 	defaultMode := config.UpstreamClientIPModeHeaders
 	allowConfiguredTransparent := false
@@ -32,7 +38,10 @@ func promptSetupServerConfiguration(reader *bufio.Reader, cfg *config.Config, re
 		if allowConfiguredTransparent && !inspection.TransparentReady {
 			fmt.Fprintln(setupOutput, "  Transparent mode remains the default because it is already configured; resolve the requirements above before running FlowGuard.")
 		}
-	} else if setupTransparentCanBeSelected(inspection, false) {
+	}
+	// Address pairs on the command line ask for transparent mode, so they
+	// make it the default on rediscovery too.
+	if (!rediscover || len(setupAddressPairs) > 0) && setupTransparentCanBeSelected(inspection, false) {
 		defaultMode = config.UpstreamClientIPModeTransparent
 	}
 
@@ -172,6 +181,83 @@ func setupTransparentCanBeSelected(inspection proxy.NetworkInspection, allowConf
 
 	ipv4, ipv6 := setupUnresolvedAddressFamilies(inspection.Pairing.Unresolved)
 	return len(ipv4) > 0 && len(ipv4) == len(ipv6)
+}
+
+// parseSetupAddressPairs parses --address-pair values in the form IPV4=IPV6
+// and normalizes the addresses so they compare equal to the bind addresses.
+func parseSetupAddressPairs(values []string) ([]config.AddressPair, error) {
+	pairs := make([]config.AddressPair, 0, len(values))
+	seen := make(map[netip.Addr]string)
+	for _, value := range values {
+		rawIPv4, rawIPv6, ok := strings.Cut(value, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid --address-pair %q: expected IPV4=IPV6", value)
+		}
+		ipv4, err := netip.ParseAddr(strings.TrimSpace(rawIPv4))
+		if err != nil || !ipv4.Unmap().Is4() {
+			return nil, fmt.Errorf("invalid --address-pair %q: %q is not an IPv4 address", value, rawIPv4)
+		}
+		ipv6, err := netip.ParseAddr(strings.TrimSpace(rawIPv6))
+		if err != nil || !ipv6.Is6() || ipv6.Is4In6() {
+			return nil, fmt.Errorf("invalid --address-pair %q: %q is not an IPv6 address", value, rawIPv6)
+		}
+		ipv4 = ipv4.Unmap()
+		for _, addr := range []netip.Addr{ipv4, ipv6} {
+			if previous, ok := seen[addr]; ok {
+				return nil, fmt.Errorf("invalid --address-pair %q: %s is already paired by %q", value, addr, previous)
+			}
+			seen[addr] = value
+		}
+		pairs = append(pairs, config.AddressPair{IPv4: ipv4.String(), IPv6: ipv6.String()})
+	}
+	return pairs, nil
+}
+
+// mergeSetupAddressPairs adds the command-line pairs to the configured pairs,
+// dropping configured pairs that share an address with them.
+func mergeSetupAddressPairs(configured, overrides []config.AddressPair) []config.AddressPair {
+	overridden := make(map[netip.Addr]bool)
+	for _, pair := range overrides {
+		overridden[netip.MustParseAddr(pair.IPv4)] = true
+		overridden[netip.MustParseAddr(pair.IPv6)] = true
+	}
+	merged := make([]config.AddressPair, 0, len(configured)+len(overrides))
+	for _, pair := range configured {
+		ipv4, ipv4Err := netip.ParseAddr(pair.IPv4)
+		ipv6, ipv6Err := netip.ParseAddr(pair.IPv6)
+		if (ipv4Err == nil && overridden[ipv4.Unmap()]) || (ipv6Err == nil && overridden[ipv6]) {
+			continue
+		}
+		merged = append(merged, pair)
+	}
+	return append(merged, overrides...)
+}
+
+// validateSetupAddressPairs reports command-line pairs that name an address
+// FlowGuard does not bind, which would otherwise only show up as an
+// unavailable transparent mode.
+func validateSetupAddressPairs(pairs []config.AddressPair, bindAddrs []string) error {
+	if len(pairs) == 0 {
+		return nil
+	}
+	if len(bindAddrs) == 0 {
+		return fmt.Errorf("cannot check --address-pair: no bind addresses were detected")
+	}
+	bound := make(map[netip.Addr]bool)
+	for _, raw := range bindAddrs {
+		if addr, err := netip.ParseAddr(raw); err == nil {
+			bound[addr.Unmap()] = true
+		}
+	}
+	for _, pair := range pairs {
+		for _, raw := range []string{pair.IPv4, pair.IPv6} {
+			if !bound[netip.MustParseAddr(raw)] {
+				return fmt.Errorf("--address-pair %s=%s: %s is not a bind address (bind addresses: %s)",
+					pair.IPv4, pair.IPv6, raw, strings.Join(bindAddrs, ", "))
+			}
+		}
+	}
+	return nil
 }
 
 func setSetupAddressPairs(cfg *config.Config, pairs []config.AddressPair) {
