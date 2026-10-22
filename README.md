@@ -756,6 +756,7 @@ Matcher types are grouped by the value they inspect:
 - Immediate trusted proxy identity: `proxy-ip`, `proxy-asn`, and
   `proxy-iplist`.
 - TLS client identity: `fingerprint-ja4` for HTTPS and HTTP/3 requests.
+- Request body: `body` and `body-truncated`.
 
 String matchers support equality, substring, prefix, suffix, regular-expression,
 and list operations, including their negative forms. IP matchers accept addresses
@@ -777,6 +778,17 @@ slip past a rule by spelling a value differently:
   operators match if any value matches and negated (`not-*`) operators match only
   if no value matches. A missing header, query parameter, or cookie is matched as
   an empty value.
+
+`body` matches the first 256 KiB of the request body as sent, with any string
+operator, `exists` or `missing`. `body-truncated` is `true` when the body is
+longer than that and `false` otherwise, so a rule can act on bodies that were
+not fully inspected; content past the first 256 KiB never matches `body`, and
+negated operators cannot rule it out. The body is only read when a rule
+reaches a body matcher, and it is read before the request is forwarded, so
+place cheaper conditions such as `method` or a `Content-Type` header first
+and keep body matchers away from streaming requests such as gRPC. The upstream
+receives the body unchanged. Use `(?s)` in a regular expression to let `.`
+match line breaks.
 
 ### Bot challenge interstitials
 

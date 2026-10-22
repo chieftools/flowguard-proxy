@@ -329,6 +329,8 @@
                         "header",
                         "query-param",
                         "cookie",
+                        "body",
+                        "body-truncated",
                         "user-agent",
                         "ip",
                         "proxy-ip",
@@ -344,7 +346,7 @@
                         "fingerprint-ja4",
                         "behavior"
                     ],
-                    "description": "The type of value to match against"
+                    "description": "The type of value to match against. 'body' matches the first 256 KiB of the request body, which is read before the request is forwarded; 'body-truncated' is 'true' when the body is longer than that and 'false' otherwise."
                 },
                 "match": {
                     "type": "string",

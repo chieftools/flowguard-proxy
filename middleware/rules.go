@@ -327,6 +327,16 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 		return rm.matchesKeyedValues(match, values, len(values) > 0)
 	case "user-agent":
 		return rm.matchesHeaderValues(r, "User-Agent", match)
+	case "body":
+		value = inspectBody(r).body
+		switch match.Match {
+		case "exists":
+			return value != ""
+		case "missing":
+			return value == ""
+		}
+	case "body-truncated":
+		value = fmt.Sprintf("%t", inspectBody(r).truncated)
 	case "fingerprint-ja4":
 		value = GetJA4Fingerprint(r)
 		if value == "" {

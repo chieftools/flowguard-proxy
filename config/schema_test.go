@@ -13,7 +13,7 @@ func TestSchemaIncludesRequestFieldMatchers(t *testing.T) {
 	matchType := properties["type"].(map[string]any)
 	typeEnum := matchType["enum"].([]any)
 
-	for _, want := range []string{"method", "query-param", "cookie", "proxy-ip", "proxy-asn", "proxy-iplist"} {
+	for _, want := range []string{"method", "query-param", "cookie", "body", "body-truncated", "proxy-ip", "proxy-asn", "proxy-iplist"} {
 		if !schemaStringListContains(typeEnum, want) {
 			t.Fatalf("expected match type enum to include %q", want)
 		}

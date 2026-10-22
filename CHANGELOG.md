@@ -9,6 +9,10 @@ release.
 
 ## [Unreleased]
 
+### Added
+
+- Added `body` and `body-truncated` rule matchers. `body` matches the first 256 KiB of the request body with any string operator, so a rule can block an exploit payload without blocking every request of its kind. `body-truncated` is `true` when the body is longer than that, so a rule can block or log bodies that were not fully inspected. The body is only read when a rule reaches a body matcher and is forwarded unchanged. See [Rule conditions](README.md#rule-conditions).
+
 ## [0.30.1]
 
 ### Added
