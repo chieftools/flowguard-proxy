@@ -20,7 +20,7 @@ release.
 
 ### Security
 
-- Made `/etc/flowguard/config.json`, which holds the host key, readable by root only. FlowGuard and the DEB and RPM packages created it readable by every user on the server, so anyone with a shell could use the host key to act as the server towards the control panel. FlowGuard now writes the file with mode 0600, and installing or upgrading the package sets 0600 on an existing file. Running `flowguard` as another user now explains that it needs root instead of only reporting "permission denied".
+- Made `/etc/flowguard/config.json`, which holds the host key, readable by root only. FlowGuard and the DEB and RPM packages created it readable by every user on the server, so anyone with a shell could use the host key to act as the server towards the control panel. FlowGuard now writes the file with mode 0600, and installing or upgrading the package sets 0600 on an existing file. Running `flowguard` as another user now explains that it needs root instead of only reporting "permission denied". The Caddy plugin, when Caddy runs as its own user, now suggests setting `key`, which keeps the configuration in Caddy's data directory.
 
 ### Fixed
 

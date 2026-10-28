@@ -3,6 +3,7 @@ package flowguardcaddy
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -129,6 +130,24 @@ func TestAppSharesEngineAcrossReloads(t *testing.T) {
 	}
 	if _, ok := engines.References(configPath); ok {
 		t.Fatal("expected the engine to be released after its last configuration")
+	}
+}
+
+func TestAppSuggestsKeyForUnreadableConfiguration(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read files regardless of their mode")
+	}
+
+	configPath, _ := writeTestConfig(t)
+	if err := os.Chmod(configPath, 0o000); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	t.Cleanup(cancel)
+	err := (&App{Config: configPath, CacheDir: t.TempDir()}).Provision(ctx)
+	if err == nil || !strings.Contains(err.Error(), "set key in the flowguard global option") {
+		t.Fatalf("expected a hint to set key, got %v", err)
 	}
 }
 

@@ -8,7 +8,9 @@
 package flowguardcaddy
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"path/filepath"
 	"runtime/debug"
@@ -96,6 +98,11 @@ func (a *App) Provision(_ caddy.Context) error {
 	value, _, err := engines.LoadOrNew(configPath, func() (caddy.Destructor, error) {
 		configMgr, err := config.NewManager(configPath, userAgent(), version(), cacheDir, a.Verbose)
 		if err != nil {
+			// Caddy usually runs as its own user, which cannot read the
+			// configuration `flowguard setup` wrote, nor save updates to it.
+			if a.Key == "" && errors.Is(err, fs.ErrPermission) {
+				return nil, fmt.Errorf("loading FlowGuard configuration from %s: %w; or set key in the flowguard global option to keep the configuration in Caddy's data directory", configPath, err)
+			}
 			return nil, fmt.Errorf("loading FlowGuard configuration from %s: %w", configPath, err)
 		}
 		if err := configMgr.RefreshFromAPI(false); err != nil {

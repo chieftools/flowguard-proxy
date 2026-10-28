@@ -272,6 +272,11 @@ stops a new host from serving requests without its rules. Changes to these
 options apply when Caddy restarts. A `caddy reload` keeps FlowGuard running,
 including its rate limits, log buffers, and control panel connection.
 
+Only root can read `/etc/flowguard/config.json`, because it holds the host key.
+When Caddy runs as its own user, as it does when installed from Caddy's
+packages, set `key`. Caddy then keeps the configuration in its data directory,
+where it can also save updates from the control panel.
+
 The `flowguard` listener wrapper adds [JA4 fingerprints](#ja4-fingerprints) for
 HTTP/1.1 and HTTP/2. It must come before `tls`. If you use Caddy's
 `proxy_protocol` wrapper, list `flowguard` after it. Caddy does not expose
