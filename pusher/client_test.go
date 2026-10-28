@@ -579,3 +579,24 @@ func TestUpdateConfigReconnectsWithChangedIdentity(t *testing.T) {
 		t.Fatalf("reloaded user agent: %q", got)
 	}
 }
+
+func TestOversizedMessageReconnects(t *testing.T) {
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		subscribeReply: func(accept int32, channel string) *Message {
+			if accept == 1 {
+				data, _ := json.Marshal(strings.Repeat("x", maximumMessageBytes))
+				return &Message{Event: "config.updated", Channel: channel, Data: data}
+			}
+			return subscriptionSucceeded(channel)
+		},
+	})
+	client := newFastClient(server.config(t, "public-test"))
+	t.Cleanup(client.Disconnect)
+
+	client.Start()
+
+	waitForSubscribed(t, client)
+	if got := server.accepts.Load(); got != 2 {
+		t.Fatalf("expected a second connection after the oversized message, got %d", got)
+	}
+}

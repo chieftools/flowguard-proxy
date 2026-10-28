@@ -9,6 +9,10 @@ release.
 
 ## [Unreleased]
 
+### Changed
+
+- Limited messages from the realtime server to 1 MiB. A larger message closes the connection, which then reconnects, instead of being read into memory whole.
+
 ### Fixed
 
 - Fixed remote upgrades on Debian and Ubuntu failing when a new package ships a changed default `config.json` while the installed one was changed locally, such as by `flowguard setup`. dpkg asked which version to keep, which the updater cannot answer. The updater now keeps the local file and only takes the package's version when the local file was not changed.

@@ -19,6 +19,7 @@ const (
 	websocketHandshakeTimeout = 10 * time.Second
 	websocketWriteTimeout     = 10 * time.Second
 	websocketCloseTimeout     = 2 * time.Second
+	maximumMessageBytes       = 1 << 20
 
 	defaultActivityTimeout     = 120 * time.Second
 	defaultPongTimeout         = 30 * time.Second
@@ -190,6 +191,7 @@ func (c *Client) Connect() error {
 	}
 
 	c.conn = conn
+	conn.SetReadLimit(maximumMessageBytes)
 	c.socketID = ""
 	c.isConnected = false
 	c.isSubscribed = false
