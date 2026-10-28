@@ -100,7 +100,7 @@ func TestStopTellsThePanelTheInstanceStopped(t *testing.T) {
 	for {
 		select {
 		case request := <-requests:
-			if request.URL.Path != "/api/v1/heartbeat/stop" {
+			if request.URL.Path != "/proxy/v1/heartbeat/stop" {
 				continue
 			}
 			if request.Header.Get(instance.Header) != instance.ID() {

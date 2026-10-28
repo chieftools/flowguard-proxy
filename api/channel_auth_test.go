@@ -44,7 +44,7 @@ func newChannelAuthClient(t *testing.T, status int, body string) (*Client, *[]ch
 func TestAuthorizeChannelUsesAuthURLOnControlPanel(t *testing.T) {
 	client, requests := newChannelAuthClient(t, http.StatusOK, `{"auth":"key:signature"}`)
 
-	auth, err := client.AuthorizeChannel("https://flowguard.test/api/v1/broadcasting/auth", "1.2", "private-server.1")
+	auth, err := client.AuthorizeChannel("https://flowguard.test/proxy/v1/broadcasting/auth", "1.2", "private-server.1")
 	if err != nil {
 		t.Fatalf("authorize: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestAuthorizeChannelUsesAuthURLOnControlPanel(t *testing.T) {
 	}
 
 	want := channelAuthRequest{
-		url:           "https://flowguard.test/api/v1/broadcasting/auth",
+		url:           "https://flowguard.test/proxy/v1/broadcasting/auth",
 		authorization: "Bearer fgsvr_synthetic",
 		socketID:      "1.2",
 		channel:       "private-server.1",
@@ -67,9 +67,9 @@ func TestAuthorizeChannelOnlySendsHostKeyToControlPanel(t *testing.T) {
 	for _, authURL := range []string{
 		"",
 		"https://realtime.example/auth",
-		"http://flowguard.test/api/v1/broadcasting/auth",
-		"https://flowguard.test:8443/api/v1/broadcasting/auth",
-		"https://user@flowguard.test/api/v1/broadcasting/auth",
+		"http://flowguard.test/proxy/v1/broadcasting/auth",
+		"https://flowguard.test:8443/proxy/v1/broadcasting/auth",
+		"https://user@flowguard.test/proxy/v1/broadcasting/auth",
 		"://invalid",
 	} {
 		client, requests := newChannelAuthClient(t, http.StatusOK, `{"auth":"key:signature"}`)
@@ -77,7 +77,7 @@ func TestAuthorizeChannelOnlySendsHostKeyToControlPanel(t *testing.T) {
 		if _, err := client.AuthorizeChannel(authURL, "1.2", "private-server.1"); err != nil {
 			t.Fatalf("authorize with %q: %v", authURL, err)
 		}
-		if len(*requests) != 1 || (*requests)[0].url != "https://flowguard.test/api/v1/broadcasting/auth" {
+		if len(*requests) != 1 || (*requests)[0].url != "https://flowguard.test/proxy/v1/broadcasting/auth" {
 			t.Fatalf("auth URL %q sent requests %+v, want only the control panel endpoint", authURL, *requests)
 		}
 	}

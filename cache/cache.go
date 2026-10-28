@@ -126,7 +126,8 @@ func (c *Cache) do(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// IsAPIURL reports whether rawURL is below the configured FlowGuard API path.
+// IsAPIURL reports whether rawURL is below the control panel's proxy
+// endpoints, under /proxy/ or, from control panels before the move, /api/.
 func (c *Cache) IsAPIURL(rawURL string) bool {
 	if c == nil {
 		return false
@@ -138,8 +139,8 @@ func (c *Cache) IsAPIURL(rawURL string) bool {
 		return false
 	}
 
-	apiPath := strings.TrimRight(c.apiBase, "/") + "/api/"
-	return strings.HasPrefix(rawURL, apiPath)
+	base := strings.TrimRight(c.apiBase, "/")
+	return strings.HasPrefix(rawURL, base+"/proxy/") || strings.HasPrefix(rawURL, base+"/api/")
 }
 
 // FetchWithCache fetches data from a URL with caching support

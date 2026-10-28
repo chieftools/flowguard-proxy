@@ -77,9 +77,9 @@ func NewClient(hostKey, userAgent string, options ...ClientOption) *Client {
 	return client
 }
 
-// buildURL constructs the full API URL for a given path
+// buildURL constructs the full URL of a control panel endpoint for proxies
 func (c *Client) buildURL(path string) string {
-	return fmt.Sprintf("%s/api/v1/%s", c.baseURL, strings.TrimPrefix(path, "/"))
+	return fmt.Sprintf("%s/proxy/v1/%s", c.baseURL, strings.TrimPrefix(path, "/"))
 }
 
 // ErrNotModified is returned when the API returns 304 Not Modified

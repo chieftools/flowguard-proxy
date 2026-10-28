@@ -292,14 +292,14 @@ func TestLoadedListLogMessage(t *testing.T) {
 	}{
 		{
 			name:   "API URL hidden",
-			source: "https://flowguard.network/api/v1/ip_list/list-id/download?confidence=80",
+			source: "https://flowguard.network/proxy/v1/ip_list/list-id/download?confidence=80",
 			want:   "Loaded list 'list-id': 42 entries",
 		},
 		{
 			name:    "API URL shown in verbose mode",
-			source:  "https://flowguard.network/api/v1/ip_list/list-id/download?confidence=80",
+			source:  "https://flowguard.network/proxy/v1/ip_list/list-id/download?confidence=80",
 			verbose: true,
-			want:    "Loaded list 'list-id' from https://flowguard.network/api/v1/ip_list/list-id/download?confidence=80: 42 entries",
+			want:    "Loaded list 'list-id' from https://flowguard.network/proxy/v1/ip_list/list-id/download?confidence=80: 42 entries",
 		},
 		{
 			name:   "external URL shown",

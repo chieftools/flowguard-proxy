@@ -61,7 +61,7 @@ func TestPatchConfigPathsSendsNestedHostPayload(t *testing.T) {
 			if r.Method != http.MethodPatch {
 				t.Fatalf("unexpected method: %s", r.Method)
 			}
-			if r.URL.Path != "/api/v1/config" {
+			if r.URL.Path != "/proxy/v1/config" {
 				t.Fatalf("unexpected path: %s", r.URL.Path)
 			}
 			if got := r.Header.Get("Authorization"); got != "Bearer host-key" {
@@ -344,7 +344,7 @@ func TestSendHeartbeatIncludesFirewallPayload(t *testing.T) {
 					if r.Method != http.MethodPost {
 						t.Fatalf("unexpected method: %s", r.Method)
 					}
-					if r.URL.Path != "/api/v1/heartbeat" {
+					if r.URL.Path != "/proxy/v1/heartbeat" {
 						t.Fatalf("unexpected path: %s", r.URL.Path)
 					}
 

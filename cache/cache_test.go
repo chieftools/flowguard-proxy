@@ -400,6 +400,7 @@ func TestIsAPIURL(t *testing.T) {
 		url  string
 		want bool
 	}{
+		{name: "proxy resource", url: "https://flowguard.network/proxy/v1/ip_list/example/download", want: true},
 		{name: "API resource", url: "https://flowguard.network/api/v1/ip_list/example/download", want: true},
 		{name: "API resource with query", url: "https://flowguard.network/api/v1/ip_list/example/download?confidence=80", want: true},
 		{name: "same origin outside API", url: "https://flowguard.network/public/list.txt", want: false},
