@@ -38,8 +38,12 @@ func Bootstrap(path, hostKey, userAgent string) error {
 	return WriteFile(path, body)
 }
 
+// configFileMode keeps the configuration, which holds the host key, readable
+// by its owner only.
+const configFileMode = 0o600
+
 // WriteFile atomically replaces the configuration at path with body, creating
-// the directory when needed.
+// the directory when needed. The file is only readable by its owner.
 func WriteFile(path string, body []byte) error {
 	// Ensure directory exists
 	dir := filepath.Dir(path)
@@ -49,7 +53,14 @@ func WriteFile(path string, body []byte) error {
 
 	// Write to temporary file first for atomic update
 	tmpFile := path + ".tmp"
-	if err := os.WriteFile(tmpFile, body, 0644); err != nil {
+	if err := os.WriteFile(tmpFile, body, configFileMode); err != nil {
+		return fmt.Errorf("failed to write configuration: %w", err)
+	}
+
+	// os.WriteFile keeps the mode of a temporary file left by an earlier,
+	// interrupted write, so set it explicitly.
+	if err := os.Chmod(tmpFile, configFileMode); err != nil {
+		_ = os.Remove(tmpFile)
 		return fmt.Errorf("failed to write configuration: %w", err)
 	}
 

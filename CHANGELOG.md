@@ -18,6 +18,10 @@ release.
 - FlowGuard now pauses its requests to the control panel when the panel asks it to. A `Retry-After` on a 429 or 503 answer pauses them for that long, and a rejected host key (401) or an unsupported FlowGuard version (426) pauses them for an hour, with a log line that says why. Before, a proxy with a revoked host key kept fetching its configuration and sending heartbeats on the regular schedule. Proxying continues while requests are paused, and a new host key from `flowguard setup` is tried right away.
 - Limited messages from the realtime server to 1 MiB. A larger message closes the connection, which then reconnects, instead of being read into memory whole.
 
+### Security
+
+- Made `/etc/flowguard/config.json`, which holds the host key, readable by root only. FlowGuard and the DEB and RPM packages created it readable by every user on the server, so anyone with a shell could use the host key to act as the server towards the control panel. FlowGuard now writes the file with mode 0600, and installing or upgrading the package sets 0600 on an existing file. Running `flowguard` as another user now explains that it needs root instead of only reporting "permission denied".
+
 ### Fixed
 
 - Fixed the default `/etc/flowguard/config.json` that the DEB and RPM packages install, which was invalid JSON because of a trailing comma. Upgrading replaces it with a valid default when it was never changed, and keeps a configuration written by `flowguard setup`. The DEB package no longer marks the file as a conffile, so dpkg never asks what to do with a changed configuration during an upgrade, even with the updater of earlier versions; the default now ships as `/usr/share/flowguard/config.json`.

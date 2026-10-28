@@ -300,16 +300,8 @@ func (m *Manager) RefreshFromAPI(force bool) error {
 		return nil
 	}
 
-	// Write to temporary file first for atomic update
-	tmpFile := m.configPath + ".tmp"
-	if err := os.WriteFile(tmpFile, body, 0644); err != nil {
-		return fmt.Errorf("failed to write configuration: %w", err)
-	}
-
-	// Atomically rename to final location
-	if err := os.Rename(tmpFile, m.configPath); err != nil {
-		os.Remove(tmpFile)
-		return fmt.Errorf("failed to save configuration: %w", err)
+	if err := WriteFile(m.configPath, body); err != nil {
+		return err
 	}
 
 	if newConfig.ID != "" {

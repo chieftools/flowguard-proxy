@@ -2,7 +2,9 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"sort"
@@ -21,6 +23,9 @@ func (m *Manager) Load() error {
 	// Read file
 	data, err := os.ReadFile(m.configPath)
 	if err != nil {
+		if errors.Is(err, fs.ErrPermission) {
+			return fmt.Errorf("failed to read config file: %w; it holds the host key and only root can read it, so run flowguard as root, for example with sudo", err)
+		}
 		return fmt.Errorf("failed to read config file: %w", err)
 	}
 

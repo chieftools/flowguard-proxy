@@ -149,7 +149,7 @@ mkdir -p %{buildroot}/usr/share/licenses/flowguard
 install -m 0755 %{SOURCE3} %{buildroot}/usr/bin/flowguard
 
 # Install configuration
-install -m 0644 %{SOURCE0} %{buildroot}/etc/flowguard/config.json
+install -m 0600 %{SOURCE0} %{buildroot}/etc/flowguard/config.json
 
 # Install systemd service
 install -m 0644 %{SOURCE1} %{buildroot}/usr/lib/systemd/system/flowguard.service
@@ -158,7 +158,7 @@ install -m 0644 %{SOURCE2} %{buildroot}/usr/share/licenses/flowguard/LICENSE
 %files
 %license %attr(0644, root, root) /usr/share/licenses/flowguard/LICENSE
 %attr(0755, root, root) /usr/bin/flowguard
-%config(noreplace) %attr(0644, root, root) /etc/flowguard/config.json
+%config(noreplace) %attr(0600, root, root) /etc/flowguard/config.json
 %attr(0755, root, root) %dir /etc/flowguard
 %attr(0755, root, root) %dir /var/log/flowguard
 %attr(0755, root, root) %dir /var/cache/flowguard
@@ -181,7 +181,9 @@ chown -R root:root /var/log/flowguard
 chown -R root:root /var/cache/flowguard
 chown -R root:root /etc/flowguard
 chmod 755 /etc/flowguard
-chmod 644 /etc/flowguard/config.json
+# The configuration holds the host key, so only root may read it. Earlier
+# packages made it readable by everyone.
+chmod 600 /etc/flowguard/config.json
 chmod 755 /usr/bin/flowguard
 
 # Reload systemd

@@ -266,8 +266,14 @@ func TestRefreshFromAPI(t *testing.T) {
 		httpClient := server.Client()
 
 		t.Setenv("API_BASE", server.URL)
+		// The configuration's directory is a regular file, so it can be
+		// neither created nor written to.
+		notADirectory := filepath.Join(t.TempDir(), "not-a-directory")
+		if err := os.WriteFile(notADirectory, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
 		manager := &Manager{
-			configPath:      filepath.Join(t.TempDir(), "missing", "config.json"),
+			configPath:      filepath.Join(notADirectory, "config.json"),
 			apiClient:       api.NewClient("host-key", "FlowGuard/test", api.WithHTTPClient(httpClient)),
 			currentConfigID: "cfg-1",
 			config: &Config{
@@ -276,7 +282,7 @@ func TestRefreshFromAPI(t *testing.T) {
 		}
 
 		err := manager.RefreshFromAPI(false)
-		if err == nil || !strings.Contains(err.Error(), "failed to write configuration") {
+		if err == nil || !strings.Contains(err.Error(), "failed to create config directory") {
 			t.Fatalf("expected write failure, got %v", err)
 		}
 	})

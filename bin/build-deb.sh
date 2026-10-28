@@ -127,7 +127,7 @@ mkdir -p /var/cache/flowguard
 INVALID_DEFAULT_SHA256="af3ed87dbe758c6f9a5d38af9b0b3b353103b13841f4d1fc1359fd542b05bb4d"
 if [ ! -e /etc/flowguard/config.json ] || \
     [ "$(sha256sum /etc/flowguard/config.json | cut -d ' ' -f 1)" = "${INVALID_DEFAULT_SHA256}" ]; then
-    install -m 0644 /usr/share/flowguard/config.json /etc/flowguard/config.json
+    install -m 0600 /usr/share/flowguard/config.json /etc/flowguard/config.json
 fi
 
 # Set proper ownership and permissions
@@ -135,7 +135,9 @@ chown -R root:root /etc/flowguard
 chown -R root:root /var/log/flowguard
 chown -R root:root /var/cache/flowguard
 chmod 755 /etc/flowguard
-chmod 644 /etc/flowguard/config.json
+# The configuration holds the host key, so only root may read it. Earlier
+# packages made it readable by everyone.
+chmod 600 /etc/flowguard/config.json
 chmod 755 /usr/bin/flowguard
 
 # Reload systemd
