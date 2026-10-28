@@ -19,7 +19,9 @@ permissions:
 
 jobs:
   build-and-publish:
-    runs-on: ubuntu-latest
+    # The rpm of Ubuntu 26.04 no longer signs into the RSAHEADER tag that
+    # the rpm of EL7 and EL8 verifies.
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout code

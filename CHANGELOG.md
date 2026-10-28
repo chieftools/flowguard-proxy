@@ -9,6 +9,8 @@ release.
 
 ## [Unreleased]
 
+_No source changes; this release republishes 0.31.0, whose packages were not published because the RPM build failed._
+
 ## [0.31.0]
 
 ### Added

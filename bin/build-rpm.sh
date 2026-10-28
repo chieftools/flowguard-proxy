@@ -51,10 +51,10 @@ mkdir -p "${RPMBUILD_DIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 mkdir -p "${RPMBUILD_DIR}/BUILDROOT"
 install -m 0644 LICENSE "${RPMBUILD_DIR}/SOURCES/LICENSE"
 
-# Build the binary
+# Build the binary into SOURCES, since rpm 4.20 and later builds in a
+# per-package subdirectory of %{_builddir}
 echo -e "${YELLOW}Building FlowGuard binary...${NC}"
-BINARY_DIR="${RPMBUILD_DIR}/BUILD"
-CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -tags netgo,osusergo -buildvcs=false -o "${BINARY_DIR}/flowguard" .
+CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -tags netgo,osusergo -buildvcs=false -o "${RPMBUILD_DIR}/SOURCES/flowguard" .
 
 # Create default configuration file
 echo -e "${YELLOW}Creating default configuration...${NC}"
@@ -113,6 +113,7 @@ URL:            ${URL}
 Source0:        config.json
 Source1:        flowguard.service
 Source2:        LICENSE
+Source3:        flowguard
 
 # Don't strip the binary or check for build-id
 %global debug_package %{nil}
@@ -145,7 +146,7 @@ mkdir -p %{buildroot}/usr/lib/systemd/system
 mkdir -p %{buildroot}/usr/share/licenses/flowguard
 
 # Install binary
-install -m 0755 %{_builddir}/flowguard %{buildroot}/usr/bin/flowguard
+install -m 0755 %{SOURCE3} %{buildroot}/usr/bin/flowguard
 
 # Install configuration
 install -m 0644 %{SOURCE0} %{buildroot}/etc/flowguard/config.json
@@ -267,7 +268,6 @@ RUN yum install -y rpm-build rpmdevtools
 WORKDIR /build
 
 CMD ["rpmbuild", "--define", "_topdir /build/rpmbuild", \
-     "--define", "_builddir /build/rpmbuild/BUILD", \
      "-bb", "/build/rpmbuild/SPECS/flowguard.spec"]
 DOCKERFILE_EOF
 
@@ -277,7 +277,6 @@ DOCKERFILE_EOF
     # Run the build in Docker (with --target x86_64 to specify architecture)
     docker run --rm -v "${BUILD_DIR}:/build" flowguard-rpm-builder \
         rpmbuild --define "_topdir /build/rpmbuild" \
-                 --define "_builddir /build/rpmbuild/BUILD" \
                  --target ${ARCH} \
                  -bb /build/rpmbuild/SPECS/flowguard.spec
 
@@ -286,7 +285,6 @@ DOCKERFILE_EOF
 else
     # Build natively on Linux
     rpmbuild --define "_topdir ${RPMBUILD_DIR}" \
-             --define "_builddir ${BINARY_DIR}" \
              --target "${ARCH}" \
              -bb "${RPMBUILD_DIR}/SPECS/flowguard.spec"
 fi
