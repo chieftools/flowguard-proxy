@@ -65,7 +65,8 @@ If omitted, FlowGuard reuses the host key from the existing configuration and
 rediscovers the local server configuration.
 
 Use --address-pair IPV4=IPV6 for each IPv4/IPv6 bind address pair that
-transparent mode cannot pair automatically.`,
+transparent mode cannot pair automatically, and --address-pair IPV4= for each
+IPv4 bind address that has no IPv6 counterpart.`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) > 1 {
 			return fmt.Errorf("too many arguments (expected only host key)")
@@ -95,7 +96,7 @@ transparent mode cannot pair automatically.`,
 
 func init() {
 	setupCmd.Flags().BoolVar(&setupDiscover, "discover", false, "Discover and configure certificate or nginx paths even if already configured")
-	setupCmd.Flags().StringArrayVar(&setupAddressPairFlags, "address-pair", nil, "IPv4/IPv6 bind address pair for transparent mode, as IPV4=IPV6 (repeatable)")
+	setupCmd.Flags().StringArrayVar(&setupAddressPairFlags, "address-pair", nil, "IPv4/IPv6 bind address pair for transparent mode, as IPV4=IPV6, or IPV4= for an IPv4-only address (repeatable)")
 	rootCmd.AddCommand(setupCmd)
 }
 

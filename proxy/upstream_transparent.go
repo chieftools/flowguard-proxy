@@ -362,7 +362,8 @@ func (s *Server) transparentUpstreamRoute(clientIP netip.Addr) (transparentUpstr
 	if clientIP.Is4() != bindIP.Is4() {
 		counterpart, ok := s.config.addressPairs.counterpart(bindIP.String())
 		if !ok {
-			if _, _, singleStack := s.config.addressPairs.singleStackFamily(); singleStack && s.config.addressPairs.Complete() {
+			_, _, singleStack := s.config.addressPairs.singleStackFamily()
+			if (singleStack && s.config.addressPairs.Complete()) || s.config.addressPairs.ipv4Only(bindIP.String()) {
 				return transparentUpstreamRoute{
 					destination:    net.JoinHostPort(bindIP.String(), s.upstreamPort()),
 					headerFallback: true,

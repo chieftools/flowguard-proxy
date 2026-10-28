@@ -68,6 +68,34 @@ func TestTransparentUpstreamRouteUsesHeaderFallbackForSingleStack(t *testing.T) 
 	}
 }
 
+func TestTransparentUpstreamRouteUsesHeaderFallbackForIPv4OnlyAddress(t *testing.T) {
+	cfg := &config.Config{Server: &config.ServerConfig{Upstream: &config.UpstreamConfig{
+		Transparent: &config.TransparentUpstreamConfig{AddressPairs: []config.AddressPair{
+			{IPv4: "192.0.2.10", IPv6: "2001:db8::10"},
+			{IPv4: "192.0.2.20"},
+		}},
+	}}}
+	resolution, err := ResolveAddressPairs(cfg, []string{"192.0.2.10", "192.0.2.20", "2001:db8::10"})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	ipv4 := netip.MustParseAddr("198.51.100.20")
+	ipv6 := netip.MustParseAddr("2001:db8::20")
+
+	ipv4Only := NewServer(&ServerConfig{scheme: "http", bindAddr: "192.0.2.20", addressPairs: resolution})
+	if route, err := ipv4Only.transparentUpstreamRoute(ipv4); err != nil || route.destination != "192.0.2.20:80" || route.headerFallback {
+		t.Fatalf("unexpected IPv4 route on IPv4-only address %#v, %v", route, err)
+	}
+	if route, err := ipv4Only.transparentUpstreamRoute(ipv6); err != nil || route.destination != "192.0.2.20:80" || !route.headerFallback {
+		t.Fatalf("unexpected IPv6 route on IPv4-only address %#v, %v", route, err)
+	}
+
+	paired := NewServer(&ServerConfig{scheme: "http", bindAddr: "192.0.2.10", addressPairs: resolution})
+	if route, err := paired.transparentUpstreamRoute(ipv6); err != nil || route.destination != "[2001:db8::10]:80" || route.headerFallback {
+		t.Fatalf("unexpected IPv6 route on paired address %#v, %v", route, err)
+	}
+}
+
 func TestResolveUpstreamClientIPModeOverride(t *testing.T) {
 	tests := []struct {
 		name       string

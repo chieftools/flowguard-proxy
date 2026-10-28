@@ -414,7 +414,7 @@ func FormatNetworkInspection(inspection NetworkInspection) string {
 	} else {
 		output.WriteString("  Address pairs:\n")
 		for _, pair := range inspection.Pairing.Pairs {
-			fmt.Fprintf(&output, "    %s <-> %s (%s)\n", pair.IPv4, pair.IPv6, pair.Provenance)
+			fmt.Fprintf(&output, "    %s\n", pair.Describe())
 		}
 	}
 	if len(inspection.Pairing.Unresolved) > 0 {

@@ -69,9 +69,11 @@ type TransparentUpstreamConfig struct {
 	AddressPairs    []AddressPair `json:"address_pairs,omitempty"`
 }
 
+// AddressPair maps an IPv4 bind address to the IPv6 bind address that reaches
+// the same backend. An empty IPv6 marks the IPv4 address as IPv4-only.
 type AddressPair struct {
 	IPv4 string `json:"ipv4"`
-	IPv6 string `json:"ipv6"`
+	IPv6 string `json:"ipv6,omitempty"`
 }
 
 type ProtocolSettings struct {

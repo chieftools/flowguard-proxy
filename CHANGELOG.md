@@ -12,6 +12,7 @@ release.
 ### Added
 
 - Added `body` and `body-truncated` rule matchers. `body` matches the first 256 KiB of the request body with any string operator, so a rule can block an exploit payload without blocking every request of its kind. `body-truncated` is `true` when the body is longer than that, so a rule can block or log bodies that were not fully inspected. The body is only read when a rule reaches a body matcher and is forwarded unchanged. See [Rule conditions](README.md#rule-conditions).
+- Added IPv4-only addresses to transparent mode, for servers with more IPv4 than IPv6 addresses. Pass `--address-pair IPV4=` to `flowguard setup`, or omit `ipv6` from an `address_pairs` entry, for each IPv4 address without an IPv6 counterpart. Before, transparent mode refused to start when such an address could not be paired. IPv6 client IPs reported by a trusted proxy on an IPv4-only address use the canonical header fallback. See [Initial setup](README.md#initial-setup).
 
 ## [0.30.1]
 

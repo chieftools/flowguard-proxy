@@ -270,6 +270,49 @@ func TestPromptSetupServerConfigurationUsesCommandLineAddressPairs(t *testing.T)
 	}
 }
 
+func TestPromptSetupServerConfigurationUsesCommandLineIPv4OnlyAddress(t *testing.T) {
+	resetSetupTestGlobals(t)
+	setupAddressPairs = []config.AddressPair{
+		{IPv4: "192.0.2.10", IPv6: "2001:db8::10"},
+		{IPv4: "192.0.2.20"},
+	}
+	bindAddrs := []string{"192.0.2.10", "192.0.2.20", "2001:db8::10"}
+	setupInspectNetwork = func(cfg *config.Config, _ []string) (proxy.NetworkInspection, error) {
+		pairing, err := proxy.ResolveAddressPairs(cfg, bindAddrs)
+		return proxy.NetworkInspection{
+			BindAddresses:    bindAddrs,
+			HeaderReady:      true,
+			TransparentReady: err == nil && pairing.Complete(),
+			Pairing:          pairing,
+		}, nil
+	}
+	var output bytes.Buffer
+	setupOutput = &output
+	reader := bufio.NewReader(strings.NewReader(strings.Repeat("\n", 5)))
+	cfg := &config.Config{Server: &config.ServerConfig{Upstream: &config.UpstreamConfig{
+		Transparent: &config.TransparentUpstreamConfig{AddressPairs: []config.AddressPair{
+			{IPv4: "192.0.2.20", IPv6: "2001:db8::10"},
+		}},
+	}}}
+
+	patch, err := promptSetupServerConfiguration(reader, cfg, false)
+	if err != nil {
+		t.Fatalf("promptSetupServerConfiguration: %v", err)
+	}
+	if patch.Upstream.ClientIPMode != config.UpstreamClientIPModeTransparent {
+		t.Fatalf("expected transparent mode, got %s", patch.Upstream.ClientIPMode)
+	}
+	pairs := patch.Upstream.Transparent.AddressPairs
+	if len(pairs) != 2 ||
+		pairs[0].IPv4 != "192.0.2.10" || pairs[0].IPv6 != "2001:db8::10" ||
+		pairs[1].IPv4 != "192.0.2.20" || pairs[1].IPv6 != "" {
+		t.Fatalf("expected the pair and the IPv4-only address, got %+v", pairs)
+	}
+	if !strings.Contains(output.String(), "Address pair: 192.0.2.20 (IPv4-only, explicit)") {
+		t.Fatalf("expected IPv4-only address in output, got:\n%s", output.String())
+	}
+}
+
 func TestPromptSetupServerConfigurationRejectsCommandLinePairsForUnboundAddresses(t *testing.T) {
 	resetSetupTestGlobals(t)
 	setupAddressPairs = []config.AddressPair{{IPv4: "192.0.2.10", IPv6: "2001:db8::99"}}
@@ -287,15 +330,16 @@ func TestPromptSetupServerConfigurationRejectsCommandLinePairsForUnboundAddresse
 }
 
 func TestParseSetupAddressPairs(t *testing.T) {
-	pairs, err := parseSetupAddressPairs([]string{"45.151.158.60=2a0b:3c40:1:142:0::1", " ::ffff:45.151.158.61 = 2a0e:5540:12:5c1c::1 "})
+	pairs, err := parseSetupAddressPairs([]string{"45.151.158.60=2a0b:3c40:1:142:0::1", " ::ffff:45.151.158.61 = 2a0e:5540:12:5c1c::1 ", "45.151.158.62= "})
 	if err != nil {
 		t.Fatalf("parseSetupAddressPairs: %v", err)
 	}
 	want := []config.AddressPair{
 		{IPv4: "45.151.158.60", IPv6: "2a0b:3c40:1:142::1"},
 		{IPv4: "45.151.158.61", IPv6: "2a0e:5540:12:5c1c::1"},
+		{IPv4: "45.151.158.62"},
 	}
-	if len(pairs) != len(want) || pairs[0] != want[0] || pairs[1] != want[1] {
+	if len(pairs) != len(want) || pairs[0] != want[0] || pairs[1] != want[1] || pairs[2] != want[2] {
 		t.Fatalf("pairs = %+v, want %+v", pairs, want)
 	}
 
@@ -314,6 +358,12 @@ func TestParseSetupAddressPairs(t *testing.T) {
 		"45.151.158.61=2a0b:3c40:1:142::1",
 	}); err == nil || !strings.Contains(err.Error(), "already paired") {
 		t.Fatalf("expected duplicate address error, got %v", err)
+	}
+	if _, err := parseSetupAddressPairs([]string{
+		"45.151.158.60=2a0b:3c40:1:142::1",
+		"45.151.158.60=",
+	}); err == nil || !strings.Contains(err.Error(), "already paired") {
+		t.Fatalf("expected duplicate IPv4-only address error, got %v", err)
 	}
 }
 

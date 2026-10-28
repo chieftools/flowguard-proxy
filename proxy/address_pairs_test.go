@@ -38,6 +38,47 @@ func TestResolveAddressPairsUsesExplicitThenSinglePair(t *testing.T) {
 	}
 }
 
+func TestResolveAddressPairsAcceptsExplicitIPv4OnlyAddress(t *testing.T) {
+	cfg := &config.Config{Server: &config.ServerConfig{Upstream: &config.UpstreamConfig{
+		Transparent: &config.TransparentUpstreamConfig{
+			AddressPairs: []config.AddressPair{
+				{IPv4: "192.0.2.10", IPv6: "2001:db8::10"},
+				{IPv4: "192.0.2.20"},
+			},
+		},
+	}}}
+	bindAddrs := []string{"192.0.2.10", "192.0.2.20", "2001:db8::10"}
+	resolution, err := ResolveAddressPairs(cfg, bindAddrs)
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	want := []ResolvedAddressPair{
+		{IPv4: "192.0.2.10", IPv6: "2001:db8::10", Provenance: "explicit"},
+		{IPv4: "192.0.2.20", Provenance: "explicit"},
+	}
+	if !reflect.DeepEqual(resolution.Pairs, want) {
+		t.Fatalf("unexpected pairs:\n got: %#v\nwant: %#v", resolution.Pairs, want)
+	}
+	if !resolution.Complete() {
+		t.Fatalf("expected complete pairing, unresolved: %v", resolution.Unresolved)
+	}
+	warning := transparentHeaderFallbackWarning(resolution, bindAddrs)
+	if !strings.Contains(warning, "IPv4-only for 192.0.2.20;") || !strings.Contains(warning, "validated IPv6 clients") {
+		t.Fatalf("unexpected warning: %s", warning)
+	}
+}
+
+func TestResolveAddressPairsRejectsExplicitIPv4OnlyNonBindAddress(t *testing.T) {
+	cfg := &config.Config{Server: &config.ServerConfig{Upstream: &config.UpstreamConfig{
+		Transparent: &config.TransparentUpstreamConfig{
+			AddressPairs: []config.AddressPair{{IPv4: "192.0.2.99"}},
+		},
+	}}}
+	if _, err := ResolveAddressPairs(cfg, []string{"192.0.2.10", "2001:db8::10"}); err == nil {
+		t.Fatal("expected IPv4-only address outside the bind addresses to be rejected")
+	}
+}
+
 func TestResolveAddressPairsUsesNginxColisting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nginx.conf")
 	body := `events {}

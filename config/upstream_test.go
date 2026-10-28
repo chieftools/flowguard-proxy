@@ -64,6 +64,18 @@ func TestValidateUpstreamConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "valid IPv4-only entry",
+			upstream: &UpstreamConfig{
+				ClientIPMode: UpstreamClientIPModeTransparent,
+				Transparent: &TransparentUpstreamConfig{
+					AddressPairs: []AddressPair{
+						{IPv4: "192.0.2.10", IPv6: "2001:db8::10"},
+						{IPv4: "192.0.2.20"},
+					},
+				},
+			},
+		},
+		{
 			name:     "unknown mode",
 			upstream: &UpstreamConfig{ClientIPMode: "automatic"},
 			wantErr:  "client_ip_mode",
@@ -88,6 +100,16 @@ func TestValidateUpstreamConfig(t *testing.T) {
 				AddressPairs: []AddressPair{
 					{IPv4: "192.0.2.1", IPv6: "2001:db8::1"},
 					{IPv4: "192.0.2.1", IPv6: "2001:db8::2"},
+				},
+			}},
+			wantErr: "duplicate IPv4",
+		},
+		{
+			name: "IPv4-only entry for a paired address",
+			upstream: &UpstreamConfig{Transparent: &TransparentUpstreamConfig{
+				AddressPairs: []AddressPair{
+					{IPv4: "192.0.2.1", IPv6: "2001:db8::1"},
+					{IPv4: "192.0.2.1"},
 				},
 			}},
 			wantErr: "duplicate IPv4",

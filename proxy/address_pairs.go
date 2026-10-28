@@ -18,12 +18,22 @@ type ResolvedAddressPair struct {
 	Provenance string
 }
 
+// Describe formats the pair for setup and inspection output.
+func (p ResolvedAddressPair) Describe() string {
+	if p.IPv6 == "" {
+		return fmt.Sprintf("%s (IPv4-only, %s)", p.IPv4, p.Provenance)
+	}
+	return fmt.Sprintf("%s <-> %s (%s)", p.IPv4, p.IPv6, p.Provenance)
+}
+
 type AddressPairResolution struct {
 	Pairs       []ResolvedAddressPair
 	Unresolved  []string
 	Warnings    []string
 	Diagnostics []string
 
+	// counterparts maps each paired address to its counterpart. IPv4-only
+	// addresses map to the zero address.
 	counterparts map[netip.Addr]netip.Addr
 	hasIPv4      bool
 	hasIPv6      bool
@@ -83,12 +93,38 @@ func ResolveAddressPairs(cfg *config.Config, bindAddrs []string) (AddressPairRes
 		return nil
 	}
 
+	addIPv4Only := func(v4 netip.Addr) error {
+		if !v4.Is4() {
+			return fmt.Errorf("invalid explicit IPv4-only address %s", v4)
+		}
+		if !bindSet[v4] {
+			return fmt.Errorf("explicit IPv4-only address %s must reference a configured bind address", v4)
+		}
+		if _, ok := resolution.counterparts[v4]; ok {
+			return fmt.Errorf("IPv4 bind address %s is configured more than once", v4)
+		}
+		resolution.counterparts[v4] = netip.Addr{}
+		resolution.Pairs = append(resolution.Pairs, ResolvedAddressPair{
+			IPv4:       v4.String(),
+			Provenance: "explicit",
+		})
+		return nil
+	}
+
 	settings := cfg.TransparentUpstreamSettings()
 	if len(settings.AddressPairs) == 0 {
 		resolution.Diagnostics = append(resolution.Diagnostics, "explicit: no configured address pairs")
 	}
 	for _, pair := range settings.AddressPairs {
 		v4, _ := netip.ParseAddr(pair.IPv4)
+		if pair.IPv6 == "" {
+			if err := addIPv4Only(v4.Unmap()); err != nil {
+				resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf("explicit: rejected IPv4-only %s: %v", pair.IPv4, err))
+				return resolution, err
+			}
+			resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf("explicit: accepted %s as IPv4-only", v4.Unmap()))
+			continue
+		}
 		v6, _ := netip.ParseAddr(pair.IPv6)
 		if err := addPair(v4.Unmap(), v6.Unmap(), "explicit"); err != nil {
 			resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf("explicit: rejected %s <-> %s: %v", pair.IPv4, pair.IPv6, err))
@@ -115,10 +151,14 @@ func ResolveAddressPairs(cfg *config.Config, bindAddrs []string) (AddressPairRes
 				))
 				continue
 			}
-			if _, v4Assigned := resolution.counterparts[v4]; v4Assigned {
+			if counterpart, v4Assigned := resolution.counterparts[v4]; v4Assigned {
+				reason := "already has a counterpart"
+				if !counterpart.IsValid() {
+					reason = "is configured as IPv4-only"
+				}
 				resolution.Diagnostics = append(resolution.Diagnostics, fmt.Sprintf(
-					"%s: ignored discovered pair %s <-> %s because %s already has a counterpart",
-					source, v4, v6, v4,
+					"%s: ignored discovered pair %s <-> %s because %s %s",
+					source, v4, v6, v4, reason,
 				))
 				continue
 			}
@@ -293,10 +333,21 @@ func (r AddressPairResolution) counterpart(address string) (string, bool) {
 		return "", false
 	}
 	counterpart, ok := r.counterparts[addr.Unmap()]
-	if !ok {
+	if !ok || !counterpart.IsValid() {
 		return "", false
 	}
 	return counterpart.String(), true
+}
+
+// ipv4Only reports whether address was explicitly configured without an IPv6
+// counterpart.
+func (r AddressPairResolution) ipv4Only(address string) bool {
+	addr, err := netip.ParseAddr(address)
+	if err != nil {
+		return false
+	}
+	counterpart, ok := r.counterparts[addr.Unmap()]
+	return ok && !counterpart.IsValid()
 }
 
 func (r AddressPairResolution) Complete() bool {
@@ -315,9 +366,12 @@ func (r AddressPairResolution) singleStackFamily() (available, missing string, o
 }
 
 func transparentHeaderFallbackWarning(pairing AddressPairResolution, bindAddrs []string) string {
-	available, missing, ok := pairing.singleStackFamily()
-	if !ok || !pairing.Complete() {
+	if !pairing.Complete() {
 		return ""
+	}
+	available, missing, ok := pairing.singleStackFamily()
+	if !ok {
+		return ipv4OnlyHeaderFallbackWarning(pairing)
 	}
 
 	addresses := make([]string, 0, len(bindAddrs))
@@ -342,5 +396,22 @@ func transparentHeaderFallbackWarning(pairing AddressPairResolution, bindAddrs [
 		available,
 		missing,
 		sourceDescription,
+	)
+}
+
+func ipv4OnlyHeaderFallbackWarning(pairing AddressPairResolution) string {
+	var addresses []string
+	for _, pair := range pairing.Pairs {
+		if pair.IPv6 == "" {
+			addresses = append(addresses, pair.IPv4)
+		}
+	}
+	if len(addresses) == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf(
+		"transparent upstream is IPv4-only for %s; validated IPv6 clients on these addresses will use canonical header fallback; the backend must trust these FlowGuard source addresses",
+		strings.Join(addresses, ", "),
 	)
 }

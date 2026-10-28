@@ -227,12 +227,12 @@
                 },
                 "ipv6": {
                     "type": "string",
-                    "format": "ipv6"
+                    "format": "ipv6",
+                    "description": "Omit to mark the IPv4 address as IPv4-only"
                 }
             },
             "required": [
-                "ipv4",
-                "ipv6"
+                "ipv4"
             ],
             "additionalProperties": false
         },

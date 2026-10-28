@@ -129,17 +129,20 @@ func validateUpstreamConfig(cfg *Config) error {
 		if err != nil || !ipv4.Is4() {
 			return fmt.Errorf("server.upstream.transparent.address_pairs[%d].ipv4 must be a valid IPv4 address", i)
 		}
+		if seenV4[ipv4] {
+			return fmt.Errorf("server.upstream.transparent.address_pairs contains duplicate IPv4 address %s", ipv4)
+		}
+		seenV4[ipv4] = true
+		if pair.IPv6 == "" {
+			continue
+		}
 		ipv6, err := netip.ParseAddr(pair.IPv6)
 		if err != nil || !ipv6.Is6() || ipv6.Is4In6() {
 			return fmt.Errorf("server.upstream.transparent.address_pairs[%d].ipv6 must be a valid IPv6 address", i)
 		}
-		if seenV4[ipv4] {
-			return fmt.Errorf("server.upstream.transparent.address_pairs contains duplicate IPv4 address %s", ipv4)
-		}
 		if seenV6[ipv6] {
 			return fmt.Errorf("server.upstream.transparent.address_pairs contains duplicate IPv6 address %s", ipv6)
 		}
-		seenV4[ipv4] = true
 		seenV6[ipv6] = true
 	}
 

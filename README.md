@@ -184,6 +184,15 @@ sudo flowguard setup \
   --address-pair 192.0.2.20=2001:db8::20
 ```
 
+When a server has more IPv4 than IPv6 addresses, mark each IPv4 address without
+an IPv6 counterpart as IPv4-only by leaving the IPv6 side empty:
+
+```bash
+sudo flowguard setup \
+  --address-pair 192.0.2.10=2001:db8::10 \
+  --address-pair 192.0.2.20=
+```
+
 On a capable terminal, setup uses an interactive form: use the arrow keys (or
 `j`/`k`) to move, Space to toggle checkboxes, and Enter to confirm. Address-pair
 configuration always lists IPv4 addresses as the fixed bases and asks for an
@@ -405,7 +414,8 @@ the same backend. Explicit `address_pairs` take precedence. FlowGuard then
 checks addresses listed together in one NGINX `server` block, IPs linked in
 DirectAdmin when `host.cert_path` points to it, its embedded-IPv4 heuristic,
 and a single unambiguous remaining pair. It refuses to start
-transparent mode if more than one pairing remains possible:
+transparent mode if more than one pairing remains possible, or if an address
+has no counterpart and is not marked IPv4-only:
 
 ```json
 {
@@ -417,6 +427,9 @@ transparent mode if more than one pairing remains possible:
           {
             "ipv4": "192.0.2.10",
             "ipv6": "2001:db8::10"
+          },
+          {
+            "ipv4": "192.0.2.20"
           }
         ]
       }
@@ -424,6 +437,11 @@ transparent mode if more than one pairing remains possible:
   }
 }
 ```
+
+An entry without `ipv6` marks the IPv4 address as IPv4-only. Requests to it
+reach the backend transparently. When a trusted proxy reports an IPv6 client IP
+on that address, FlowGuard uses the canonical header fallback, so the backend
+must trust FlowGuard's own source addresses for those requests.
 
 ### Request ID and country headers
 

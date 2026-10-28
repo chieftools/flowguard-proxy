@@ -115,7 +115,7 @@ func promptSetupAddressPairs(reader *bufio.Reader, cfg *config.Config, inspectio
 	fmt.Fprintf(setupOutput, "  Unpaired IPv4 addresses: %s\n", setupListOrNone(ipv4))
 	fmt.Fprintf(setupOutput, "  Unpaired IPv6 addresses: %s\n", setupListOrNone(ipv6))
 	if len(ipv4) == 0 || len(ipv4) != len(ipv6) {
-		fmt.Fprintln(setupOutput, "  These addresses cannot form a complete one-to-one mapping; update the bind addresses or nginx configuration before selecting transparent mode.")
+		fmt.Fprintln(setupOutput, "  These addresses cannot form a complete one-to-one mapping; update the bind addresses or nginx configuration, or pass --address-pair IPV4= for each IPv4 address without an IPv6 counterpart, before selecting transparent mode.")
 		return false, nil
 	}
 
@@ -183,8 +183,9 @@ func setupTransparentCanBeSelected(inspection proxy.NetworkInspection, allowConf
 	return len(ipv4) > 0 && len(ipv4) == len(ipv6)
 }
 
-// parseSetupAddressPairs parses --address-pair values in the form IPV4=IPV6
-// and normalizes the addresses so they compare equal to the bind addresses.
+// parseSetupAddressPairs parses --address-pair values in the form IPV4=IPV6,
+// or IPV4= for an IPv4-only address, and normalizes the addresses so they
+// compare equal to the bind addresses.
 func parseSetupAddressPairs(values []string) ([]config.AddressPair, error) {
 	pairs := make([]config.AddressPair, 0, len(values))
 	seen := make(map[netip.Addr]string)
@@ -197,18 +198,24 @@ func parseSetupAddressPairs(values []string) ([]config.AddressPair, error) {
 		if err != nil || !ipv4.Unmap().Is4() {
 			return nil, fmt.Errorf("invalid --address-pair %q: %q is not an IPv4 address", value, rawIPv4)
 		}
-		ipv6, err := netip.ParseAddr(strings.TrimSpace(rawIPv6))
-		if err != nil || !ipv6.Is6() || ipv6.Is4In6() {
-			return nil, fmt.Errorf("invalid --address-pair %q: %q is not an IPv6 address", value, rawIPv6)
-		}
 		ipv4 = ipv4.Unmap()
-		for _, addr := range []netip.Addr{ipv4, ipv6} {
+		pair := config.AddressPair{IPv4: ipv4.String()}
+		addrs := []netip.Addr{ipv4}
+		if rawIPv6 = strings.TrimSpace(rawIPv6); rawIPv6 != "" {
+			ipv6, err := netip.ParseAddr(rawIPv6)
+			if err != nil || !ipv6.Is6() || ipv6.Is4In6() {
+				return nil, fmt.Errorf("invalid --address-pair %q: %q is not an IPv6 address", value, rawIPv6)
+			}
+			pair.IPv6 = ipv6.String()
+			addrs = append(addrs, ipv6)
+		}
+		for _, addr := range addrs {
 			if previous, ok := seen[addr]; ok {
 				return nil, fmt.Errorf("invalid --address-pair %q: %s is already paired by %q", value, addr, previous)
 			}
 			seen[addr] = value
 		}
-		pairs = append(pairs, config.AddressPair{IPv4: ipv4.String(), IPv6: ipv6.String()})
+		pairs = append(pairs, pair)
 	}
 	return pairs, nil
 }
@@ -219,7 +226,9 @@ func mergeSetupAddressPairs(configured, overrides []config.AddressPair) []config
 	overridden := make(map[netip.Addr]bool)
 	for _, pair := range overrides {
 		overridden[netip.MustParseAddr(pair.IPv4)] = true
-		overridden[netip.MustParseAddr(pair.IPv6)] = true
+		if pair.IPv6 != "" {
+			overridden[netip.MustParseAddr(pair.IPv6)] = true
+		}
 	}
 	merged := make([]config.AddressPair, 0, len(configured)+len(overrides))
 	for _, pair := range configured {
@@ -251,6 +260,9 @@ func validateSetupAddressPairs(pairs []config.AddressPair, bindAddrs []string) e
 	}
 	for _, pair := range pairs {
 		for _, raw := range []string{pair.IPv4, pair.IPv6} {
+			if raw == "" {
+				continue
+			}
 			if !bound[netip.MustParseAddr(raw)] {
 				return fmt.Errorf("--address-pair %s=%s: %s is not a bind address (bind addresses: %s)",
 					pair.IPv4, pair.IPv6, raw, strings.Join(bindAddrs, ", "))
@@ -292,7 +304,7 @@ func printSetupNetworkOptions(inspection proxy.NetworkInspection) {
 	fmt.Fprintf(setupOutput, "      Documentation: %s\n", setupTransparentDocumentationURL)
 	if len(inspection.Pairing.Pairs) > 0 {
 		for _, pair := range inspection.Pairing.Pairs {
-			fmt.Fprintf(setupOutput, "      Address pair: %s <-> %s (%s)\n", pair.IPv4, pair.IPv6, pair.Provenance)
+			fmt.Fprintf(setupOutput, "      Address pair: %s\n", pair.Describe())
 		}
 	}
 	for _, warning := range inspection.Pairing.Warnings {

@@ -118,7 +118,7 @@ type TransparentUpstreamConfigPatch struct {
 
 type AddressPairConfigPatch struct {
 	IPv4 string `json:"ipv4"`
-	IPv6 string `json:"ipv6"`
+	IPv6 string `json:"ipv6,omitempty"`
 }
 
 // GetConfig fetches the configuration from the API
