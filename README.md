@@ -44,7 +44,8 @@ and request filtering stay on the FlowGuard host.
 ### Operations
 
 - Reloads configuration and certificates after file changes, and reloads
-  configuration on `SIGHUP` (`systemctl reload flowguard`).
+  configuration on `SIGHUP` (`systemctl reload flowguard`, or
+  `/etc/init.d/flowguard reload` without systemd).
 - Lets in-flight requests finish on shutdown for `--shutdown-timeout`
   (default 10 seconds), then closes remaining connections, including WebSockets.
 - Writes structured request logs to files, Loki, or OpenObserve.
@@ -78,6 +79,25 @@ curl -fsSL https://pkg.flowguard.network/install.sh | sudo bash
 
 The installer supports Debian, Ubuntu, RHEL, CentOS, Rocky Linux, AlmaLinux, and
 Fedora on amd64 or arm64 systems.
+
+### Supported systems
+
+FlowGuard is a single static binary, so it runs on any Linux with the 3.2 or
+newer kernel that current Go requires. The packages work with systemd and with
+SysV init, including Upstart on Ubuntu 14.04, which runs SysV scripts:
+
+| Distribution | Init |
+| --- | --- |
+| Ubuntu 14.04, 16.04 and later | Upstart (14.04) through the SysV script, systemd |
+| Debian 8 and later | systemd or SysV |
+| CentOS/RHEL 7 | systemd, or SysV in containers |
+| Rocky Linux, AlmaLinux and CloudLinux 8 and later, Fedora | systemd |
+
+The package scripts check whether systemd runs (`/run/systemd/system`). Without
+it they use the `/etc/init.d/flowguard` script, which logs to
+`/var/log/flowguard/flowguard.log`, and remote upgrades install the package in
+a session of their own instead of with `systemd-run`. CentOS 6 and other 2.6.x
+kernels are not supported.
 
 ### Install on Debian or Ubuntu
 
@@ -116,6 +136,18 @@ sudo flowguard certificates
 sudo systemctl enable --now flowguard
 ```
 
+Without systemd, start FlowGuard now and on boot with:
+
+```bash
+sudo update-rc.d flowguard defaults
+sudo /etc/init.d/flowguard start
+```
+
+On apt before 1.1, such as Ubuntu 14.04 and Debian 8, use the quick install
+above: it adds the repository as a `flowguard.list` source with the key in
+`/etc/apt/trusted.gpg.d`, because these releases read neither `.sources` files
+nor `Signed-By`.
+
 You can edit `/etc/flowguard/config.json` instead of using the control panel.
 
 ### Install on RHEL, CentOS, Rocky Linux, AlmaLinux, or Fedora
@@ -139,6 +171,14 @@ sudo flowguard setup fgsvr_...
 
 # Start FlowGuard now and on boot
 sudo systemctl enable --now flowguard
+```
+
+Without systemd, start FlowGuard now and on boot with:
+
+```bash
+sudo chkconfig --add flowguard
+sudo chkconfig flowguard on
+sudo /etc/init.d/flowguard start
 ```
 
 You can edit `/etc/flowguard/config.json` instead of using the control panel.

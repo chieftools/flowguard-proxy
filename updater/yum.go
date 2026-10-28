@@ -22,8 +22,9 @@ func yumChangeArgs(binary, action, pkg, version string) []string {
 }
 
 type yumManager struct {
-	binary string // Path to dnf or yum binary
-	name   string // "dnf" or "yum"
+	binary  string // Path to dnf or yum binary
+	name    string // "dnf" or "yum"
+	logPath string // Package manager output without systemd
 }
 
 func (y *yumManager) Name() string {
@@ -56,12 +57,7 @@ func (y *yumManager) Install(pkg, version string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), yumTimeout)
 	defer cancel()
 
-	// Run via systemd-run --scope so the package manager lives in a separate cgroup.
-	// Without this, the post-install script's "systemctl restart flowguard"
-	// causes systemd to kill the package manager (same cgroup), leaving it broken.
-	args := append([]string{"--scope", "--description=FlowGuard package upgrade", "--"}, yumChangeArgs(y.binary, "install", pkg, version)...)
-	cmd := exec.CommandContext(ctx, "systemd-run", args...)
-	output, err := cmd.CombinedOutput()
+	output, err := runPackageChange(ctx, "FlowGuard package upgrade", yumChangeArgs(y.binary, "install", pkg, version), nil, y.logPath)
 	if err != nil {
 		return fmt.Errorf("%s install failed: %w\nOutput: %s", y.name, err, string(output))
 	}
@@ -73,9 +69,7 @@ func (y *yumManager) Downgrade(pkg, version string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), yumTimeout)
 	defer cancel()
 
-	args := append([]string{"--scope", "--description=FlowGuard package downgrade", "--"}, yumChangeArgs(y.binary, "downgrade", pkg, version)...)
-	cmd := exec.CommandContext(ctx, "systemd-run", args...)
-	output, err := cmd.CombinedOutput()
+	output, err := runPackageChange(ctx, "FlowGuard package downgrade", yumChangeArgs(y.binary, "downgrade", pkg, version), nil, y.logPath)
 	if err != nil {
 		return fmt.Errorf("%s downgrade failed: %w\nOutput: %s", y.name, err, string(output))
 	}

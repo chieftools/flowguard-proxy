@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.chief.tools/flowguard-proxy/config"
+	"go.chief.tools/flowguard-proxy/logfile"
 	"go.chief.tools/flowguard-proxy/proxy"
 	"go.chief.tools/flowguard-proxy/systemdnotify"
 	"go.chief.tools/flowguard-proxy/updater"
@@ -24,6 +25,7 @@ var (
 	noRedirect           bool
 	upstreamClientIPMode string
 	shutdownTimeout      time.Duration
+	logFile              string
 )
 
 var runCmd = &cobra.Command{
@@ -49,9 +51,19 @@ func init() {
 	runCmd.Flags().BoolVar(&noRedirect, "no-redirect", false, "Skip iptables port redirection setup")
 	runCmd.Flags().StringVar(&upstreamClientIPMode, "upstream-client-ip-mode", "", "Override upstream client IP mode (headers or transparent)")
 	runCmd.Flags().DurationVar(&shutdownTimeout, "shutdown-timeout", proxy.DefaultShutdownTimeout, "How long to let in-flight requests finish on shutdown before closing remaining connections, including WebSockets")
+	runCmd.Flags().StringVar(&logFile, "log-file", "", "Log to this file with size-capped rotation instead of stderr (for hosts without systemd)")
 }
 
 func runProxy() {
+	var processLog *logfile.RotatingFile
+	if logFile != "" {
+		var err error
+		if processLog, err = logfile.Setup(logFile); err != nil {
+			log.Fatalf("Failed to open log file %s: %v", logFile, err)
+		}
+		defer processLog.Close()
+	}
+
 	log.Printf("FlowGuard version %s", GetVersion())
 
 	// Load configuration
@@ -105,6 +117,13 @@ func runProxy() {
 	signal.Notify(reloadChan, syscall.SIGHUP)
 	go func() {
 		for range reloadChan {
+			// SIGHUP also follows a log file that was rotated away
+			if processLog != nil {
+				if err := processLog.Reopen(); err != nil {
+					log.Printf("Failed to reopen log file %s: %v", logFile, err)
+				}
+			}
+
 			log.Println("[config] Received SIGHUP, reloading configuration...")
 			if err := configMgr.RefreshFromAPI(false); err != nil {
 				log.Printf("[config] Warning: Failed to refresh configuration from API: %v", err)

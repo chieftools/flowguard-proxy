@@ -35,11 +35,17 @@ mkdir -p "${DEB_DIR}/DEBIAN"
 mkdir -p "${DEB_DIR}/usr/bin"
 mkdir -p "${DEB_DIR}/etc/flowguard"
 mkdir -p "${DEB_DIR}/etc/systemd/system"
+mkdir -p "${DEB_DIR}/etc/init.d"
 mkdir -p "${DEB_DIR}/var/log/flowguard"
 mkdir -p "${DEB_DIR}/var/cache/flowguard"
 mkdir -p "${DEB_DIR}/usr/share/doc/flowguard"
 mkdir -p "${DEB_DIR}/usr/share/flowguard"
 install -m 0644 LICENSE "${DEB_DIR}/usr/share/doc/flowguard/copyright"
+
+# Hosts without systemd run FlowGuard with the SysV init script. Init scripts
+# are conffiles, so local changes survive upgrades.
+install -m 0755 packaging/flowguard.init "${DEB_DIR}/etc/init.d/flowguard"
+echo "/etc/init.d/flowguard" > "${DEB_DIR}/DEBIAN/conffiles"
 
 # Build the binary
 echo -e "${YELLOW}Building FlowGuard binary...${NC}"
@@ -140,32 +146,47 @@ chmod 755 /etc/flowguard
 chmod 600 /etc/flowguard/config.json
 chmod 755 /usr/bin/flowguard
 
-# Reload systemd
-systemctl daemon-reload
+# Pick the init system at runtime; the package does not depend on systemd.
+# The service was left running during an upgrade (not stopped in prerm), so
+# try-restart picks up the new binary.
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+    if [ "$1" = "configure" ] && [ -n "$2" ]; then
+        systemctl try-restart flowguard.service || true
+    fi
+elif [ -x /etc/init.d/flowguard ]; then
+    if [ "$1" = "configure" ] && [ -n "$2" ]; then
+        /etc/init.d/flowguard try-restart || true
+    fi
+fi
 
-# Check if this is an upgrade
-if [ "$1" = "configure" ] && [ -n "$2" ]; then
-    # This is an upgrade - restart the service if it was running.
-    # The service was left running during the upgrade (not stopped in prerm),
-    # so try-restart will restart it to pick up the new binary.
-    systemctl try-restart flowguard.service || true
-else
+if [ "$1" = "configure" ] && [ -z "$2" ]; then
     # Fresh install - show setup instructions
     echo ""
     echo "FlowGuard has been installed successfully!"
     echo ""
     echo "To configure FlowGuard:"
     echo "  1. Edit the configuration file: /etc/flowguard/config.json or follow instructions from https://flowguard.network"
-    echo "  2. Start the service: systemctl start flowguard"
-    echo "  3. Start the service on boot: systemctl enable flowguard"
+    if [ -d /run/systemd/system ]; then
+        echo "  2. Start the service: systemctl start flowguard"
+        echo "  3. Start the service on boot: systemctl enable flowguard"
+    else
+        echo "  2. Start the service: /etc/init.d/flowguard start"
+        echo "  3. Start the service on boot: update-rc.d flowguard defaults"
+    fi
     echo ""
     echo "Important directories:"
     echo "  Configuration: /etc/flowguard/"
     echo "  Cache:         /var/cache/flowguard/"
     echo "  Logs:          /var/log/flowguard/"
     echo ""
-    echo "To check service status: systemctl status flowguard"
-    echo "To view logs: journalctl -u flowguard -f"
+    if [ -d /run/systemd/system ]; then
+        echo "To check service status: systemctl status flowguard"
+        echo "To view logs: journalctl -u flowguard -f"
+    else
+        echo "To check service status: /etc/init.d/flowguard status"
+        echo "To view logs: tail -f /var/log/flowguard/flowguard.log"
+    fi
     echo ""
 fi
 
@@ -183,12 +204,19 @@ set -e
 # On upgrades we leave the service running; postinst will try-restart it
 # to pick up the new binary (this is the standard dh_installsystemd pattern).
 if [ "$1" = "remove" ]; then
-    if systemctl is-active --quiet flowguard.service 2>/dev/null; then
-        echo "Stopping FlowGuard service..."
-        systemctl stop flowguard.service || true
-    fi
-    if systemctl is-enabled --quiet flowguard.service 2>/dev/null; then
-        systemctl disable flowguard.service || true
+    if [ -d /run/systemd/system ]; then
+        if systemctl is-active --quiet flowguard.service 2>/dev/null; then
+            echo "Stopping FlowGuard service..."
+            systemctl stop flowguard.service || true
+        fi
+        if systemctl is-enabled --quiet flowguard.service 2>/dev/null; then
+            systemctl disable flowguard.service || true
+        fi
+    else
+        if [ -x /etc/init.d/flowguard ]; then
+            /etc/init.d/flowguard stop || true
+        fi
+        update-rc.d -f flowguard remove >/dev/null 2>&1 || true
     fi
 fi
 
@@ -203,7 +231,9 @@ cat > "${DEB_DIR}/DEBIAN/postrm" << 'EOF'
 set -e
 
 # Reload systemd after removal
-systemctl daemon-reload || true
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi
 
 # On purge, remove configuration, logs and cache
 if [ "$1" = "purge" ]; then

@@ -3,6 +3,7 @@ package updater
 import (
 	"fmt"
 	"log"
+	"path/filepath"
 	"regexp"
 	"sync"
 	"time"
@@ -36,7 +37,7 @@ type Updater struct {
 // New creates an Updater by detecting the system package manager.
 // Returns an error if no supported package manager is found.
 func New(version, stateDir string, verbose bool) (*Updater, error) {
-	pm, err := detectPackageManager()
+	pm, err := detectPackageManager(filepath.Join(stateDir, "upgrade.log"))
 	if err != nil {
 		return nil, err
 	}

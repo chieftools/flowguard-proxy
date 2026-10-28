@@ -50,6 +50,7 @@ echo -e "${YELLOW}Creating RPM build structure...${NC}"
 mkdir -p "${RPMBUILD_DIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 mkdir -p "${RPMBUILD_DIR}/BUILDROOT"
 install -m 0644 LICENSE "${RPMBUILD_DIR}/SOURCES/LICENSE"
+install -m 0755 packaging/flowguard.init "${RPMBUILD_DIR}/SOURCES/flowguard.init"
 
 # Build the binary into SOURCES, since rpm 4.20 and later builds in a
 # per-package subdirectory of %{_builddir}
@@ -114,6 +115,7 @@ Source0:        config.json
 Source1:        flowguard.service
 Source2:        LICENSE
 Source3:        flowguard
+Source4:        flowguard.init
 
 # Don't strip the binary or check for build-id
 %global debug_package %{nil}
@@ -143,6 +145,7 @@ mkdir -p %{buildroot}/etc/flowguard
 mkdir -p %{buildroot}/var/log/flowguard
 mkdir -p %{buildroot}/var/cache/flowguard
 mkdir -p %{buildroot}/usr/lib/systemd/system
+mkdir -p %{buildroot}/etc/rc.d/init.d
 mkdir -p %{buildroot}/usr/share/licenses/flowguard
 
 # Install binary
@@ -153,6 +156,9 @@ install -m 0600 %{SOURCE0} %{buildroot}/etc/flowguard/config.json
 
 # Install systemd service
 install -m 0644 %{SOURCE1} %{buildroot}/usr/lib/systemd/system/flowguard.service
+
+# Install the SysV init script for hosts without systemd
+install -m 0755 %{SOURCE4} %{buildroot}/etc/rc.d/init.d/flowguard
 install -m 0644 %{SOURCE2} %{buildroot}/usr/share/licenses/flowguard/LICENSE
 
 %files
@@ -163,6 +169,7 @@ install -m 0644 %{SOURCE2} %{buildroot}/usr/share/licenses/flowguard/LICENSE
 %attr(0755, root, root) %dir /var/log/flowguard
 %attr(0755, root, root) %dir /var/cache/flowguard
 %attr(0644, root, root) /usr/lib/systemd/system/flowguard.service
+%config(noreplace) %attr(0755, root, root) /etc/rc.d/init.d/flowguard
 
 %pre
 # Pre-installation script
@@ -186,8 +193,14 @@ chmod 755 /etc/flowguard
 chmod 600 /etc/flowguard/config.json
 chmod 755 /usr/bin/flowguard
 
-# Reload systemd
-systemctl daemon-reload
+# Pick the init system at runtime; the package does not depend on systemd.
+# Under systemd %postun restarts the service on upgrade. Without it, restart
+# here, with the new binary and init script in place.
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+elif [ "\$1" -ge 2 ] && [ -x /etc/rc.d/init.d/flowguard ]; then
+    /etc/rc.d/init.d/flowguard try-restart || true
+fi
 
 # Check if this is a fresh install (not upgrade)
 if [ "\$1" -eq 1 ]; then
@@ -197,16 +210,26 @@ if [ "\$1" -eq 1 ]; then
     echo ""
     echo "To configure FlowGuard:"
     echo "  1. Edit the configuration file: /etc/flowguard/config.json or follow instructions from https://flowguard.network"
-    echo "  2. Start the service: systemctl start flowguard"
-    echo "  3. Start the service on boot: systemctl enable flowguard"
+    if [ -d /run/systemd/system ]; then
+        echo "  2. Start the service: systemctl start flowguard"
+        echo "  3. Start the service on boot: systemctl enable flowguard"
+    else
+        echo "  2. Start the service: /etc/rc.d/init.d/flowguard start"
+        echo "  3. Start the service on boot: chkconfig --add flowguard && chkconfig flowguard on"
+    fi
     echo ""
     echo "Important directories:"
     echo "  Configuration: /etc/flowguard/"
     echo "  Cache:         /var/cache/flowguard/"
     echo "  Logs:          /var/log/flowguard/"
     echo ""
-    echo "To check service status: systemctl status flowguard"
-    echo "To view logs: journalctl -u flowguard -f"
+    if [ -d /run/systemd/system ]; then
+        echo "To check service status: systemctl status flowguard"
+        echo "To view logs: journalctl -u flowguard -f"
+    else
+        echo "To check service status: /etc/rc.d/init.d/flowguard status"
+        echo "To view logs: tail -f /var/log/flowguard/flowguard.log"
+    fi
     echo ""
 fi
 
@@ -217,12 +240,19 @@ exit 0
 # Only stop and disable the service on removal (\$1 -eq 0), not on upgrades.
 # On upgrades we leave the service running; %postun will try-restart it.
 if [ "\$1" -eq 0 ]; then
-    if systemctl is-active --quiet flowguard.service 2>/dev/null; then
-        echo "Stopping FlowGuard service..."
-        systemctl stop flowguard.service || true
-    fi
-    if systemctl is-enabled --quiet flowguard.service 2>/dev/null; then
-        systemctl disable flowguard.service || true
+    if [ -d /run/systemd/system ]; then
+        if systemctl is-active --quiet flowguard.service 2>/dev/null; then
+            echo "Stopping FlowGuard service..."
+            systemctl stop flowguard.service || true
+        fi
+        if systemctl is-enabled --quiet flowguard.service 2>/dev/null; then
+            systemctl disable flowguard.service || true
+        fi
+    else
+        if [ -x /etc/rc.d/init.d/flowguard ]; then
+            /etc/rc.d/init.d/flowguard stop || true
+        fi
+        chkconfig --del flowguard >/dev/null 2>&1 || true
     fi
 fi
 
@@ -231,15 +261,19 @@ exit 0
 %postun
 # Post-uninstallation script
 
-# Reload systemd
-systemctl daemon-reload || true
+# Without systemd, %post restarted the service on upgrade
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
 
-if [ "\$1" -ge 1 ]; then
-    # This is an upgrade - restart the service if it was running.
-    # The service was left running during the upgrade (not stopped in %preun),
-    # so try-restart will restart it to pick up the new binary.
-    systemctl try-restart flowguard.service || true
-elif [ "\$1" -eq 0 ]; then
+    if [ "\$1" -ge 1 ]; then
+        # This is an upgrade - restart the service if it was running.
+        # The service was left running during the upgrade (not stopped in %preun),
+        # so try-restart will restart it to pick up the new binary.
+        systemctl try-restart flowguard.service || true
+    fi
+fi
+
+if [ "\$1" -eq 0 ]; then
     # Complete removal - clean up
     # To fully remove, use: rpm -e --allmatches flowguard && rm -rf /etc/flowguard
     rm -rf /var/log/flowguard

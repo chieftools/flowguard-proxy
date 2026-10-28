@@ -22,6 +22,7 @@ import (
 	"go.chief.tools/flowguard-proxy/api"
 	"go.chief.tools/flowguard-proxy/config"
 	"go.chief.tools/flowguard-proxy/fail2ban"
+	"go.chief.tools/flowguard-proxy/initsys"
 	"go.chief.tools/flowguard-proxy/proxy"
 )
 
@@ -49,6 +50,7 @@ func resetSetupTestGlobals(t *testing.T) {
 	oldNginxRunning := setupNginxRunning
 	oldPleskRootFallback := setupPleskRootFallback
 	oldDirectAdminRoot := setupDirectAdminRoot
+	oldInitSystem := setupInitSystem
 
 	configFile = filepath.Join(t.TempDir(), "config.json")
 	setupDiscover = false
@@ -81,6 +83,7 @@ func resetSetupTestGlobals(t *testing.T) {
 	setupNginxRunning = func() bool { return true }
 	setupPleskRootFallback = nil
 	setupDirectAdminRoot = filepath.Join(t.TempDir(), "missing-directadmin")
+	setupInitSystem = func() initsys.Kind { return initsys.Systemd }
 
 	t.Cleanup(func() {
 		configFile = oldConfigFile
@@ -104,7 +107,28 @@ func resetSetupTestGlobals(t *testing.T) {
 		setupNginxRunning = oldNginxRunning
 		setupPleskRootFallback = oldPleskRootFallback
 		setupDirectAdminRoot = oldDirectAdminRoot
+		setupInitSystem = oldInitSystem
 	})
+}
+
+func TestSetupCompletionExplainsTheInitSystem(t *testing.T) {
+	for kind, want := range map[initsys.Kind]string{
+		initsys.Systemd: "systemd: sudo systemctl restart flowguard",
+		initsys.SysV:    "SysV init: sudo /etc/init.d/flowguard restart",
+		initsys.Upstart: "SysV init: sudo /etc/init.d/flowguard restart",
+		initsys.Unknown: "Without an init system: sudo flowguard run --log-file /var/log/flowguard/flowguard.log",
+	} {
+		resetSetupTestGlobals(t)
+		var output strings.Builder
+		setupOutput = &output
+		setupInitSystem = func() initsys.Kind { return kind }
+
+		printSetupCompletion()
+
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("%s: expected %q in:\n%s", kind, want, output.String())
+		}
+	}
 }
 
 type fakeSetupClient struct {

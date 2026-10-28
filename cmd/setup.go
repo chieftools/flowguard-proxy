@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"go.chief.tools/flowguard-proxy/certmanager"
 	"go.chief.tools/flowguard-proxy/config"
 	"go.chief.tools/flowguard-proxy/fail2ban"
+	"go.chief.tools/flowguard-proxy/initsys"
 	"go.chief.tools/flowguard-proxy/proxy"
 
 	"github.com/spf13/cobra"
@@ -44,6 +46,7 @@ var (
 	setupNginxRunning      = nginxIsRunning
 	setupPleskRootFallback = []string{"/opt/psa", "/usr/local/psa"}
 	setupDirectAdminRoot   = "/usr/local/directadmin"
+	setupInitSystem        = initsys.DetectSystem
 )
 
 type setupAPIClient interface {
@@ -208,7 +211,20 @@ func setupHostWithClientAndDiscovery(client setupAPIClient, discover bool) error
 func printSetupCompletion() {
 	fmt.Fprintln(setupOutput, "✓ Setup complete")
 	fmt.Fprintln(setupOutput, "  Start FlowGuard, or restart it if already running, to apply this configuration.")
-	fmt.Fprintln(setupOutput, "  systemd: sudo systemctl restart flowguard")
+
+	switch setupInitSystem() {
+	case initsys.Systemd:
+		fmt.Fprintln(setupOutput, "  systemd: sudo systemctl restart flowguard")
+	case initsys.SysV, initsys.Upstart:
+		fmt.Fprintln(setupOutput, "  SysV init: sudo /etc/init.d/flowguard restart")
+		if _, err := exec.LookPath("update-rc.d"); err == nil {
+			fmt.Fprintln(setupOutput, "  Start it at boot: sudo update-rc.d flowguard defaults")
+		} else {
+			fmt.Fprintln(setupOutput, "  Start it at boot: sudo chkconfig --add flowguard && sudo chkconfig flowguard on")
+		}
+	default:
+		fmt.Fprintln(setupOutput, "  Without an init system: sudo flowguard run --log-file /var/log/flowguard/flowguard.log")
+	}
 }
 
 func validateSetupNetwork(cfg *config.Config) error {

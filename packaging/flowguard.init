@@ -1,0 +1,173 @@
+#!/bin/sh
+#
+# flowguard  FlowGuard security proxy (SysV init script)
+#
+# chkconfig: 2345 90 10
+# description: Filters HTTP and HTTPS traffic with the rules from FlowGuard.
+#
+### BEGIN INIT INFO
+# Provides:          flowguard
+# Required-Start:    $network $remote_fs $syslog
+# Required-Stop:     $network $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: FlowGuard security proxy
+# Description:       Filters HTTP and HTTPS traffic with the rules from
+#                    FlowGuard. Only used on hosts without systemd; systemd
+#                    hosts use flowguard.service.
+### END INIT INFO
+
+NAME=flowguard
+DAEMON=/usr/bin/flowguard
+PIDFILE=/var/run/flowguard.pid
+LOGDIR=/var/log/flowguard
+DAEMON_ARGS="run --config /etc/flowguard/config.json --log-file ${LOGDIR}/flowguard.log"
+# Shutdown drains requests and removes the port redirects, see TimeoutStopSec
+STOP_TIMEOUT=60
+# Open connections and certificates, see LimitNOFILE
+MAX_OPEN_FILES=1048576
+
+# Local overrides (for example DAEMON_ARGS or HTTPS_PROXY).
+[ -r /etc/default/flowguard ] && . /etc/default/flowguard
+[ -r /etc/sysconfig/flowguard ] && . /etc/sysconfig/flowguard
+
+[ -x "$DAEMON" ] || exit 0
+
+# Under systemd, flowguard.service runs FlowGuard: hand the action to
+# systemctl instead of starting a second instance next to it.
+if [ -d /run/systemd/system ]; then
+    case "$1" in
+        start|stop|restart|try-restart|reload|force-reload|status)
+            exec systemctl "$1" flowguard.service
+            ;;
+        condrestart)
+            exec systemctl try-restart flowguard.service
+            ;;
+    esac
+fi
+
+read_pid() {
+    pid=""
+    [ -f "$PIDFILE" ] || return 1
+    read -r pid < "$PIDFILE" 2>/dev/null || return 1
+    [ -n "$pid" ]
+}
+
+is_running() {
+    read_pid || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    # Guard against a recycled PID: the process must be our binary (after an
+    # upgrade the link reads "/usr/bin/flowguard (deleted)").
+    case "$(readlink "/proc/$pid/exe" 2>/dev/null)" in
+        "$DAEMON"*) return 0 ;;
+    esac
+    return 1
+}
+
+do_start() {
+    if is_running; then
+        echo "$NAME is already running (pid $pid)."
+        return 0
+    fi
+    rm -f "$PIDFILE"
+    mkdir -p "$LOGDIR"
+
+    printf "Starting %s: " "$NAME"
+    # dash and bash, the /bin/sh of the supported distributions, both have -n
+    # shellcheck disable=SC3045
+    ulimit -n "$MAX_OPEN_FILES" 2>/dev/null || true
+    # Detach into a session of its own. Panics and other output that bypasses
+    # the log go to stderr.log.
+    if command -v setsid >/dev/null 2>&1; then
+        # shellcheck disable=SC2086
+        setsid "$DAEMON" $DAEMON_ARGS </dev/null >>"$LOGDIR/stderr.log" 2>&1 &
+    else
+        # shellcheck disable=SC2086
+        nohup "$DAEMON" $DAEMON_ARGS </dev/null >>"$LOGDIR/stderr.log" 2>&1 &
+    fi
+    echo $! > "$PIDFILE"
+
+    # Give FlowGuard a moment to fail on a bad configuration.
+    sleep 1
+    if is_running; then
+        echo "ok"
+        return 0
+    fi
+    echo "failed (see $LOGDIR/flowguard.log and $LOGDIR/stderr.log)"
+    rm -f "$PIDFILE"
+    return 1
+}
+
+do_stop() {
+    if ! is_running; then
+        echo "$NAME is not running."
+        rm -f "$PIDFILE"
+        return 0
+    fi
+    printf "Stopping %s: " "$NAME"
+    kill -TERM "$pid" 2>/dev/null
+    waited=0
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$waited" -ge "$STOP_TIMEOUT" ]; then
+            kill -KILL "$pid" 2>/dev/null
+            break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    rm -f "$PIDFILE"
+    echo "ok"
+    return 0
+}
+
+do_reload() {
+    if ! is_running; then
+        echo "$NAME is not running."
+        return 7
+    fi
+    kill -HUP "$pid"
+    echo "Reloaded $NAME."
+}
+
+do_status() {
+    if is_running; then
+        echo "$NAME is running (pid $pid)."
+        return 0
+    fi
+    if [ -f "$PIDFILE" ]; then
+        echo "$NAME is dead but the pid file exists."
+        return 1
+    fi
+    echo "$NAME is not running."
+    return 3
+}
+
+case "$1" in
+    start)
+        do_start
+        ;;
+    stop)
+        do_stop
+        ;;
+    restart|force-reload)
+        do_stop
+        do_start
+        ;;
+    try-restart|condrestart)
+        if is_running; then
+            do_stop
+            do_start
+        fi
+        ;;
+    reload)
+        do_reload
+        ;;
+    status)
+        do_status
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|try-restart|reload|force-reload|status}" >&2
+        exit 2
+        ;;
+esac
+exit $?
