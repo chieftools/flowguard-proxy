@@ -22,6 +22,11 @@ type Client struct {
 	hostKey    string
 	userAgent  string
 	httpClient *http.Client
+
+	backoffMu     sync.Mutex
+	backoffUntil  time.Time
+	backoffReason string
+	now           func() time.Time
 }
 
 // ClientOption configures an API client.
@@ -63,6 +68,7 @@ func NewClient(hostKey, userAgent string, options ...ClientOption) *Client {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		now: time.Now,
 	}
 	for _, option := range options {
 		option(client)
@@ -146,7 +152,7 @@ func (c *Client) GetConfig(etag string) ([]byte, error) {
 		req.Header.Set("If-None-Match", etag)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch configuration: %w", err)
 	}
@@ -206,7 +212,7 @@ func (c *Client) PatchConfig(payload ConfigPatch) error {
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set(instance.Header, instance.ID())
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return fmt.Errorf("failed to patch configuration: %w", err)
 	}
@@ -278,7 +284,7 @@ func (c *Client) SendHeartbeat(payload HeartbeatPayload) error {
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set(instance.Header, instance.ID())
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send heartbeat: %w", err)
 	}
@@ -305,7 +311,7 @@ func (c *Client) SendHeartbeatStop(ctx context.Context) error {
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set(instance.Header, instance.ID())
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send heartbeat stop: %w", err)
 	}
@@ -319,12 +325,17 @@ func (c *Client) SendHeartbeatStop(ctx context.Context) error {
 }
 
 // SetIdentity updates request credentials and identification together on configuration reload.
+// A new host key ends a backoff, so a key from `flowguard setup` is tried right away.
 func (c *Client) SetIdentity(hostKey, userAgent string) {
 	c.identityMu.Lock()
-	defer c.identityMu.Unlock()
-
+	changed := c.hostKey != hostKey
 	c.hostKey = hostKey
 	c.userAgent = userAgent
+	c.identityMu.Unlock()
+
+	if changed {
+		c.clearBackoff()
+	}
 }
 
 func (c *Client) identity() (string, string) {

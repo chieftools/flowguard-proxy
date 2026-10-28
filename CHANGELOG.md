@@ -15,6 +15,7 @@ release.
 
 ### Changed
 
+- FlowGuard now pauses its requests to the control panel when the panel asks it to. A `Retry-After` on a 429 or 503 answer pauses them for that long, and a rejected host key (401) or an unsupported FlowGuard version (426) pauses them for an hour, with a log line that says why. Before, a proxy with a revoked host key kept fetching its configuration and sending heartbeats on the regular schedule. Proxying continues while requests are paused, and a new host key from `flowguard setup` is tried right away.
 - Limited messages from the realtime server to 1 MiB. A larger message closes the connection, which then reconnects, instead of being read into memory whole.
 
 ### Fixed
