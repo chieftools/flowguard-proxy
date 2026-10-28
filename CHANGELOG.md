@@ -9,6 +9,10 @@ release.
 
 ## [Unreleased]
 
+### Added
+
+- Added `SHA256SUMS` and its signature `SHA256SUMS.asc` to the GitHub release, so downloaded packages can be verified with the FlowGuard signing key.
+
 ### Changed
 
 - Limited messages from the realtime server to 1 MiB. A larger message closes the connection, which then reconnects, instead of being read into memory whole.

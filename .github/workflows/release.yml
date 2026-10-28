@@ -321,6 +321,21 @@ jobs:
             find "${REPO_DIR}" -maxdepth 1 -name "*.rpm" -empty -delete
           done
 
+      - name: Create checksums
+        run: |
+          # After the RPMs are signed, since signing rewrites them
+          sha256sum \
+            "flowguard_${RELEASE_VERSION}_amd64.deb" \
+            "flowguard_${RELEASE_VERSION}_arm64.deb" \
+            "flowguard-${RELEASE_VERSION}-1.x86_64.rpm" \
+            "flowguard-${RELEASE_VERSION}-1.aarch64.rpm" > SHA256SUMS
+          gpg --batch --yes --detach-sign --armor \
+            --pinentry-mode loopback \
+            --passphrase-file=/tmp/gpg-passphrase \
+            -o SHA256SUMS.asc SHA256SUMS
+          gpg --batch --verify SHA256SUMS.asc SHA256SUMS
+          sha256sum -c SHA256SUMS
+
       - name: Create repository configuration files
         run: |
           # Create install script for users in root
@@ -491,6 +506,8 @@ jobs:
             flowguard_${{ env.RELEASE_VERSION }}_arm64.deb
             flowguard-${{ env.RELEASE_VERSION }}-1.x86_64.rpm
             flowguard-${{ env.RELEASE_VERSION }}-1.aarch64.rpm
+            SHA256SUMS
+            SHA256SUMS.asc
           body_path: ${{ runner.temp }}/release-notes.md
           draft: false
           prerelease: false
