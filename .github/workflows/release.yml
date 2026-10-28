@@ -121,24 +121,38 @@ jobs:
         run: |
           SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
 
+          # Download a path from the package server. Only a path that does
+          # not exist yet (first release) is skipped: on any other failure the
+          # rebuilt indexes would drop the versions already published.
+          download() {
+            local status=0
+            rsync -avz -e "${SSH_CMD}" "${SSH_HOST}:${SSH_PATH}/$1" "$2" \
+              2> "${RUNNER_TEMP}/rsync-stderr" || status=$?
+            cat "${RUNNER_TEMP}/rsync-stderr" >&2
+            if [ "${status}" -eq 0 ]; then
+              return 0
+            fi
+            if [ "${status}" -eq 23 ] && grep -Eq '(change_dir|link_stat) .* failed: No such file or directory' "${RUNNER_TEMP}/rsync-stderr"; then
+              echo "${1} does not exist on the package server yet, starting without it."
+              return 0
+            fi
+            echo "::error::Downloading ${1} from the package server failed (rsync exit ${status}); not publishing, as that would drop existing versions from the repository."
+            exit 1
+          }
+
           # Download only DEB metadata (not the pool with all .deb archives)
           mkdir -p repo-sync/deb/dists
-          rsync -avz -e "${SSH_CMD}" \
-            "${SSH_HOST}:${SSH_PATH}/deb/dists/" repo-sync/deb/dists/ || true
+          download deb/dists/ repo-sync/deb/dists/
 
           # Download RPM repositories
           for RPM_ARCH in x86_64 aarch64; do
             mkdir -p repo-sync/rpm/stable/${RPM_ARCH}
             if [ "${REBUILD_RPM_REPO}" = "true" ]; then
               echo "Rebuilding RPM ${RPM_ARCH} repo: downloading all packages..."
-              rsync -avz -e "${SSH_CMD}" \
-                "${SSH_HOST}:${SSH_PATH}/rpm/stable/${RPM_ARCH}/" \
-                repo-sync/rpm/stable/${RPM_ARCH}/ || true
+              download "rpm/stable/${RPM_ARCH}/" "repo-sync/rpm/stable/${RPM_ARCH}/"
             else
               mkdir -p repo-sync/rpm/stable/${RPM_ARCH}/repodata
-              rsync -avz -e "${SSH_CMD}" \
-                "${SSH_HOST}:${SSH_PATH}/rpm/stable/${RPM_ARCH}/repodata/" \
-                repo-sync/rpm/stable/${RPM_ARCH}/repodata/ || true
+              download "rpm/stable/${RPM_ARCH}/repodata/" "repo-sync/rpm/stable/${RPM_ARCH}/repodata/"
             fi
           done
 
