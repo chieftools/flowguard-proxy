@@ -9,6 +9,8 @@ release.
 
 ## [Unreleased]
 
+## [0.31.0]
+
 ### Added
 
 - Added `body` and `body-truncated` rule matchers. `body` matches the first 256 KiB of the request body with any string operator, so a rule can block an exploit payload without blocking every request of its kind. `body-truncated` is `true` when the body is longer than that, so a rule can block or log bodies that were not fully inspected. The body is only read when a rule reaches a body matcher and is forwarded unchanged. See [Rule conditions](README.md#rule-conditions).
@@ -743,7 +745,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.30.1...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.31.0
 [0.30.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.30.1
 [0.30.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.30.0
 [0.29.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.29.1
