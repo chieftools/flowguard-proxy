@@ -9,6 +9,8 @@ release.
 
 ## [Unreleased]
 
+## [0.32.0]
+
 ### Added
 
 - Added `SHA256SUMS` and its signature `SHA256SUMS.asc` to the GitHub release, so downloaded packages can be verified with the FlowGuard signing key.
@@ -787,7 +789,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.31.3...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.32.0...HEAD
+[0.32.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.32.0
 [0.31.3]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.31.3
 [0.31.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.31.2
 [0.31.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.31.1
