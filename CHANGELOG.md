@@ -9,6 +9,10 @@ release.
 
 ## [Unreleased]
 
+### Changed
+
+- Updated dependencies and Go to 1.27.3.
+
 ## [0.31.1]
 
 _No source changes; this release republishes 0.31.0, whose packages were not published because the RPM build failed._
