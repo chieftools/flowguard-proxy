@@ -279,14 +279,18 @@ DOCKERFILE_EOF
     # Run the build in Docker (with --target x86_64 to specify architecture)
     docker run --rm -v "${BUILD_DIR}:/build" flowguard-rpm-builder \
         rpmbuild --define "_topdir /build/rpmbuild" \
+                 --define "_rpmformat 4" \
                  --target ${ARCH} \
                  -bb /build/rpmbuild/SPECS/flowguard.spec
 
     # Clean up Docker image
     docker rmi flowguard-rpm-builder > /dev/null 2>&1 || true
 else
-    # Build natively on Linux
+    # Build natively on Linux. rpm 6 builds v6 packages by default, and
+    # signing those leaves out the RSAHEADER signature that the rpm of EL7
+    # and EL8 verifies, so build v4 packages. Older rpm ignores the macro.
     rpmbuild --define "_topdir ${RPMBUILD_DIR}" \
+             --define "_rpmformat 4" \
              --target "${ARCH}" \
              -bb "${RPMBUILD_DIR}/SPECS/flowguard.spec"
 fi

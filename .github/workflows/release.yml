@@ -110,9 +110,7 @@ jobs:
   publish:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
-    # The rpm of Ubuntu 26.04 no longer signs into the RSAHEADER tag that
-    # the rpm of EL7 and EL8 verifies.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     concurrency: package-publication
     permissions:
       contents: write
@@ -275,18 +273,26 @@ jobs:
         run: |
           VERSION="${RELEASE_VERSION}"
 
-          # RPM signing macros with explicit passphrase handling
-          echo "%_gpg_name FlowGuard Team <hello@flowguard.network>" > ~/.rpmmacros
-          echo "%_signature gpg" >> ~/.rpmmacros
-          echo '%__gpg_sign_cmd %{__gpg} gpg --batch --verbose --no-armor --pinentry-mode loopback --passphrase-file /tmp/gpg-passphrase --no-secmem-warning -u "%{_gpg_name}" -sbo %{__signature_filename} --digest-algo sha256 %{__plaintext_filename}' >> ~/.rpmmacros
-
           for RPM_ARCH in x86_64 aarch64; do
             RPM_FILE="flowguard-${VERSION}-1.${RPM_ARCH}.rpm"
             REPO_DIR="repo-sync/rpm/stable/${RPM_ARCH}"
 
-            # Sign the RPM
+            # Sign the RPM. Pass the gpg options as extra arguments: rpm 6
+            # no longer runs a replaced %__gpg_sign_cmd the way rpm 4 did.
             rpm --addsign --define "_gpg_name FlowGuard Team <hello@flowguard.network>" \
+              --define "__gpg $(command -v gpg)" \
+              --define '_gpg_digest_algo sha256' \
+              --define '_gpg_sign_cmd_extra_args --batch --pinentry-mode loopback --passphrase-file /tmp/gpg-passphrase' \
               "${RPM_FILE}"
+
+            # The rpm of EL7 and EL8 only verifies the RSAHEADER signature,
+            # which rpm 6 leaves out of v6 packages.
+            SIGNATURE="$(rpm -qp --qf '%{RSAHEADER:pgpsig}' "${RPM_FILE}" 2>/dev/null)"
+            if [ -z "${SIGNATURE}" ] || [ "${SIGNATURE}" = "(none)" ]; then
+              echo "::error::${RPM_FILE} has no RSAHEADER signature, which the rpm of EL7 and EL8 verifies."
+              exit 1
+            fi
+            echo "${RPM_FILE}: ${SIGNATURE}"
 
             # Copy new RPM to repo directory
             mkdir -p "${REPO_DIR}"
