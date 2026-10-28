@@ -4,12 +4,24 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
 )
 
 const aptTimeout = 5 * time.Minute
+
+// aptEnvironment keeps apt and dpkg from prompting and needrestart from
+// restarting services on its own.
+var aptEnvironment = []string{"DEBIAN_FRONTEND=noninteractive", "APT_LISTCHANGES_FRONTEND=none", "NEEDRESTART_SUSPEND=1"}
+
+// aptCommand runs name with aptEnvironment added to the process environment.
+func aptCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = append(os.Environ(), aptEnvironment...)
+	return cmd
+}
 
 type aptManager struct{}
 
@@ -22,7 +34,7 @@ func (a *aptManager) CheckAvailable(pkg, version string) error {
 	updateCtx, updateCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer updateCancel()
 
-	if output, err := exec.CommandContext(updateCtx, "apt-get", "update").CombinedOutput(); err != nil {
+	if output, err := aptCommand(updateCtx, "apt-get", "update").CombinedOutput(); err != nil {
 		// Don't fail on apt-get update errors — unrelated broken repos (e.g. expired
 		// nodesource) cause a non-zero exit even when the flowguard repo updates fine.
 		// The apt-cache policy check below will catch it if the version is truly missing.
@@ -53,7 +65,7 @@ func (a *aptManager) Install(pkg, version string) error {
 	// Run via systemd-run --scope so apt-get/dpkg live in a separate cgroup.
 	// Without this, the post-install script's "systemctl restart flowguard"
 	// causes systemd to kill apt-get/dpkg (same cgroup), leaving dpkg broken.
-	cmd := exec.CommandContext(ctx, "systemd-run", "--scope", "--description=FlowGuard package upgrade", "--",
+	cmd := aptCommand(ctx, "systemd-run", "--scope", "--description=FlowGuard package upgrade", "--",
 		"apt-get", "install", "-y", "--allow-downgrades", fmt.Sprintf("%s=%s", pkg, version))
 	output, err := cmd.CombinedOutput()
 	if err != nil {

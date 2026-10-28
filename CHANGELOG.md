@@ -9,6 +9,10 @@ release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `install.sh` on Ubuntu stopping at needrestart's "Pending kernel upgrade" dialog, which cannot be answered when the script is piped into bash. The installer and the updater now run apt non-interactively and skip needrestart.
+
 ## [0.31.2]
 
 ### Changed

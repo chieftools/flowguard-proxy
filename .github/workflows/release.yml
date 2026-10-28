@@ -315,6 +315,11 @@ jobs:
               debian)
                   echo "Setting up FlowGuard repository for Debian/Ubuntu..."
 
+                  # Keep apt and its hooks from prompting. Piped into bash,
+                  # nobody can answer a dialog such as needrestart's "Pending
+                  # kernel upgrade", and reading stdin would eat this script.
+                  export DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1
+
                   # Create a dedicated keyring directory
                   install -d -m 0755 /etc/apt/keyrings
 
@@ -350,7 +355,7 @@ jobs:
                           -o APT::Get::List-Cleanup='0'
                   fi
 
-                  apt-get install -y flowguard
+                  apt-get install -y flowguard < /dev/null
                   ;;
 
               rhel)
