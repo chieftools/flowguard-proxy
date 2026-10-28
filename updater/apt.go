@@ -65,14 +65,24 @@ func (a *aptManager) Install(pkg, version string) error {
 	// Run via systemd-run --scope so apt-get/dpkg live in a separate cgroup.
 	// Without this, the post-install script's "systemctl restart flowguard"
 	// causes systemd to kill apt-get/dpkg (same cgroup), leaving dpkg broken.
-	cmd := aptCommand(ctx, "systemd-run", "--scope", "--description=FlowGuard package upgrade", "--",
-		"apt-get", "install", "-y", "--allow-downgrades", fmt.Sprintf("%s=%s", pkg, version))
+	args := append([]string{"--scope", "--description=FlowGuard package upgrade", "--"}, aptInstallArgs(pkg, version)...)
+	cmd := aptCommand(ctx, "systemd-run", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("apt-get install failed: %w\nOutput: %s", err, string(output))
 	}
 
 	return nil
+}
+
+// aptInstallArgs installs the version without prompting. dpkg asks what to do
+// with a locally changed config.json when the package ships a new default,
+// which nobody can answer here, so the local file is kept and an unchanged
+// one is replaced.
+func aptInstallArgs(pkg, version string) []string {
+	return []string{"apt-get", "install", "-y", "--allow-downgrades",
+		"-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
+		fmt.Sprintf("%s=%s", pkg, version)}
 }
 
 func (a *aptManager) Downgrade(pkg, version string) error {

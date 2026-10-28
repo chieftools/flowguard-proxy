@@ -9,6 +9,11 @@ release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed remote upgrades on Debian and Ubuntu failing when a new package ships a changed default `config.json` while the installed one was changed locally, such as by `flowguard setup`. dpkg asked which version to keep, which the updater cannot answer. The updater now keeps the local file and only takes the package's version when the local file was not changed.
+- Fixed remote upgrades with dnf or yum failing when an unrelated repository is broken or unreachable. The updater now only uses the FlowGuard repository to check for and install the new version, as it already did to refresh the package cache.
+
 ## [0.31.3]
 
 ### Fixed
