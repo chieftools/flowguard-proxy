@@ -216,12 +216,6 @@ func (s *Server) withLoadBalancer(r *http.Request) *http.Request {
 	}
 }
 
-func (s *Server) markListenerClosed() {
-	s.listenerOnce.Do(func() {
-		s.listener = nil
-	})
-}
-
 func (s *Server) resetListenerState() {
 	s.listener = nil
 	s.udpConn = nil
@@ -615,13 +609,15 @@ func (s *Server) Shutdown(ctx context.Context) {
 
 	if s.httpServer != nil {
 		if err := <-httpShutdownErr; err == nil {
-			s.markListenerClosed()
 			if s.config.verbose {
 				log.Printf("[proxy] [%s:%s] Proxy server stopped gracefully", s.config.bindAddr, s.config.bindPort)
 			}
 		}
 	}
 
+	// http.Server.Shutdown only closes listeners that Serve has started on, so
+	// a shutdown right after Start would otherwise leave the listener open
+	// until the serve goroutine runs.
 	if err := s.CloseListener(); err != nil {
 		log.Printf("[proxy] [%s:%s] Error closing listener: %v", s.config.bindAddr, s.config.bindPort, err)
 	}

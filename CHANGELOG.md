@@ -13,6 +13,10 @@ release.
 
 - Updated dependencies and Go to 1.27.3.
 
+### Fixed
+
+- Fixed stopping FlowGuard right after it started leaving its HTTP listener open until the listener's serve goroutine ran, so a connection could still be accepted, or reset, after shutdown had returned.
+
 ## [0.31.1]
 
 _No source changes; this release republishes 0.31.0, whose packages were not published because the RPM build failed._
