@@ -31,6 +31,9 @@ type NetworkInspection struct {
 }
 
 func InspectNetwork(cfg *config.Config, bindAddrs []string) (NetworkInspection, error) {
+	if len(bindAddrs) == 0 {
+		bindAddrs = cfg.BindAddresses()
+	}
 	autoDetected := len(bindAddrs) == 0
 	if len(bindAddrs) == 0 {
 		var err error

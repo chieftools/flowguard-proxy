@@ -38,6 +38,7 @@ type HostConfig struct {
 }
 
 type ServerConfig struct {
+	BindAddresses  []string         `json:"bind_addresses,omitempty"`
 	Protocols      *ProtocolsConfig `json:"protocols,omitempty"`
 	AdvertiseHTTP3 *bool            `json:"advertise_http3,omitempty"`
 	Upstream       *UpstreamConfig  `json:"upstream,omitempty"`

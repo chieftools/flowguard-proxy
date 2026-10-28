@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net/netip"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +24,12 @@ const (
 )
 
 func promptSetupServerConfiguration(reader *bufio.Reader, cfg *config.Config, rediscover bool) (api.ServerConfigPatch, error) {
+	if len(setupBindAddrs) > 0 {
+		if err := validateSetupBindAddresses(setupBindAddrs); err != nil {
+			return api.ServerConfigPatch{}, err
+		}
+		setSetupBindAddresses(cfg, setupBindAddrs)
+	}
 	if len(setupAddressPairs) > 0 {
 		setSetupAddressPairs(cfg, mergeSetupAddressPairs(cfg.TransparentUpstreamSettings().AddressPairs, setupAddressPairs))
 	}
@@ -82,6 +90,7 @@ func promptSetupServerConfiguration(reader *bufio.Reader, cfg *config.Config, re
 	}
 
 	return api.ServerConfigPatch{
+		BindAddresses: append([]string(nil), setupBindAddrs...),
 		Protocols: &api.ProtocolsConfigPatch{
 			HTTP1: protocols.HTTP1,
 			HTTP2: protocols.HTTP2,
@@ -96,6 +105,9 @@ func inspectSetupNetwork(cfg *config.Config) proxy.NetworkInspection {
 	inspection, err := setupInspectNetwork(cfg, nil)
 	if err == nil {
 		return inspection
+	}
+	if errors.Is(err, proxy.ErrNoPublicIPAddresses) {
+		fmt.Fprintf(setupOutput, "  Warning: %v\n", err)
 	}
 
 	return proxy.NetworkInspection{
@@ -270,6 +282,58 @@ func validateSetupAddressPairs(pairs []config.AddressPair, bindAddrs []string) e
 		}
 	}
 	return nil
+}
+
+// parseSetupBindAddresses parses the comma-separated --bind value and
+// normalizes the addresses so they compare equal to interface addresses.
+func parseSetupBindAddresses(value string) ([]string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	var addrs []string
+	seen := make(map[netip.Addr]bool)
+	for _, raw := range strings.Split(value, ",") {
+		raw = strings.TrimSpace(raw)
+		addr, err := netip.ParseAddr(raw)
+		if err != nil || addr.Zone() != "" || addr.IsUnspecified() {
+			return nil, fmt.Errorf("invalid --bind address %q: expected a specific IP address", raw)
+		}
+		addr = addr.Unmap()
+		if seen[addr] {
+			return nil, fmt.Errorf("invalid --bind: %s is listed more than once", addr)
+		}
+		seen[addr] = true
+		addrs = append(addrs, addr.String())
+	}
+	return addrs, nil
+}
+
+// validateSetupBindAddresses reports --bind addresses that are not assigned
+// to this machine, which FlowGuard would otherwise only fail to listen on.
+func validateSetupBindAddresses(bindAddrs []string) error {
+	local, err := setupInterfaceIPAddresses()
+	if err != nil {
+		return fmt.Errorf("cannot check --bind: %w", err)
+	}
+	assigned := make(map[netip.Addr]bool)
+	for _, raw := range local {
+		if addr, err := netip.ParseAddr(raw); err == nil {
+			assigned[addr.Unmap()] = true
+		}
+	}
+	for _, raw := range bindAddrs {
+		if !assigned[netip.MustParseAddr(raw)] {
+			return fmt.Errorf("--bind %s: address is not assigned to this machine (local addresses: %s)", raw, setupListOrNone(local))
+		}
+	}
+	return nil
+}
+
+func setSetupBindAddresses(cfg *config.Config, bindAddrs []string) {
+	if cfg.Server == nil {
+		cfg.Server = &config.ServerConfig{}
+	}
+	cfg.Server.BindAddresses = append([]string(nil), bindAddrs...)
 }
 
 func setSetupAddressPairs(cfg *config.Config, pairs []config.AddressPair) {
@@ -633,6 +697,9 @@ func validateSetupPatchResponse(cfg *config.Config, payload api.ConfigPatch) err
 	}
 	if payload.Server == nil {
 		return nil
+	}
+	if len(payload.Server.BindAddresses) > 0 && !slices.Equal(cfg.BindAddresses(), payload.Server.BindAddresses) {
+		return fmt.Errorf("updated configuration did not include bind addresses %s", strings.Join(payload.Server.BindAddresses, ", "))
 	}
 	if payload.Server.Upstream != nil && cfg.UpstreamClientIPMode() != payload.Server.Upstream.ClientIPMode {
 		return fmt.Errorf("updated configuration did not include upstream client IP mode %s", payload.Server.Upstream.ClientIPMode)

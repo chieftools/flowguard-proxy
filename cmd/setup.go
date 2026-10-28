@@ -25,6 +25,8 @@ var (
 	setupDiscover         bool
 	setupAddressPairFlags []string
 	setupAddressPairs     []config.AddressPair
+	setupBindFlag         string
+	setupBindAddrs        []string
 
 	setupInput  io.Reader = os.Stdin
 	setupOutput io.Writer = os.Stdout
@@ -32,8 +34,9 @@ var (
 	setupIsInteractive = func() bool {
 		return isTerminal(os.Stdin)
 	}
-	setupInspectNetwork  = proxy.InspectNetwork
-	setupInspectFail2Ban = fail2ban.Inspect
+	setupInspectNetwork       = proxy.InspectNetwork
+	setupInterfaceIPAddresses = proxy.DetectInterfaceIPAddresses
+	setupInspectFail2Ban      = fail2ban.Inspect
 
 	setupPsaConfPath       = "/etc/psa/psa.conf"
 	setupACMEPaths         = []string{"/etc/traefik/acme.json", "/var/lib/traefik/acme.json"}
@@ -64,6 +67,11 @@ The host key is provided by the FlowGuard control panel and looks like: fgsvr_..
 If omitted, FlowGuard reuses the host key from the existing configuration and
 rediscovers the local server configuration.
 
+Use --bind with a comma-separated list of addresses to listen on when the
+server has no public IP address, for example behind NAT or a load balancer.
+FlowGuard stores them in the configuration and uses them instead of the
+auto-detected public addresses.
+
 Use --address-pair IPV4=IPV6 for each IPv4/IPv6 bind address pair that
 transparent mode cannot pair automatically, and --address-pair IPV4= for each
 IPv4 bind address that has no IPv6 counterpart.`,
@@ -81,6 +89,13 @@ IPv4 bind address that has no IPv6 counterpart.`,
 		}
 		setupAddressPairs = pairs
 
+		bindAddrs, err := parseSetupBindAddresses(setupBindFlag)
+		if err != nil {
+			log.Printf("[ERROR] Failed to setup host: %v", err)
+			os.Exit(1)
+		}
+		setupBindAddrs = bindAddrs
+
 		hostKey, discover, err := resolveSetupInvocation(args)
 		if err != nil {
 			log.Printf("[ERROR] Failed to setup host: %v", err)
@@ -96,6 +111,7 @@ IPv4 bind address that has no IPv6 counterpart.`,
 
 func init() {
 	setupCmd.Flags().BoolVar(&setupDiscover, "discover", false, "Discover and configure certificate or nginx paths even if already configured")
+	setupCmd.Flags().StringVar(&setupBindFlag, "bind", "", "Comma-separated IP addresses to listen on instead of the auto-detected public IPs")
 	setupCmd.Flags().StringArrayVar(&setupAddressPairFlags, "address-pair", nil, "IPv4/IPv6 bind address pair for transparent mode, as IPV4=IPV6, or IPV4= for an IPv4-only address (repeatable)")
 	rootCmd.AddCommand(setupCmd)
 }
@@ -225,6 +241,9 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, r
 	if !setupIsInteractive() {
 		if len(setupAddressPairs) > 0 {
 			return nil, fmt.Errorf("--address-pair requires an interactive terminal")
+		}
+		if len(setupBindAddrs) > 0 {
+			return nil, fmt.Errorf("--bind requires an interactive terminal")
 		}
 		if certPath == "" && acmePath == "" && nginxConfigPath == "" {
 			warnMissingSetupPaths()

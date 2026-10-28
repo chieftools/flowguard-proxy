@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -444,5 +445,84 @@ func readySetupTransparentInspection() proxy.NetworkInspection {
 		Pairing: proxy.AddressPairResolution{Pairs: []proxy.ResolvedAddressPair{{
 			IPv4: "192.0.2.10", IPv6: "2001:db8::10", Provenance: "single-pair",
 		}}},
+	}
+}
+
+func TestParseSetupBindAddresses(t *testing.T) {
+	addrs, err := parseSetupBindAddresses(" 10.0.0.5, ::ffff:10.0.0.6 ,fd00::5")
+	if err != nil {
+		t.Fatalf("parseSetupBindAddresses: %v", err)
+	}
+	if want := []string{"10.0.0.5", "10.0.0.6", "fd00::5"}; strings.Join(addrs, ",") != strings.Join(want, ",") {
+		t.Fatalf("addrs = %v, want %v", addrs, want)
+	}
+
+	for value, wantErr := range map[string]string{
+		"10.0.0":            `invalid --bind address "10.0.0"`,
+		"10.0.0.5,":         `invalid --bind address ""`,
+		"0.0.0.0":           `invalid --bind address "0.0.0.0"`,
+		"10.0.0.5,10.0.0.5": "10.0.0.5 is listed more than once",
+		"fe80::1%eth0":      `invalid --bind address "fe80::1%eth0"`,
+	} {
+		if _, err := parseSetupBindAddresses(value); err == nil || !strings.Contains(err.Error(), wantErr) {
+			t.Fatalf("parseSetupBindAddresses(%q) error = %v, want %q", value, err, wantErr)
+		}
+	}
+}
+
+func TestPromptSetupServerConfigurationUsesCommandLineBindAddresses(t *testing.T) {
+	resetSetupTestGlobals(t)
+	setupBindAddrs = []string{"10.0.0.5"}
+	setupInterfaceIPAddresses = func() ([]string, error) { return []string{"10.0.0.5", "10.0.0.6"}, nil }
+	var inspectedBindAddrs []string
+	setupInspectNetwork = func(cfg *config.Config, _ []string) (proxy.NetworkInspection, error) {
+		inspectedBindAddrs = cfg.BindAddresses()
+		inspection := readySetupTransparentInspection()
+		inspection.BindAddresses = inspectedBindAddrs
+		return inspection, nil
+	}
+	reader := bufio.NewReader(strings.NewReader(strings.Repeat("\n", 5)))
+	cfg := &config.Config{}
+
+	patch, err := promptSetupServerConfiguration(reader, cfg, false)
+	if err != nil {
+		t.Fatalf("promptSetupServerConfiguration: %v", err)
+	}
+	if strings.Join(inspectedBindAddrs, ",") != "10.0.0.5" {
+		t.Fatalf("expected inspection of the --bind addresses, got %v", inspectedBindAddrs)
+	}
+	if strings.Join(patch.BindAddresses, ",") != "10.0.0.5" {
+		t.Fatalf("expected --bind addresses in the patch, got %v", patch.BindAddresses)
+	}
+	if patch.Upstream.ClientIPMode != config.UpstreamClientIPModeTransparent {
+		t.Fatalf("expected transparent mode, got %s", patch.Upstream.ClientIPMode)
+	}
+}
+
+func TestPromptSetupServerConfigurationRejectsBindAddressesNotOnThisMachine(t *testing.T) {
+	resetSetupTestGlobals(t)
+	setupBindAddrs = []string{"10.0.0.9"}
+	setupInterfaceIPAddresses = func() ([]string, error) { return []string{"10.0.0.5"}, nil }
+
+	_, err := promptSetupServerConfiguration(bufio.NewReader(strings.NewReader("")), &config.Config{}, false)
+	if err == nil || !strings.Contains(err.Error(), "--bind 10.0.0.9: address is not assigned to this machine (local addresses: 10.0.0.5)") {
+		t.Fatalf("expected unassigned address error, got %v", err)
+	}
+}
+
+func TestPromptSetupServerConfigurationWarnsWithoutPublicAddresses(t *testing.T) {
+	resetSetupTestGlobals(t)
+	setupInspectNetwork = func(*config.Config, []string) (proxy.NetworkInspection, error) {
+		return proxy.NetworkInspection{}, fmt.Errorf("%w; run flowguard setup --bind 10.0.0.5", proxy.ErrNoPublicIPAddresses)
+	}
+	var output bytes.Buffer
+	setupOutput = &output
+
+	if _, err := promptSetupServerConfiguration(bufio.NewReader(strings.NewReader(strings.Repeat("\n", 5))), &config.Config{}, false); err != nil {
+		t.Fatalf("promptSetupServerConfiguration: %v", err)
+	}
+
+	if !strings.Contains(output.String(), "Warning: no public IP addresses found on this machine; run flowguard setup --bind 10.0.0.5") {
+		t.Fatalf("expected --bind hint, got:\n%s", output.String())
 	}
 }

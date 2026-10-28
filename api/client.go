@@ -96,6 +96,7 @@ type HostConfigPatch struct {
 }
 
 type ServerConfigPatch struct {
+	BindAddresses  []string              `json:"bind_addresses,omitempty"`
 	Protocols      *ProtocolsConfigPatch `json:"protocols,omitempty"`
 	AdvertiseHTTP3 *bool                 `json:"advertise_http3,omitempty"`
 	Upstream       *UpstreamConfigPatch  `json:"upstream,omitempty"`

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -94,9 +95,46 @@ func getInterfaceForIP(targetIP string) (string, error) {
 	return "", fmt.Errorf("no interface found for IP %s", targetIP)
 }
 
+// ErrNoPublicIPAddresses reports that bind address auto-detection found no
+// public IP address, which is common on servers behind NAT or a load balancer.
+var ErrNoPublicIPAddresses = errors.New("no public IP addresses found on this machine")
+
 // getPublicIPAddresses returns all public IP addresses configured on the machine
 func getPublicIPAddresses(verbose bool) ([]string, error) {
-	var publicIPs []string
+	publicIPs, err := interfaceIPAddresses(isPublicIP, func(ip, iface string) {
+		if verbose {
+			log.Printf("[network] Found public IP: %s on interface %s", ip, iface)
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(publicIPs) == 0 {
+		return nil, noPublicIPAddressesError()
+	}
+
+	return publicIPs, nil
+}
+
+// noPublicIPAddressesError wraps ErrNoPublicIPAddresses with a --bind hint
+// listing the machine's other addresses.
+func noPublicIPAddressesError() error {
+	suggested, err := interfaceIPAddresses(func(ip net.IP) bool {
+		return !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast()
+	}, nil)
+	if err != nil || len(suggested) == 0 {
+		return fmt.Errorf("%w; run flowguard setup --bind ADDRESSES with the addresses FlowGuard should listen on", ErrNoPublicIPAddresses)
+	}
+
+	return fmt.Errorf("%w; run flowguard setup --bind %s with the addresses FlowGuard should listen on (local addresses: %s)",
+		ErrNoPublicIPAddresses, suggested[0], strings.Join(suggested, ", "))
+}
+
+// interfaceIPAddresses returns the unique addresses of up, non-loopback
+// interfaces that include accepts, in interface order.
+func interfaceIPAddresses(include func(net.IP) bool, found func(ip, iface string)) ([]string, error) {
+	var ips []string
 	seenIPs := make(map[string]bool)
 
 	interfaces, err := net.Interfaces()
@@ -132,26 +170,28 @@ func getPublicIPAddresses(verbose bool) ([]string, error) {
 				continue
 			}
 
-			// Check if it's a public IP
-			if isPublicIP(ip) {
-				ipStr := ip.String()
-				// Avoid duplicates
-				if !seenIPs[ipStr] {
-					seenIPs[ipStr] = true
-					publicIPs = append(publicIPs, ipStr)
-					if verbose {
-						log.Printf("[network] Found public IP: %s on interface %s", ipStr, iface.Name)
-					}
+			if ip == nil || !include(ip) {
+				continue
+			}
+			ipStr := ip.String()
+			// Avoid duplicates
+			if !seenIPs[ipStr] {
+				seenIPs[ipStr] = true
+				ips = append(ips, ipStr)
+				if found != nil {
+					found(ipStr, iface.Name)
 				}
 			}
 		}
 	}
 
-	if len(publicIPs) == 0 {
-		return nil, fmt.Errorf("no public IP addresses found on this machine")
-	}
+	return ips, nil
+}
 
-	return publicIPs, nil
+// DetectInterfaceIPAddresses returns every address on the machine's up,
+// non-loopback interfaces, public or not.
+func DetectInterfaceIPAddresses() ([]string, error) {
+	return interfaceIPAddresses(func(net.IP) bool { return true }, nil)
 }
 
 // DetectPublicIPAddresses returns the public addresses FlowGuard would bind by

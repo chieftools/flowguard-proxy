@@ -367,3 +367,34 @@ func TestFormatNetworkInspectionHighlightsHeaderFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestInspectNetworkPrefersExplicitThenConfiguredBindAddresses(t *testing.T) {
+	cfg := &config.Config{Server: &config.ServerConfig{BindAddresses: []string{"10.0.0.5"}}}
+
+	configured, err := InspectNetwork(cfg, nil)
+	if err != nil {
+		t.Fatalf("InspectNetwork: %v", err)
+	}
+	explicit, err := InspectNetwork(cfg, []string{"10.0.0.6"})
+	if err != nil {
+		t.Fatalf("InspectNetwork: %v", err)
+	}
+
+	if len(configured.BindAddresses) != 1 || configured.BindAddresses[0] != "10.0.0.5" {
+		t.Fatalf("expected configured bind addresses, got %v", configured.BindAddresses)
+	}
+	if len(explicit.BindAddresses) != 1 || explicit.BindAddresses[0] != "10.0.0.6" {
+		t.Fatalf("expected explicit bind addresses to take precedence, got %v", explicit.BindAddresses)
+	}
+}
+
+func TestNoPublicIPAddressesErrorSuggestsSetupBind(t *testing.T) {
+	err := noPublicIPAddressesError()
+
+	if !errors.Is(err, ErrNoPublicIPAddresses) {
+		t.Fatalf("expected ErrNoPublicIPAddresses, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "run flowguard setup --bind ") {
+		t.Fatalf("expected --bind hint, got %v", err)
+	}
+}

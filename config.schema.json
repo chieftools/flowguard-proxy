@@ -125,6 +125,22 @@
             "type": "object",
             "description": "Proxy server runtime configuration",
             "properties": {
+                "bind_addresses": {
+                    "type": "array",
+                    "description": "IP addresses to listen on instead of the auto-detected public addresses. The run command's --bind flag takes precedence. Restart FlowGuard after changing them",
+                    "items": {
+                        "type": "string",
+                        "oneOf": [
+                            {
+                                "format": "ipv4"
+                            },
+                            {
+                                "format": "ipv6"
+                            }
+                        ]
+                    },
+                    "uniqueItems": true
+                },
                 "protocols": {
                     "$ref": "#/definitions/protocols_config"
                 },

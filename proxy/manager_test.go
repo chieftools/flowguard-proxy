@@ -389,3 +389,31 @@ func TestFormatBindAddresses(t *testing.T) {
 		})
 	}
 }
+
+func TestNewManagerUsesConfiguredBindAddressesWithoutBindFlag(t *testing.T) {
+	nginxConfigPath := filepath.Join(t.TempDir(), "nginx.conf")
+	if err := os.WriteFile(nginxConfigPath, []byte("events {}\nhttp {}\n"), 0o644); err != nil {
+		t.Fatalf("write nginx config: %v", err)
+	}
+	configMgr := newProxyTestConfigManager(t, config.Config{
+		Host:   &config.HostConfig{NginxConfigPath: nginxConfigPath},
+		Server: &config.ServerConfig{BindAddresses: []string{"127.0.0.1"}},
+	})
+	proxyConfig := newProxyTestConfig()
+	proxyConfig.BindAddrs = nil
+
+	manager, err := NewManager(configMgr, proxyConfig)
+	if err != nil {
+		configMgr.Stop()
+		t.Fatalf("new manager: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := manager.Shutdown(); err != nil {
+			t.Fatalf("shutdown manager: %v", err)
+		}
+	})
+
+	if got := manager.config.BindAddrs; len(got) != 1 || got[0] != "127.0.0.1" {
+		t.Fatalf("expected configured bind addresses, got %v", got)
+	}
+}

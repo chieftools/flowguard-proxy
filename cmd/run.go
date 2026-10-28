@@ -43,7 +43,7 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 
 	// Run-specific flags
-	runCmd.Flags().StringVar(&bindAddrs, "bind", "", "Comma-separated list of IP addresses to bind to (default: auto-detect public IPs)")
+	runCmd.Flags().StringVar(&bindAddrs, "bind", "", "Comma-separated list of IP addresses to bind to (default: server.bind_addresses, else auto-detect public IPs)")
 	runCmd.Flags().StringVar(&httpPort, "http-port", "11080", "Port for HTTP proxy server")
 	runCmd.Flags().StringVar(&httpsPort, "https-port", "11443", "Port for HTTPS proxy server")
 	runCmd.Flags().BoolVar(&noRedirect, "no-redirect", false, "Skip iptables port redirection setup")

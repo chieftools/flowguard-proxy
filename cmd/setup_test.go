@@ -31,6 +31,8 @@ func resetSetupTestGlobals(t *testing.T) {
 	oldConfigFile := configFile
 	oldDiscover := setupDiscover
 	oldAddressPairs := setupAddressPairs
+	oldBindAddrs := setupBindAddrs
+	oldInterfaceIPAddresses := setupInterfaceIPAddresses
 	oldVerbose := verbose
 	oldNoTUI := noTUI
 	oldInput := setupInput
@@ -51,6 +53,8 @@ func resetSetupTestGlobals(t *testing.T) {
 	configFile = filepath.Join(t.TempDir(), "config.json")
 	setupDiscover = false
 	setupAddressPairs = nil
+	setupBindAddrs = nil
+	setupInterfaceIPAddresses = func() ([]string, error) { return nil, nil }
 	verbose = false
 	noTUI = false
 	setupInput = strings.NewReader("")
@@ -82,6 +86,8 @@ func resetSetupTestGlobals(t *testing.T) {
 		configFile = oldConfigFile
 		setupDiscover = oldDiscover
 		setupAddressPairs = oldAddressPairs
+		setupBindAddrs = oldBindAddrs
+		setupInterfaceIPAddresses = oldInterfaceIPAddresses
 		verbose = oldVerbose
 		noTUI = oldNoTUI
 		setupInput = oldInput
@@ -612,6 +618,28 @@ func TestSetupHostNonInteractiveRejectsAddressPairs(t *testing.T) {
 	}
 	if _, statErr := os.Stat(configFile); !os.IsNotExist(statErr) {
 		t.Fatalf("expected no configuration to be saved, got %v", statErr)
+	}
+}
+
+func TestSetupHostNonInteractiveRejectsBindAddresses(t *testing.T) {
+	resetSetupTestGlobals(t)
+	setupIsInteractive = func() bool { return false }
+	setupBindAddrs = []string{"10.0.0.5"}
+
+	client := &fakeSetupClient{initialConfig: `{"host":{}}`}
+	err := setupHostWithClient(client)
+	if err == nil || !strings.Contains(err.Error(), "--bind requires an interactive terminal") {
+		t.Fatalf("expected interactive terminal error, got %v", err)
+	}
+}
+
+func TestValidateSetupPatchResponseChecksBindAddresses(t *testing.T) {
+	payload := api.ConfigPatch{Server: &api.ServerConfigPatch{BindAddresses: []string{"10.0.0.5"}}}
+	if err := validateSetupPatchResponse(&config.Config{}, payload); err == nil {
+		t.Fatal("expected missing bind addresses to fail validation")
+	}
+	if err := validateSetupPatchResponse(&config.Config{Server: &config.ServerConfig{BindAddresses: []string{"10.0.0.5"}}}, payload); err != nil {
+		t.Fatalf("validate bind address response: %v", err)
 	}
 }
 

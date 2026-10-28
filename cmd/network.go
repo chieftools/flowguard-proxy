@@ -41,7 +41,7 @@ var networkInspectCmd = &cobra.Command{
 }
 
 func init() {
-	networkInspectCmd.Flags().StringVar(&networkBindAddrs, "bind", "", "Comma-separated bind addresses (default: auto-detect public IPs)")
+	networkInspectCmd.Flags().StringVar(&networkBindAddrs, "bind", "", "Comma-separated bind addresses (default: server.bind_addresses, else auto-detect public IPs)")
 	networkCmd.AddCommand(networkInspectCmd)
 	rootCmd.AddCommand(networkCmd)
 }

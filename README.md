@@ -172,6 +172,22 @@ Run `sudo flowguard setup -v` to show each server-source, bind-address, and
 address-pair detection decision, including why NGINX listeners or pairing
 heuristics were rejected.
 
+FlowGuard listens on the machine's public IP addresses by default. On a server
+without a public IP address, such as one behind NAT or a load balancer, pass the
+addresses FlowGuard should listen on with `--bind`. Setup checks that each
+address is assigned to this machine and stores them as `server.bind_addresses`.
+`flowguard run` and `flowguard network inspect` then use them instead of the
+auto-detected addresses, unless their own `--bind` flag is set. Restart
+FlowGuard after changing them:
+
+```bash
+sudo flowguard setup --bind 10.0.0.5
+```
+
+When FlowGuard finds no public IP address, setup, `flowguard run`, and
+`flowguard network inspect` suggest a `--bind` value from the machine's other
+addresses.
+
 When transparent mode cannot pair dual-stack bind addresses automatically, pass
 each pair with `--address-pair IPV4=IPV6`. Setup checks that both addresses are
 bind addresses, replaces configured pairs that share an address, makes

@@ -82,7 +82,11 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 		},
 	})
 
-	// Determine bind addresses based on configuration
+	// Determine bind addresses: --bind, then server.bind_addresses, then the
+	// machine's public addresses
+	if len(cfg.BindAddrs) == 0 {
+		cfg.BindAddrs = configMgr.GetConfig().BindAddresses()
+	}
 	autoDetectedBindAddrs := len(cfg.BindAddrs) == 0
 	if autoDetectedBindAddrs {
 		// Default: Get all public IP addresses on the machine
