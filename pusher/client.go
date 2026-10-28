@@ -62,6 +62,10 @@ func (m Message) UnmarshalData(v interface{}) error {
 // MessageHandler defines the callback function for handling Realtime events
 type MessageHandler func(message Message)
 
+// ChannelAuthorizer returns the signature for subscribing socketID to a
+// private channel, asking authURL for it.
+type ChannelAuthorizer func(authURL, socketID, channel string) (string, error)
+
 // ConnectionEstablishedMessageData represents the connection established event data
 type ConnectionEstablishedMessageData struct {
 	SocketID        string `json:"socket_id"`
@@ -89,6 +93,7 @@ type Client struct {
 	stopChan          chan struct{}
 	eventHandlers     map[string]MessageHandler
 	subscribedHandler func()
+	authorizeChannel  ChannelAuthorizer
 	mu                sync.RWMutex
 	writeMu           sync.Mutex
 	pingTicker        *time.Ticker
@@ -318,6 +323,14 @@ func (c *Client) OnSubscribed(handler func()) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.subscribedHandler = handler
+}
+
+// SetChannelAuthorizer replaces the client's own channel auth request, for
+// example with one that only sends the host key to the control panel.
+func (c *Client) SetChannelAuthorizer(authorize ChannelAuthorizer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.authorizeChannel = authorize
 }
 
 // Disconnect closes the Realtime connection
@@ -651,6 +664,7 @@ func (c *Client) subscribeToChannel(conn *websocket.Conn, socketID string) error
 	hostKey := c.hostKey
 	userAgent := c.userAgent
 	verbose := c.verbose
+	authorizeChannel := c.authorizeChannel
 	c.mu.RUnlock()
 
 	if config.Channel == "" {
@@ -666,7 +680,13 @@ func (c *Client) subscribeToChannel(conn *websocket.Conn, socketID string) error
 	// Check if it's a private channel
 	if strings.HasPrefix(config.Channel, "private-") {
 		// Generate auth signature for private channel
-		auth, err := c.generateChannelAuth(socketID, config.Channel, config.AuthURL, hostKey, userAgent)
+		var auth string
+		var err error
+		if authorizeChannel != nil {
+			auth, err = authorizeChannel(config.AuthURL, socketID, config.Channel)
+		} else {
+			auth, err = c.generateChannelAuth(socketID, config.Channel, config.AuthURL, hostKey, userAgent)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to generate auth: %w", err)
 		}

@@ -89,6 +89,9 @@ func NewManager(configPath string, userAgent string, version string, cacheDir st
 		callbacks:               make([]func(*Config), 0),
 		ipListPendingUpdates:    make(map[string]struct{}),
 	}
+	if c != nil {
+		c.SetAPIGate(m.apiClient)
+	}
 
 	// Load initial configuration
 	if err := m.Load(); err != nil {

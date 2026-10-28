@@ -42,6 +42,18 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
+// Paused returns a *BackoffError while requests to the control panel are
+// paused, so requests that do not go through the client can pause too.
+func (c *Client) Paused() error {
+	return c.backoffError()
+}
+
+// Observe starts or ends a pause based on the control panel's answer to a
+// request that did not go through the client, such as a cache download.
+func (c *Client) Observe(resp *http.Response) {
+	c.observe(resp)
+}
+
 func (c *Client) backoffError() error {
 	c.backoffMu.Lock()
 	defer c.backoffMu.Unlock()

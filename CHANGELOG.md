@@ -15,11 +15,12 @@ release.
 
 ### Changed
 
-- FlowGuard now pauses its requests to the control panel when the panel asks it to. A `Retry-After` on a 429 or 503 answer pauses them for that long, and a rejected host key (401) or an unsupported FlowGuard version (426) pauses them for an hour, with a log line that says why. Before, a proxy with a revoked host key kept fetching its configuration and sending heartbeats on the regular schedule. Proxying continues while requests are paused, and a new host key from `flowguard setup` is tried right away.
+- FlowGuard now pauses its requests to the control panel when the panel asks it to. A `Retry-After` on a 429 or 503 answer pauses them for that long, and a rejected host key (401) or an unsupported FlowGuard version (426) pauses them for an hour, with a log line that says why. Before, a proxy with a revoked host key kept fetching its configuration and sending heartbeats on the regular schedule. The pause also covers IP list and IP database downloads from the control panel, which keep using their cached copy, and realtime channel authorization. Proxying continues while requests are paused, and a new host key from `flowguard setup` is tried right away.
 - Limited messages from the realtime server to 1 MiB. A larger message closes the connection, which then reconnects, instead of being read into memory whole.
 
 ### Security
 
+- FlowGuard now only sends its host key to the control panel when it authorizes its realtime channel. A realtime `auth_url` on another origin is replaced by the control panel's own endpoint.
 - Made `/etc/flowguard/config.json`, which holds the host key, readable by root only. FlowGuard and the DEB and RPM packages created it readable by every user on the server, so anyone with a shell could use the host key to act as the server towards the control panel. FlowGuard now writes the file with mode 0600, and installing or upgrading the package sets 0600 on an existing file. Running `flowguard` as another user now explains that it needs root instead of only reporting "permission denied". The Caddy plugin, when Caddy runs as its own user, now suggests setting `key`, which keeps the configuration in Caddy's data directory.
 
 ### Fixed

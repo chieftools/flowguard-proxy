@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -462,4 +463,90 @@ type cacheIdentityTransport func(*http.Request) (*http.Response, error)
 
 func (transport cacheIdentityTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	return transport(request)
+}
+
+type testAPIGate struct {
+	paused   error
+	observed []int
+}
+
+func (gate *testAPIGate) Paused() error {
+	return gate.paused
+}
+
+func (gate *testAPIGate) Observe(response *http.Response) {
+	gate.observed = append(gate.observed, response.StatusCode)
+}
+
+func TestAPIGateOnlyAppliesToPanel(t *testing.T) {
+	for _, fileMode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("file=%t", fileMode), func(t *testing.T) {
+			var requested []string
+			client := &http.Client{Transport: cacheIdentityTransport(func(request *http.Request) (*http.Response, error) {
+				requested = append(requested, request.URL.Host)
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("synthetic-data"))}, nil
+			})}
+			cache, err := NewCache(t.TempDir(), "FlowGuard/99.0.0", false, WithHTTPClient(client))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cache.SetAPIIdentity("https://panel.example.test", "synthetic-key", "FlowGuard/99.0.0 server/synthetic-a")
+			gate := &testAPIGate{}
+			cache.SetAPIGate(gate)
+
+			fetch := func(endpoint string) error {
+				if fileMode {
+					_, _, err := cache.FetchFileWithCache(endpoint, 0)
+					return err
+				}
+				_, _, err := cache.FetchWithCacheForced(endpoint)
+				return err
+			}
+
+			if err := fetch("https://panel.example.test/api/v1/list"); err != nil {
+				t.Fatal(err)
+			}
+			if err := fetch("https://lists.example.test/list"); err != nil {
+				t.Fatal(err)
+			}
+			if len(gate.observed) != 1 || gate.observed[0] != 200 {
+				t.Fatalf("observed = %v, want only the panel response", gate.observed)
+			}
+
+			gate.paused = errors.New("paused")
+			if err := fetch("https://panel.example.test/api/v1/other"); err == nil || !strings.Contains(err.Error(), "paused") {
+				t.Fatalf("expected the paused gate to stop the panel download, got %v", err)
+			}
+			if err := fetch("https://lists.example.test/other"); err != nil {
+				t.Fatalf("expected other downloads to continue while paused, got %v", err)
+			}
+			if want := []string{"panel.example.test", "lists.example.test", "lists.example.test"}; strings.Join(requested, ",") != strings.Join(want, ",") {
+				t.Fatalf("requested = %v, want %v", requested, want)
+			}
+		})
+	}
+}
+
+func TestAPIGateKeepsStaleDataWhilePaused(t *testing.T) {
+	client := &http.Client{Transport: cacheIdentityTransport(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("synthetic-data"))}, nil
+	})}
+	cache, err := NewCache(t.TempDir(), "FlowGuard/99.0.0", false, WithHTTPClient(client))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache.SetAPIIdentity("https://panel.example.test", "synthetic-key", "FlowGuard/99.0.0 server/synthetic-a")
+	gate := &testAPIGate{}
+	cache.SetAPIGate(gate)
+
+	endpoint := "https://panel.example.test/api/v1/list"
+	if _, _, err := cache.FetchWithCacheForced(endpoint); err != nil {
+		t.Fatal(err)
+	}
+
+	gate.paused = errors.New("paused")
+	data, updated, err := cache.FetchWithCacheForced(endpoint)
+	if err != nil || updated || string(data) != "synthetic-data" {
+		t.Fatalf("got (%q, %t, %v), want the cached data", data, updated, err)
+	}
 }

@@ -25,6 +25,16 @@ type Cache struct {
 	apiKey       string
 	verbose      bool
 	httpClient   *http.Client
+	apiGate      APIGate
+}
+
+// APIGate pauses requests to the control panel while it asked FlowGuard to
+// wait or rejected its host key. api.Client implements it.
+type APIGate interface {
+	// Paused returns an error while requests to the control panel are paused.
+	Paused() error
+	// Observe starts or ends a pause based on a control panel response.
+	Observe(*http.Response)
 }
 
 // CacheOption configures a Cache.
@@ -81,6 +91,39 @@ func (c *Cache) SetAPIIdentity(apiBase, apiKey, userAgent string) {
 	c.apiBase = apiBase
 	c.apiKey = apiKey
 	c.apiUserAgent = userAgent
+}
+
+// SetAPIGate makes downloads from the control panel pause together with the
+// other requests to it.
+func (c *Cache) SetAPIGate(gate APIGate) {
+	c.identityMu.Lock()
+	defer c.identityMu.Unlock()
+
+	c.apiGate = gate
+}
+
+// do sends req, through the API gate when it goes to the control panel.
+func (c *Cache) do(req *http.Request) (*http.Response, error) {
+	c.identityMu.RLock()
+	gate := c.apiGate
+	if c.apiBase == "" || !strings.HasPrefix(req.URL.String(), strings.TrimRight(c.apiBase, "/")+"/") {
+		gate = nil
+	}
+	c.identityMu.RUnlock()
+
+	if gate == nil {
+		return c.httpClient.Do(req)
+	}
+	if err := gate.Paused(); err != nil {
+		return nil, err
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	gate.Observe(resp)
+	return resp, nil
 }
 
 // IsAPIURL reports whether rawURL is below the configured FlowGuard API path.
@@ -278,7 +321,7 @@ func (c *Cache) FetchFileWithCache(url string, maxAge time.Duration, bearerToken
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		// If fetch fails but we have stale cache, use it
 		if _, err := os.Stat(cacheFile); err == nil {
@@ -445,7 +488,7 @@ func (c *Cache) fetchFromURL(url string, etag string, bearerToken string) ([]byt
 		req.Header.Set("Authorization", "Bearer "+bearerToken)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, "", err
 	}

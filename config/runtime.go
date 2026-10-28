@@ -385,6 +385,8 @@ func (m *Manager) updatePusherClient(config *Config) {
 		m.realtimeClient = pusher.NewClient(config.Realtime, config.UserAgent(m.userAgent), config.Host.Key, m.verbose)
 
 		if m.realtimeClient != nil {
+			m.realtimeClient.SetChannelAuthorizer(m.apiClient.AuthorizeChannel)
+
 			// Set up event handler for config updates
 			m.realtimeClient.OnEvent("config.updated", func(message pusher.Message) {
 				log.Printf("[config] Received config update event from realtime event")

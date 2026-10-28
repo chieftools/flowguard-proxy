@@ -600,3 +600,34 @@ func TestOversizedMessageReconnects(t *testing.T) {
 		t.Fatalf("expected a second connection after the oversized message, got %d", got)
 	}
 }
+
+func TestChannelAuthorizerReplacesAuthRequest(t *testing.T) {
+	authServer, authRequests := newAuthServer(t, 0)
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		subscribeReply: func(_ int32, channel string) *Message {
+			return subscriptionSucceeded(channel)
+		},
+	})
+	cfg := server.config(t, "private-test")
+	cfg.AuthURL = authServer.URL
+	client := newFastClient(cfg)
+	t.Cleanup(client.Disconnect)
+
+	type authorization struct{ authURL, socketID, channel string }
+	authorized := make(chan authorization, 1)
+	client.SetChannelAuthorizer(func(authURL, socketID, channel string) (string, error) {
+		authorized <- authorization{authURL, socketID, channel}
+		return "key:signature", nil
+	})
+
+	client.Start()
+	waitForSubscribed(t, client)
+
+	got := <-authorized
+	if got.authURL != authServer.URL || got.socketID == "" || got.channel != "private-test" {
+		t.Fatalf("authorizer called with %+v", got)
+	}
+	if requests := authRequests.Load(); requests != 0 {
+		t.Fatalf("expected no requests to the auth URL, got %d", requests)
+	}
+}
