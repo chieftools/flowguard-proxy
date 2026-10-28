@@ -9,19 +9,23 @@ on:
       version:
         description: 'Version to build (e.g., 1.0.0)'
         required: true
+      publish:
+        description: 'Publish the packages to the package server'
+        type: boolean
+        default: false
       rebuild_rpm_repo:
         description: 'Download all RPM files and rebuild repo metadata from scratch'
         type: boolean
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build-and-publish:
-    # The rpm of Ubuntu 26.04 no longer signs into the RSAHEADER tag that
-    # the rpm of EL7 and EL8 verifies.
-    runs-on: ubuntu-24.04
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
 
     steps:
       - name: Checkout code
@@ -71,26 +75,16 @@ jobs:
             exit 1
           fi
 
-      - name: Prepare release notes
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          RELEASE_NOTES_PATH: ${{ runner.temp }}/release-notes.md
+      - name: Run tests
         run: |
-          ./bin/changelog-section.sh "${RELEASE_VERSION}" > "${RELEASE_NOTES_PATH}"
-          printf '\n\n---\n\n%s\n' 'More information: [installation instructions](https://github.com/chieftools/flowguard-proxy#quick-install) &middot; [upgrade instructions](https://github.com/chieftools/flowguard-proxy#upgrading) &middot; [configuration instructions](https://github.com/chieftools/flowguard-proxy#configure-your-server)' >> "${RELEASE_NOTES_PATH}"
+          # A tag push does not wait for CI, so test the release commit here.
+          go test -count=1 ./...
+          (cd caddy && go test -count=1 ./...)
 
-      - name: Install build dependencies
+      - name: Install package build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y apt-utils createrepo-c rpm gpg rsync
-
-      - name: Import GPG key
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: |
-          printf '%s\n' "${GPG_PRIVATE_KEY}" | gpg --batch --import
-          printf '%s' "${GPG_PASSPHRASE}" > /tmp/gpg-passphrase
+          sudo apt-get install -y rpm
 
       - name: Build DEB packages
         run: |
@@ -103,6 +97,57 @@ jobs:
           chmod +x ./bin/build-rpm.sh
           ./bin/build-rpm.sh "${RELEASE_VERSION}" 1 x86_64
           ./bin/build-rpm.sh "${RELEASE_VERSION}" 1 aarch64
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: |
+            flowguard_*.deb
+            flowguard-*.rpm
+          retention-days: 30
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    # The rpm of Ubuntu 26.04 no longer signs into the RSAHEADER tag that
+    # the rpm of EL7 and EL8 verifies.
+    runs-on: ubuntu-24.04
+    concurrency: package-publication
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ needs.build.outputs.version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Download packages
+        uses: actions/download-artifact@v8
+        with:
+          name: packages
+
+      - name: Prepare release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_NOTES_PATH: ${{ runner.temp }}/release-notes.md
+        run: |
+          ./bin/changelog-section.sh "${RELEASE_VERSION}" > "${RELEASE_NOTES_PATH}"
+          printf '\n\n---\n\n%s\n' 'More information: [installation instructions](https://github.com/chieftools/flowguard-proxy#quick-install) &middot; [upgrade instructions](https://github.com/chieftools/flowguard-proxy#upgrading) &middot; [configuration instructions](https://github.com/chieftools/flowguard-proxy#configure-your-server)' >> "${RELEASE_NOTES_PATH}"
+
+      - name: Install publishing dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apt-utils createrepo-c rpm gpg rsync
+
+      - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          printf '%s\n' "${GPG_PRIVATE_KEY}" | gpg --batch --import
+          printf '%s' "${GPG_PASSPHRASE}" > /tmp/gpg-passphrase
 
       - name: Setup SSH
         env:
@@ -437,26 +482,18 @@ jobs:
           rm -f ~/.ssh/deploy_key
           rm -rf ~/.gnupg/private-keys-v1.d/*
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: packages
-          path: |
-            flowguard_*.deb
-            flowguard-*.rpm
-          retention-days: 30
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            flowguard_${{ steps.version.outputs.VERSION }}_amd64.deb
-            flowguard_${{ steps.version.outputs.VERSION }}_arm64.deb
-            flowguard-${{ steps.version.outputs.VERSION }}-1.x86_64.rpm
-            flowguard-${{ steps.version.outputs.VERSION }}-1.aarch64.rpm
+            flowguard_${{ env.RELEASE_VERSION }}_amd64.deb
+            flowguard_${{ env.RELEASE_VERSION }}_arm64.deb
+            flowguard-${{ env.RELEASE_VERSION }}-1.x86_64.rpm
+            flowguard-${{ env.RELEASE_VERSION }}-1.aarch64.rpm
           body_path: ${{ runner.temp }}/release-notes.md
           draft: false
           prerelease: false
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
