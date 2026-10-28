@@ -22,6 +22,11 @@ awk -v heading="## [${VERSION}]" '
         capturing = 0
     }
 
+    # The link references in the footer end the oldest section.
+    capturing && /^\[[^]]+\]: / {
+        capturing = 0
+    }
+
     capturing {
         body = body $0 ORS
     }
