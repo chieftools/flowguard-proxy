@@ -9,6 +9,8 @@ release.
 
 ## [Unreleased]
 
+## [0.33.0]
+
 ### Added
 
 - FlowGuard now installs and runs on servers without systemd, such as Ubuntu 14.04, Debian 8 with SysV init, and containers. The DEB and RPM packages include an `/etc/init.d/flowguard` script and pick the init system when they install, upgrade or remove FlowGuard, instead of failing on `systemctl`. The script logs to `/var/log/flowguard/flowguard.log`, through the new `flowguard run --log-file` option, and reads local options from `/etc/default/flowguard` or `/etc/sysconfig/flowguard`. Remote upgrades work without systemd as well, including on apt before 1.1, and write the package manager's output to `upgrade.log` in the cache directory. The install script sets up the repository on apt before 1.1 and falls back to HTTP where apt's TLS is too old for the repository. See [Supported systems](README.md#supported-systems).
@@ -797,7 +799,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.32.0...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.33.0...HEAD
+[0.33.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.0
 [0.32.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.32.0
 [0.31.3]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.31.3
 [0.31.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.31.2
