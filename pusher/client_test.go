@@ -21,9 +21,25 @@ import (
 type realtimeTestServer struct {
 	server          *httptest.Server
 	sendEstablished bool
+	options         realtimeTestServerOptions
+	dials           atomic.Int32
 	accepts         atomic.Int32
+	subscribes      atomic.Int32
 	closeCodes      chan int
 	userAgents      chan string
+}
+
+type realtimeTestServerOptions struct {
+	// rejectDials fails this many websocket handshakes before accepting.
+	rejectDials int32
+	// activityTimeout is sent in connection_established, in seconds.
+	activityTimeout int
+	// subscribeReply returns the reply to a pusher:subscribe on the given
+	// accepted connection, or nil to not reply.
+	subscribeReply func(accept int32, channel string) *Message
+	// dropFirstConnection closes the first accepted connection after
+	// replying to its subscribe.
+	dropFirstConnection bool
 }
 
 type pusherRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -35,14 +51,30 @@ func (fn pusherRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, erro
 func newRealtimeTestServer(t *testing.T, sendEstablished bool) *realtimeTestServer {
 	t.Helper()
 
+	return newRealtimeTestServerWithOptions(t, sendEstablished, realtimeTestServerOptions{})
+}
+
+func newRealtimeTestServerWithOptions(t *testing.T, sendEstablished bool, options realtimeTestServerOptions) *realtimeTestServer {
+	t.Helper()
+
+	if options.activityTimeout == 0 {
+		options.activityTimeout = 60
+	}
+
 	rts := &realtimeTestServer{
 		sendEstablished: sendEstablished,
+		options:         options,
 		closeCodes:      make(chan int, 10),
 		userAgents:      make(chan string, 10),
 	}
 
 	upgrader := websocket.Upgrader{}
 	rts.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rts.dials.Add(1) <= rts.options.rejectDials {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			t.Errorf("failed to upgrade websocket: %v", err)
@@ -50,12 +82,15 @@ func newRealtimeTestServer(t *testing.T, sendEstablished bool) *realtimeTestServ
 		}
 		defer conn.Close()
 
-		rts.userAgents <- r.UserAgent()
+		select {
+		case rts.userAgents <- r.UserAgent():
+		default:
+		}
 
 		acceptNumber := rts.accepts.Add(1)
 
 		if rts.sendEstablished {
-			if err := conn.WriteJSON(connectionEstablishedMessage(fmt.Sprintf("%d.1", acceptNumber))); err != nil {
+			if err := conn.WriteJSON(connectionEstablishedMessageWithTimeout(fmt.Sprintf("%d.1", acceptNumber), rts.options.activityTimeout)); err != nil {
 				t.Errorf("failed to write connection established message: %v", err)
 				return
 			}
@@ -70,6 +105,30 @@ func newRealtimeTestServer(t *testing.T, sendEstablished bool) *realtimeTestServ
 				} else {
 					rts.closeCodes <- -1
 				}
+				return
+			}
+
+			if msg.Event != "pusher:subscribe" {
+				continue
+			}
+			rts.subscribes.Add(1)
+			if rts.options.subscribeReply == nil {
+				continue
+			}
+
+			var data struct {
+				Channel string `json:"channel"`
+			}
+			if err := json.Unmarshal(msg.Data, &data); err != nil {
+				t.Errorf("failed to decode subscribe message: %v", err)
+				return
+			}
+			if reply := rts.options.subscribeReply(acceptNumber, data.Channel); reply != nil {
+				if err := conn.WriteJSON(reply); err != nil {
+					return
+				}
+			}
+			if acceptNumber == 1 && rts.options.dropFirstConnection {
 				return
 			}
 		}
@@ -110,10 +169,235 @@ func (s *realtimeTestServer) config(t *testing.T, channel string) *Config {
 }
 
 func connectionEstablishedMessage(socketID string) Message {
-	data, _ := json.Marshal(fmt.Sprintf(`{"socket_id":"%s","activity_timeout":60}`, socketID))
+	return connectionEstablishedMessageWithTimeout(socketID, 60)
+}
+
+func connectionEstablishedMessageWithTimeout(socketID string, activityTimeout int) Message {
+	data, _ := json.Marshal(fmt.Sprintf(`{"socket_id":"%s","activity_timeout":%d}`, socketID, activityTimeout))
 	return Message{
 		Event: "pusher:connection_established",
 		Data:  data,
+	}
+}
+
+func subscriptionSucceeded(channel string) *Message {
+	return &Message{Event: "pusher_internal:subscription_succeeded", Channel: channel, Data: json.RawMessage(`"{}"`)}
+}
+
+// newFastClient returns a client with timeouts short enough for tests.
+func newFastClient(cfg *Config) *Client {
+	client := NewClient(cfg, "flowguard-test", "host-key", false)
+	client.reconnectBaseDelay = 20 * time.Millisecond
+	client.reconnectMaxDelay = 50 * time.Millisecond
+	client.subscriptionTimeout = 200 * time.Millisecond
+	client.pongTimeout = 100 * time.Millisecond
+	return client
+}
+
+func newAuthServer(t *testing.T, failures int32) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) <= failures {
+			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
+		_, _ = io.WriteString(w, `{"auth":"app-key:signature"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	return server, &requests
+}
+
+func waitForSubscribed(t *testing.T, client *Client) {
+	t.Helper()
+
+	deadline := time.After(5 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if client.IsSubscribed() {
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for client to be subscribed")
+		case <-ticker.C:
+		}
+	}
+}
+
+func TestStartRetriesFailedInitialConnect(t *testing.T) {
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		rejectDials: 2,
+		subscribeReply: func(_ int32, channel string) *Message {
+			return subscriptionSucceeded(channel)
+		},
+	})
+	client := newFastClient(server.config(t, "public-test"))
+	t.Cleanup(client.Disconnect)
+
+	client.Start()
+
+	waitForSubscribed(t, client)
+	if got := server.dials.Load(); got != 3 {
+		t.Fatalf("expected two rejected dials and one accepted dial, got %d dials", got)
+	}
+}
+
+func TestFailedChannelAuthReconnects(t *testing.T) {
+	authServer, authRequests := newAuthServer(t, 1)
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		subscribeReply: func(_ int32, channel string) *Message {
+			return subscriptionSucceeded(channel)
+		},
+	})
+	cfg := server.config(t, "private-test")
+	cfg.AuthURL = authServer.URL
+	client := newFastClient(cfg)
+	t.Cleanup(client.Disconnect)
+
+	client.Start()
+
+	if code := waitForCloseCode(t, server); code != websocket.ClosePolicyViolation {
+		t.Fatalf("expected the unsubscribed connection to close with code %d, got %d", websocket.ClosePolicyViolation, code)
+	}
+	waitForSubscribed(t, client)
+	if got := authRequests.Load(); got != 2 {
+		t.Fatalf("expected one failed and one successful auth request, got %d", got)
+	}
+	if got := server.accepts.Load(); got != 2 {
+		t.Fatalf("expected a second connection after the failed auth, got %d", got)
+	}
+}
+
+func TestSubscriptionErrorReconnects(t *testing.T) {
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		subscribeReply: func(accept int32, channel string) *Message {
+			if accept == 1 {
+				return &Message{Event: "pusher:subscription_error", Channel: channel, Data: json.RawMessage(`"{\"status\":403}"`)}
+			}
+			return subscriptionSucceeded(channel)
+		},
+	})
+	client := newFastClient(server.config(t, "public-test"))
+	t.Cleanup(client.Disconnect)
+
+	client.Start()
+
+	if code := waitForCloseCode(t, server); code != websocket.ClosePolicyViolation {
+		t.Fatalf("expected the rejected connection to close with code %d, got %d", websocket.ClosePolicyViolation, code)
+	}
+	waitForSubscribed(t, client)
+}
+
+func TestUnconfirmedSubscriptionReconnects(t *testing.T) {
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		subscribeReply: func(accept int32, channel string) *Message {
+			if accept == 1 {
+				return nil
+			}
+			return subscriptionSucceeded(channel)
+		},
+	})
+	client := newFastClient(server.config(t, "public-test"))
+	t.Cleanup(client.Disconnect)
+
+	client.Start()
+
+	waitForSubscribed(t, client)
+	if got := server.accepts.Load(); got != 2 {
+		t.Fatalf("expected a second connection after the unconfirmed subscription, got %d", got)
+	}
+}
+
+func TestSilentConnectionReconnects(t *testing.T) {
+	// The test server never answers pings, so the read deadline of the
+	// activity timeout plus the pong timeout expires.
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		activityTimeout: 1,
+		subscribeReply: func(_ int32, channel string) *Message {
+			return subscriptionSucceeded(channel)
+		},
+	})
+	client := newFastClient(server.config(t, "public-test"))
+	t.Cleanup(client.Disconnect)
+
+	client.Start()
+
+	waitForAccepts(t, server, 2)
+}
+
+func TestOnSubscribedRunsAfterEachSubscription(t *testing.T) {
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		subscribeReply: func(_ int32, channel string) *Message {
+			return subscriptionSucceeded(channel)
+		},
+		dropFirstConnection: true,
+	})
+	client := newFastClient(server.config(t, "public-test"))
+	t.Cleanup(client.Disconnect)
+
+	subscribed := make(chan struct{}, 10)
+	client.OnSubscribed(func() { subscribed <- struct{}{} })
+
+	client.Start()
+	waitForSubscription := func() {
+		t.Helper()
+		select {
+		case <-subscribed:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for the subscribed handler")
+		}
+	}
+	waitForSubscription()
+	waitForSubscription()
+	if got := server.accepts.Load(); got != 2 {
+		t.Fatalf("expected the handler to run once per connection, got %d connections", got)
+	}
+}
+
+func TestSubscriptionToOtherChannelIsIgnored(t *testing.T) {
+	server := newRealtimeTestServerWithOptions(t, true, realtimeTestServerOptions{
+		subscribeReply: func(_ int32, _ string) *Message {
+			return subscriptionSucceeded("public-other")
+		},
+	})
+	client := newFastClient(server.config(t, "public-test"))
+	client.subscriptionTimeout = time.Minute
+	t.Cleanup(client.Disconnect)
+
+	client.Start()
+	waitForConnected(t, client)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for server.subscribes.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if client.IsSubscribed() {
+		t.Fatal("expected a subscription confirmation for another channel to be ignored")
+	}
+}
+
+func TestReconnectDelayBacksOffUntilSubscribed(t *testing.T) {
+	client := NewClient(&Config{}, "flowguard-test", "host-key", false)
+
+	for attempts, ceiling := range []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second} {
+		client.reconnectAttempts = attempts
+		for range 100 {
+			if delay := client.reconnectDelayLocked(); delay < ceiling/2 || delay > ceiling {
+				t.Fatalf("attempt %d: delay %s outside [%s, %s]", attempts, delay, ceiling/2, ceiling)
+			}
+		}
+	}
+
+	client.reconnectAttempts = 1000
+	if delay := client.reconnectDelayLocked(); delay < defaultReconnectMaxDelay/2 || delay > defaultReconnectMaxDelay {
+		t.Fatalf("expected capped delay, got %s", delay)
 	}
 }
 

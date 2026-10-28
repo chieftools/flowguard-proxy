@@ -12,6 +12,7 @@ release.
 ### Fixed
 
 - Fixed `install.sh` on Ubuntu stopping at needrestart's "Pending kernel upgrade" dialog, which cannot be answered when the script is piped into bash. The installer and the updater now run apt non-interactively and skip needrestart.
+- Fixed proxies that could stop receiving config updates, IP list updates and upgrade requests from the control panel without reconnecting. A failed or rejected channel subscription, or one the realtime server never confirmed within 30 seconds, left the connection open but unsubscribed until FlowGuard restarted. A failed first connection was never retried, and a connection that silently died could go unnoticed for about 15 minutes. FlowGuard now reconnects in each case, backing off from 2 seconds up to 5 minutes until a subscription succeeds, and fetches the latest configuration after every successful subscription to catch up on updates sent while it was not subscribed.
 
 ## [0.31.2]
 

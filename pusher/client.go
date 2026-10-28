@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,6 +19,12 @@ const (
 	websocketHandshakeTimeout = 10 * time.Second
 	websocketWriteTimeout     = 10 * time.Second
 	websocketCloseTimeout     = 2 * time.Second
+
+	defaultActivityTimeout     = 120 * time.Second
+	defaultPongTimeout         = 30 * time.Second
+	defaultSubscriptionTimeout = 30 * time.Second
+	defaultReconnectBaseDelay  = 2 * time.Second
+	defaultReconnectMaxDelay   = 5 * time.Minute
 )
 
 // Config represents Realtime WebSocket configuration
@@ -63,24 +70,34 @@ type ConnectionEstablishedMessageData struct {
 
 // Client manages Realtime WebSocket connections
 type Client struct {
-	config         *Config
-	hostKey        string
-	userAgent      string
-	verbose        bool
-	httpClient     *http.Client
-	conn           *websocket.Conn
-	socketID       string
-	isConnected    bool
-	isConnecting   bool
-	connectCancel  context.CancelFunc
-	generation     uint64
-	reconnectTimer *time.Timer
-	stopChan       chan struct{}
-	eventHandlers  map[string]MessageHandler
-	mu             sync.RWMutex
-	writeMu        sync.Mutex
-	pingTicker     *time.Ticker
-	pingStop       chan struct{}
+	config            *Config
+	hostKey           string
+	userAgent         string
+	verbose           bool
+	httpClient        *http.Client
+	conn              *websocket.Conn
+	socketID          string
+	isConnected       bool
+	isSubscribed      bool
+	isConnecting      bool
+	connectCancel     context.CancelFunc
+	generation        uint64
+	reconnectTimer    *time.Timer
+	reconnectAttempts int
+	readTimeout       time.Duration
+	stopChan          chan struct{}
+	eventHandlers     map[string]MessageHandler
+	subscribedHandler func()
+	mu                sync.RWMutex
+	writeMu           sync.Mutex
+	pingTicker        *time.Ticker
+	pingStop          chan struct{}
+
+	// Timeouts are fields so tests can shorten them.
+	pongTimeout         time.Duration
+	subscriptionTimeout time.Duration
+	reconnectBaseDelay  time.Duration
+	reconnectMaxDelay   time.Duration
 }
 
 // NewClient creates a new Realtime client
@@ -90,14 +107,29 @@ func NewClient(cfg *Config, userAgent, hostKey string, verbose bool) *Client {
 	}
 
 	return &Client{
-		config:        cfg,
-		hostKey:       hostKey,
-		userAgent:     userAgent,
-		verbose:       verbose,
-		httpClient:    &http.Client{Timeout: websocketWriteTimeout},
-		stopChan:      make(chan struct{}),
-		eventHandlers: make(map[string]MessageHandler),
+		config:              cfg,
+		hostKey:             hostKey,
+		userAgent:           userAgent,
+		verbose:             verbose,
+		httpClient:          &http.Client{Timeout: websocketWriteTimeout},
+		stopChan:            make(chan struct{}),
+		eventHandlers:       make(map[string]MessageHandler),
+		pongTimeout:         defaultPongTimeout,
+		subscriptionTimeout: defaultSubscriptionTimeout,
+		reconnectBaseDelay:  defaultReconnectBaseDelay,
+		reconnectMaxDelay:   defaultReconnectMaxDelay,
 	}
+}
+
+// Start connects in the background and keeps reconnecting until Disconnect,
+// including when the first connection attempt fails.
+func (c *Client) Start() {
+	go func() {
+		if err := c.Connect(); err != nil {
+			log.Printf("[realtime] Failed to connect: %v", err)
+			c.scheduleReconnect()
+		}
+	}()
 }
 
 // Connect establishes a connection to Realtime
@@ -160,6 +192,8 @@ func (c *Client) Connect() error {
 	c.conn = conn
 	c.socketID = ""
 	c.isConnected = false
+	c.isSubscribed = false
+	c.readTimeout = defaultActivityTimeout + c.pongTimeout
 	if c.reconnectTimer != nil {
 		c.reconnectTimer.Stop()
 		c.reconnectTimer = nil
@@ -179,6 +213,14 @@ func (c *Client) IsConnected() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.isConnected
+}
+
+// IsSubscribed reports whether the server confirmed the channel subscription
+// on the current connection.
+func (c *Client) IsSubscribed() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isSubscribed
 }
 
 // UpdateConfig updates the Realtime configuration and reconnects if necessary
@@ -227,7 +269,9 @@ func (c *Client) UpdateConfig(newConfig *Config, userAgent, hostKey string) erro
 		c.conn = nil
 		c.socketID = ""
 		c.isConnected = false
+		c.isSubscribed = false
 		c.isConnecting = false
+		c.reconnectAttempts = 0
 		c.stopPingTickerLocked()
 
 		if c.reconnectTimer != nil {
@@ -266,6 +310,14 @@ func (c *Client) OnEvent(eventType string, handler MessageHandler) {
 	c.eventHandlers[eventType] = handler
 }
 
+// OnSubscribed registers a handler that runs each time the server confirms the
+// channel subscription, so events missed while unsubscribed can be caught up.
+func (c *Client) OnSubscribed(handler func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.subscribedHandler = handler
+}
+
 // Disconnect closes the Realtime connection
 func (c *Client) Disconnect() {
 	c.disconnect("client disconnecting")
@@ -299,6 +351,7 @@ func (c *Client) disconnect(reason string) {
 	}
 
 	c.isConnected = false
+	c.isSubscribed = false
 	c.isConnecting = false
 	c.config = nil
 	c.mu.Unlock()
@@ -352,6 +405,7 @@ func (c *Client) handleMessages(conn *websocket.Conn) {
 			c.conn = nil
 			c.socketID = ""
 			c.isConnected = false
+			c.isSubscribed = false
 			c.stopPingTickerLocked()
 			shouldReconnect = !c.isStoppedLocked() && c.config != nil
 		}
@@ -376,6 +430,18 @@ func (c *Client) handleMessages(conn *websocket.Conn) {
 		case <-c.stopChan:
 			return
 		default:
+		}
+
+		// Every ping is answered, so silence beyond the activity timeout plus
+		// the pong timeout means the connection is dead.
+		c.mu.RLock()
+		readTimeout := c.readTimeout
+		c.mu.RUnlock()
+		if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
+			if c.isConnectionActive(conn) {
+				log.Printf("[realtime] Failed to set read deadline: %v", err)
+			}
+			return
 		}
 
 		var msg Message
@@ -406,6 +472,11 @@ func (c *Client) handlePusherMessage(conn *websocket.Conn, msg Message) {
 	case "pusher:connection_established":
 		var data ConnectionEstablishedMessageData
 		if err := msg.UnmarshalData(&data); err == nil {
+			activityTimeout := defaultActivityTimeout
+			if data.ActivityTimeout > 0 {
+				activityTimeout = time.Duration(data.ActivityTimeout) * time.Second
+			}
+
 			c.mu.Lock()
 			if c.conn != conn || c.isStoppedLocked() {
 				c.mu.Unlock()
@@ -413,6 +484,12 @@ func (c *Client) handlePusherMessage(conn *websocket.Conn, msg Message) {
 			}
 			c.socketID = data.SocketID
 			c.isConnected = true
+			c.readTimeout = activityTimeout + c.pongTimeout
+			subscriptionTimeout := c.subscriptionTimeout
+			channel := ""
+			if c.config != nil {
+				channel = c.config.Channel
+			}
 			c.mu.Unlock()
 
 			if c.verbose {
@@ -420,14 +497,28 @@ func (c *Client) handlePusherMessage(conn *websocket.Conn, msg Message) {
 			}
 
 			// Start ping ticker for keepalive
-			c.startPingTicker(conn, data.ActivityTimeout)
+			c.startPingTicker(conn, activityTimeout)
 
-			// Subscribe to the configured channel
+			if channel == "" {
+				log.Printf("[realtime] No channel configured, not subscribing")
+				return
+			}
+
+			// Subscribe to the configured channel. A connection that is not
+			// subscribed receives no events, so any failure reconnects.
 			go func() {
 				if err := c.subscribeToChannel(conn, data.SocketID); err != nil {
-					log.Printf("[realtime] Failed to subscribe to channel: %v", err)
+					c.failConnection(conn, fmt.Sprintf("failed to subscribe to channel: %v", err))
 				}
 			}()
+			time.AfterFunc(subscriptionTimeout, func() {
+				c.mu.RLock()
+				pending := c.conn == conn && !c.isSubscribed
+				c.mu.RUnlock()
+				if pending {
+					c.failConnection(conn, fmt.Sprintf("channel subscription not confirmed within %s", subscriptionTimeout))
+				}
+			})
 		} else {
 			log.Printf("[realtime] Failed to parse connection established data: %v", err)
 		}
@@ -444,9 +535,24 @@ func (c *Client) handlePusherMessage(conn *websocket.Conn, msg Message) {
 	case "pusher:error":
 		log.Printf("[realtime] Received error: %s", string(msg.Data))
 
+	case "pusher:subscription_error":
+		c.failConnection(conn, fmt.Sprintf("channel subscription rejected: %s", string(msg.Data)))
+
 	case "pusher_internal:subscription_succeeded":
-		if c.verbose {
-			log.Printf("[realtime] Successfully subscribed to channel: %s", msg.Channel)
+		c.mu.Lock()
+		if c.conn != conn || c.isStoppedLocked() || c.config == nil || msg.Channel != c.config.Channel {
+			c.mu.Unlock()
+			return
+		}
+		c.isSubscribed = true
+		c.reconnectAttempts = 0
+		handler := c.subscribedHandler
+		c.mu.Unlock()
+
+		log.Printf("[realtime] Subscribed to channel: %s", msg.Channel)
+
+		if handler != nil {
+			go handler()
 		}
 
 	default:
@@ -457,12 +563,8 @@ func (c *Client) handlePusherMessage(conn *websocket.Conn, msg Message) {
 }
 
 // startPingTicker starts the ping ticker for keepalive
-func (c *Client) startPingTicker(conn *websocket.Conn, activityTimeout int) {
-	if activityTimeout <= 0 {
-		activityTimeout = 60 // Default 1 minute
-	}
-
-	ticker := time.NewTicker(time.Duration(activityTimeout) * time.Second)
+func (c *Client) startPingTicker(conn *websocket.Conn, activityTimeout time.Duration) {
+	ticker := time.NewTicker(activityTimeout)
 	stop := make(chan struct{})
 
 	c.mu.Lock()
@@ -659,7 +761,29 @@ func (c *Client) notifyEventListeners(msg Message) bool {
 	return handled
 }
 
-// scheduleReconnect schedules a reconnection attempt with exponential backoff
+// failConnection closes a connection that cannot deliver events and schedules
+// a reconnect, unless the connection was already replaced or closed.
+func (c *Client) failConnection(conn *websocket.Conn, reason string) {
+	c.mu.Lock()
+	if c.conn != conn || c.isStoppedLocked() {
+		c.mu.Unlock()
+		return
+	}
+	c.conn = nil
+	c.socketID = ""
+	c.isConnected = false
+	c.isSubscribed = false
+	c.stopPingTickerLocked()
+	c.mu.Unlock()
+
+	log.Printf("[realtime] %s, reconnecting", reason)
+	c.closeWebSocket(conn, websocket.ClosePolicyViolation, "subscription failed")
+	c.scheduleReconnect()
+}
+
+// scheduleReconnect schedules a reconnection attempt with exponential backoff.
+// The backoff only resets once a subscription succeeds, so a server that
+// accepts connections but rejects subscriptions is not retried in a tight loop.
 func (c *Client) scheduleReconnect() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -673,8 +797,8 @@ func (c *Client) scheduleReconnect() {
 		c.reconnectTimer.Stop()
 	}
 
-	// Use exponential backoff: start with 5 seconds
-	delay := 5 * time.Second
+	delay := c.reconnectDelayLocked()
+	c.reconnectAttempts++
 	generation := c.generation
 
 	c.reconnectTimer = time.AfterFunc(delay, func() {
@@ -686,7 +810,7 @@ func (c *Client) scheduleReconnect() {
 		}
 
 		if c.verbose {
-			log.Printf("[realtime] Attempting to reconnect...")
+			log.Printf("[realtime] Attempting to reconnect after %s...", delay)
 		}
 
 		if err := c.Connect(); err != nil {
@@ -694,6 +818,19 @@ func (c *Client) scheduleReconnect() {
 			c.scheduleReconnect()
 		}
 	})
+}
+
+// reconnectDelayLocked doubles the delay per attempt up to the maximum and
+// picks a random delay in its upper half, so reconnects are spread out but
+// never immediate.
+func (c *Client) reconnectDelayLocked() time.Duration {
+	ceiling := c.reconnectMaxDelay
+	if c.reconnectAttempts < 30 {
+		ceiling = min(c.reconnectBaseDelay<<c.reconnectAttempts, c.reconnectMaxDelay)
+	}
+
+	half := ceiling / 2
+	return half + rand.N(ceiling-half+1)
 }
 
 func (c *Client) closeWebSocket(conn *websocket.Conn, code int, reason string) {

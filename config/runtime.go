@@ -439,13 +439,15 @@ func (m *Manager) updatePusherClient(config *Config) {
 				m.handleUpgradeEvent(eventData.Version)
 			})
 
-			// Start connection in background
-			client := m.realtimeClient
-			go func() {
-				if err := client.Connect(); err != nil {
-					log.Printf("[config] Failed to connect to realtime server: %v", err)
+			// Catch up on config updates broadcast while not subscribed
+			m.realtimeClient.OnSubscribed(func() {
+				if err := m.RefreshFromAPI(false); err != nil {
+					log.Printf("[config] Failed to refresh config from API after realtime subscription: %v", err)
 				}
-			}()
+			})
+
+			// Start connection in background
+			m.realtimeClient.Start()
 
 			if m.verbose {
 				log.Printf("[config] Realtime client initialized")
