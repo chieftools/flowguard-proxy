@@ -19,6 +19,7 @@ release.
 
 ### Fixed
 
+- Fixed the default `/etc/flowguard/config.json` that the DEB and RPM packages install, which was invalid JSON because of a trailing comma. Upgrading replaces it with a valid default when it was never changed, and keeps a configuration written by `flowguard setup`. The DEB package no longer marks the file as a conffile, so dpkg never asks what to do with a changed configuration during an upgrade, even with the updater of earlier versions; the default now ships as `/usr/share/flowguard/config.json`.
 - Fixed remote upgrades on Debian and Ubuntu failing when a new package ships a changed default `config.json` while the installed one was changed locally, such as by `flowguard setup`. dpkg asked which version to keep, which the updater cannot answer. The updater now keeps the local file and only takes the package's version when the local file was not changed.
 - Fixed remote upgrades with dnf or yum failing when an unrelated repository is broken or unreachable. The updater now only uses the FlowGuard repository to check for and install the new version, as it already did to refresh the package cache.
 

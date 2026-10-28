@@ -63,7 +63,7 @@ cat > "${RPMBUILD_DIR}/SOURCES/config.json" << 'EOF'
 {
   "$schema": "https://pkg.flowguard.network/config.schema.json",
   "host": {
-    "cache_dir": "/var/cache/flowguard",
+    "cache_dir": "/var/cache/flowguard"
   },
   "rules": {},
   "actions": {},

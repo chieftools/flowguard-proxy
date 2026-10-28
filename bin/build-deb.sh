@@ -38,19 +38,21 @@ mkdir -p "${DEB_DIR}/etc/systemd/system"
 mkdir -p "${DEB_DIR}/var/log/flowguard"
 mkdir -p "${DEB_DIR}/var/cache/flowguard"
 mkdir -p "${DEB_DIR}/usr/share/doc/flowguard"
+mkdir -p "${DEB_DIR}/usr/share/flowguard"
 install -m 0644 LICENSE "${DEB_DIR}/usr/share/doc/flowguard/copyright"
 
 # Build the binary
 echo -e "${YELLOW}Building FlowGuard binary...${NC}"
 CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -tags netgo,osusergo -buildvcs=false -o "${DEB_DIR}/usr/bin/flowguard" .
 
-# Create default configuration file
+# Create default configuration file. postinst installs it as
+# /etc/flowguard/config.json; it is not a conffile, see postinst.
 echo -e "${YELLOW}Creating default configuration...${NC}"
-cat > "${DEB_DIR}/etc/flowguard/config.json" << 'EOF'
+cat > "${DEB_DIR}/usr/share/flowguard/config.json" << 'EOF'
 {
   "$schema": "https://pkg.flowguard.network/config.schema.json",
   "host": {
-    "cache_dir": "/var/cache/flowguard",
+    "cache_dir": "/var/cache/flowguard"
   },
   "rules": {},
   "actions": {},
@@ -115,6 +117,18 @@ set -e
 mkdir -p /etc/flowguard
 mkdir -p /var/log/flowguard
 mkdir -p /var/cache/flowguard
+
+# The configuration is not a conffile: flowguard setup rewrites it, and dpkg
+# would ask what to do with the changed file whenever the default changes,
+# which an unattended upgrade cannot answer. Earlier packages shipped it as a
+# conffile; dpkg keeps that file as it is. Install the default when there is
+# no configuration, and replace the invalid default (a trailing comma) that
+# earlier packages shipped when it was never changed.
+INVALID_DEFAULT_SHA256="af3ed87dbe758c6f9a5d38af9b0b3b353103b13841f4d1fc1359fd542b05bb4d"
+if [ ! -e /etc/flowguard/config.json ] || \
+    [ "$(sha256sum /etc/flowguard/config.json | cut -d ' ' -f 1)" = "${INVALID_DEFAULT_SHA256}" ]; then
+    install -m 0644 /usr/share/flowguard/config.json /etc/flowguard/config.json
+fi
 
 # Set proper ownership and permissions
 chown -R root:root /etc/flowguard
@@ -199,12 +213,6 @@ fi
 exit 0
 EOF
 chmod 755 "${DEB_DIR}/DEBIAN/postrm"
-
-# Create conffiles to preserve configuration during upgrades
-echo -e "${YELLOW}Marking configuration files...${NC}"
-cat > "${DEB_DIR}/DEBIAN/conffiles" << EOF
-/etc/flowguard/config.json
-EOF
 
 # Create changelog
 echo -e "${YELLOW}Creating changelog...${NC}"
