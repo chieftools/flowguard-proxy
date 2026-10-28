@@ -9,6 +9,8 @@ release.
 
 ## [Unreleased]
 
+## [0.31.2]
+
 ### Changed
 
 - Updated dependencies and Go to 1.27.3.
@@ -757,7 +759,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.31.1...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.31.2...HEAD
+[0.31.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.31.2
 [0.31.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.31.1
 [0.31.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.31.0
 [0.30.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.30.1
