@@ -9,6 +9,8 @@ release.
 
 ## [Unreleased]
 
+## [0.31.3]
+
 ### Fixed
 
 - Fixed `install.sh` on Ubuntu stopping at needrestart's "Pending kernel upgrade" dialog, which cannot be answered when the script is piped into bash. The installer and the updater now run apt non-interactively and skip needrestart.
@@ -764,7 +766,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.31.2...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.31.3...HEAD
+[0.31.3]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.31.3
 [0.31.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.31.2
 [0.31.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.31.1
 [0.31.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.31.0
