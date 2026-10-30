@@ -9,6 +9,8 @@ release.
 
 ## [Unreleased]
 
+## [0.33.1]
+
 ### Added
 
 - Added support for certbot certificates. Set `host.cert_path` to certbot's config directory (`/etc/letsencrypt`) to load `fullchain.pem` and `privkey.pem` of each certificate in `live/`, whichever web server uses them, such as Apache with certbot's Apache plugin. FlowGuard watches `live/`, so renewed and new certificates are picked up without a restart or deploy hook. `flowguard setup` offers it when no other server configuration is found. See [Certificate management](README.md#certificate-management).
@@ -807,7 +809,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.33.0...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.33.1...HEAD
+[0.33.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.1
 [0.33.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.0
 [0.32.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.32.0
 [0.31.3]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.31.3

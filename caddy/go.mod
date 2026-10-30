@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/caddyserver/caddy/v2 v2.11.7
-	go.chief.tools/flowguard-proxy v0.33.0
+	go.chief.tools/flowguard-proxy v0.33.1
 	go.uber.org/zap v1.28.0
 )
 
