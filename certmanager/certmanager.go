@@ -344,11 +344,18 @@ func (cm *Manager) TestCertificates() {
 	successCount := 0
 	failCount := 0
 
-	// Test certificates from a DirectAdmin installation or directory if provided
+	// Test certificates from a DirectAdmin installation, a certbot config
+	// directory or a certificate directory if provided
 	if cm.config.CertPath != "" && IsDirectAdminRoot(cm.config.CertPath) {
 		log.Printf("Testing certificates from DirectAdmin installation %s...\n", cm.config.CertPath)
 
 		success, fail := cm.testCertificatePairs(directAdminCertificates(cm.config.CertPath))
+		successCount += success
+		failCount += fail
+	} else if cm.config.CertPath != "" && IsCertbotRoot(cm.config.CertPath) {
+		log.Printf("Testing certificates from certbot config directory %s...\n", cm.config.CertPath)
+
+		success, fail := cm.testCertificatePairs(certbotCertificates(cm.config.CertPath))
 		successCount += success
 		failCount += fail
 	} else if cm.config.CertPath != "" {
@@ -554,8 +561,8 @@ func (cm *Manager) setupWatches() {
 		}
 	}
 
-	// Watch a DirectAdmin installation's certificate directories, or the
-	// certificate directory, if provided
+	// Watch a DirectAdmin installation's or certbot config directory's
+	// certificate directories, or the certificate directory, if provided
 	if cm.config.CertPath != "" && IsDirectAdminRoot(cm.config.CertPath) {
 		for _, dir := range directAdminWatchDirs(cm.config.CertPath) {
 			if cm.watchedDirs[dir] {
@@ -568,6 +575,21 @@ func (cm *Manager) setupWatches() {
 				cm.watchedDirs[dir] = true
 				if cm.config.Verbose {
 					log.Printf("[cert_manager] Watching DirectAdmin directory %s for changes", dir)
+				}
+			}
+		}
+	} else if cm.config.CertPath != "" && IsCertbotRoot(cm.config.CertPath) {
+		for _, dir := range certbotWatchDirs(cm.config.CertPath) {
+			if cm.watchedDirs[dir] {
+				continue
+			}
+			err := cm.watcher.Add(dir)
+			if err != nil {
+				log.Printf("[cert_manager] Warning: Failed to watch certbot directory %s: %v", dir, err)
+			} else {
+				cm.watchedDirs[dir] = true
+				if cm.config.Verbose {
+					log.Printf("[cert_manager] Watching certbot directory %s for changes", dir)
 				}
 			}
 		}
@@ -700,9 +722,11 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	fromACME := 0
 	fromNginx := 0
 	fromDirectAdmin := 0
+	fromCertbot := 0
 	nginxConfigLoaded := false
 
-	// Load from a DirectAdmin installation or a certificate directory if provided
+	// Load from a DirectAdmin installation, a certbot config directory or a
+	// certificate directory if provided
 	if cm.config.CertPath != "" && IsDirectAdminRoot(cm.config.CertPath) {
 		for _, pair := range directAdminCertificates(cm.config.CertPath) {
 			metadata, hostnames := cm.loadCertificatePair(pair, verbose)
@@ -714,6 +738,18 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 			}
 			successCount++
 			fromDirectAdmin++
+		}
+	} else if cm.config.CertPath != "" && IsCertbotRoot(cm.config.CertPath) {
+		for _, pair := range certbotCertificates(cm.config.CertPath) {
+			metadata, hostnames := cm.loadCertificatePair(pair, verbose)
+			if metadata == nil {
+				continue
+			}
+			for _, name := range hostnames {
+				tempHostnameCache[name] = append(tempHostnameCache[name], metadata)
+			}
+			successCount++
+			fromCertbot++
 		}
 	} else if cm.config.CertPath != "" {
 		files, err := os.ReadDir(cm.config.CertPath)
@@ -843,6 +879,9 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	}
 	if fromDirectAdmin > 0 {
 		sources = append(sources, fmt.Sprintf("%d from DirectAdmin", fromDirectAdmin))
+	}
+	if fromCertbot > 0 {
+		sources = append(sources, fmt.Sprintf("%d from certbot", fromCertbot))
 	}
 	if fromACME > 0 {
 		sources = append(sources, fmt.Sprintf("%d from Traefik ACME storage", fromACME))
@@ -1030,6 +1069,12 @@ func (cm *Manager) watchCertificates() {
 				}
 
 				log.Printf("[cert_manager] Detected change in certificate file: %s (%v)", fileName, event.Op)
+
+				// A removed directory loses its watch, so forget it to watch
+				// it again if it is recreated, such as a certbot lineage
+				if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 && cm.watchedDirs[event.Name] {
+					delete(cm.watchedDirs, event.Name)
+				}
 
 				// Use debouncing to avoid multiple reloads for rapid changes
 				if !pendingReload {

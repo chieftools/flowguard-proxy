@@ -9,6 +9,14 @@ release.
 
 ## [Unreleased]
 
+### Added
+
+- Added support for certbot certificates. Set `host.cert_path` to certbot's config directory (`/etc/letsencrypt`) to load `fullchain.pem` and `privkey.pem` of each certificate in `live/`, whichever web server uses them, such as Apache with certbot's Apache plugin. FlowGuard watches `live/`, so renewed and new certificates are picked up without a restart or deploy hook. `flowguard setup` offers it when no other server configuration is found. See [Certificate management](README.md#certificate-management).
+
+### Fixed
+
+- Fixed FlowGuard no longer noticing certificate changes in a watched directory that was removed and created again, such as a DirectAdmin user's `domains` directory or a certbot certificate deleted and requested again under the same name.
+
 ## [0.33.0]
 
 ### Added

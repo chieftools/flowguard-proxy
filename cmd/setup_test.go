@@ -50,6 +50,7 @@ func resetSetupTestGlobals(t *testing.T) {
 	oldNginxRunning := setupNginxRunning
 	oldPleskRootFallback := setupPleskRootFallback
 	oldDirectAdminRoot := setupDirectAdminRoot
+	oldCertbotRoot := setupCertbotRoot
 	oldInitSystem := setupInitSystem
 
 	configFile = filepath.Join(t.TempDir(), "config.json")
@@ -83,6 +84,7 @@ func resetSetupTestGlobals(t *testing.T) {
 	setupNginxRunning = func() bool { return true }
 	setupPleskRootFallback = nil
 	setupDirectAdminRoot = filepath.Join(t.TempDir(), "missing-directadmin")
+	setupCertbotRoot = filepath.Join(t.TempDir(), "missing-letsencrypt")
 	setupInitSystem = func() initsys.Kind { return initsys.Systemd }
 
 	t.Cleanup(func() {
@@ -107,6 +109,7 @@ func resetSetupTestGlobals(t *testing.T) {
 		setupNginxRunning = oldNginxRunning
 		setupPleskRootFallback = oldPleskRootFallback
 		setupDirectAdminRoot = oldDirectAdminRoot
+		setupCertbotRoot = oldCertbotRoot
 		setupInitSystem = oldInitSystem
 	})
 }
@@ -536,6 +539,94 @@ func TestSetupHostDiscoversDirectAdminBeforeNginx(t *testing.T) {
 
 	if err := setupHostWithClient(client); err != nil {
 		t.Fatalf("setupHostWithClient: %v", err)
+	}
+}
+
+// writeSetupTestCertbotRoot creates a certbot config directory with one
+// lineage and returns its path.
+func writeSetupTestCertbotRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	lineage := filepath.Join(root, "live", "example.com")
+	for _, dir := range []string{lineage, filepath.Join(root, "renewal")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
+	}
+	certPEM, keyPEM := makeSetupTestCertificatePEM(t)
+	if err := os.WriteFile(filepath.Join(lineage, "fullchain.pem"), certPEM, 0o644); err != nil {
+		t.Fatalf("write certificate: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lineage, "privkey.pem"), keyPEM, 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	return root
+}
+
+func TestSetupHostDiscoversCertbotWithoutNginx(t *testing.T) {
+	resetSetupTestGlobals(t)
+
+	root := writeSetupTestCertbotRoot(t)
+	setupCertbotRoot = root
+	setupNginxRunning = func() bool { return false }
+	setupInput = strings.NewReader(strings.Repeat("\n", 7))
+	var output bytes.Buffer
+	setupOutput = &output
+
+	client := &fakeSetupClient{
+		initialConfig: `{"host":{}}`,
+		updatedConfig: `{"host":{"cert_path":"` + root + `"}}`,
+		patchFunc: func(payload api.ConfigPatch) error {
+			if payload.Host == nil {
+				t.Fatal("expected host patch")
+			}
+			if payload.Host.CertPath != root || payload.Host.NginxConfigPath != "" {
+				t.Fatalf("expected only the certbot cert path, got %#v", payload.Host)
+			}
+			return nil
+		},
+	}
+
+	if err := setupHostWithClient(client); err != nil {
+		t.Fatalf("setupHostWithClient: %v", err)
+	}
+	if !strings.Contains(output.String(), "Discovered certbot certificates: "+root) {
+		t.Fatalf("expected the certbot certificates to be offered, got:\n%s", output.String())
+	}
+}
+
+func TestSetupHostPrefersNginxOverCertbot(t *testing.T) {
+	resetSetupTestGlobals(t)
+
+	setupCertbotRoot = writeSetupTestCertbotRoot(t)
+	nginxConfigPath := filepath.Join(t.TempDir(), "nginx.conf")
+	if err := os.WriteFile(nginxConfigPath, []byte("events {}\nhttp {}\n"), 0o644); err != nil {
+		t.Fatalf("write nginx config: %v", err)
+	}
+	setupNginxConfigPath = nginxConfigPath
+	setupInput = strings.NewReader(strings.Repeat("\n", 7))
+	var output bytes.Buffer
+	setupOutput = &output
+
+	client := &fakeSetupClient{
+		initialConfig: `{"host":{}}`,
+		updatedConfig: `{"host":{"nginx_config_path":"` + nginxConfigPath + `"}}`,
+		patchFunc: func(payload api.ConfigPatch) error {
+			if payload.Host == nil {
+				t.Fatal("expected host patch")
+			}
+			if payload.Host.NginxConfigPath != nginxConfigPath || payload.Host.CertPath != "" {
+				t.Fatalf("expected only the nginx config path, got %#v", payload.Host)
+			}
+			return nil
+		},
+	}
+
+	if err := setupHostWithClient(client); err != nil {
+		t.Fatalf("setupHostWithClient: %v", err)
+	}
+	if strings.Contains(output.String(), "certbot") {
+		t.Fatalf("did not expect the certbot certificates to be offered, got:\n%s", output.String())
 	}
 }
 

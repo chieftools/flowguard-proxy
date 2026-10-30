@@ -46,6 +46,7 @@ var (
 	setupNginxRunning      = nginxIsRunning
 	setupPleskRootFallback = []string{"/opt/psa", "/usr/local/psa"}
 	setupDirectAdminRoot   = "/usr/local/directadmin"
+	setupCertbotRoot       = "/etc/letsencrypt"
 	setupInitSystem        = initsys.DetectSystem
 )
 
@@ -279,6 +280,8 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, r
 		var hasACMECandidate bool
 		var nginxCandidate setupDiscoveryCandidate
 		var hasNginxCandidate bool
+		var certbotCandidate setupDiscoveryCandidate
+		var hasCertbotCandidate bool
 		var discoveryDiagnostics []string
 		if err := runSetupStep("Looking for server configuration", "Server configuration discovery complete", func() error {
 			var diagnostics []string
@@ -291,6 +294,8 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, r
 			acmeCandidate, hasACMECandidate, diagnostics = discoverTraefikACMEPath()
 			discoveryDiagnostics = append(discoveryDiagnostics, diagnostics...)
 			nginxCandidate, hasNginxCandidate, diagnostics = discoverNginxConfigPath()
+			discoveryDiagnostics = append(discoveryDiagnostics, diagnostics...)
+			certbotCandidate, hasCertbotCandidate, diagnostics = discoverCertbotCertificatePath()
 			discoveryDiagnostics = append(discoveryDiagnostics, diagnostics...)
 			return nil
 		}); err != nil {
@@ -333,6 +338,19 @@ func runSetupDiscovery(client setupAPIClient, body []byte, cfg *config.Config, r
 			}
 			if accepted {
 				discoveredNginxConfigPath = nginxCandidate.path
+			}
+		}
+
+		// Certbot's certificates come last, because a web server's
+		// configuration also covers certificates certbot does not manage.
+		if discoveredCertPath == "" && discoveredACMEPath == "" && discoveredNginxConfigPath == "" && hasCertbotCandidate {
+			printSetupDiscoveryCandidate(certbotCandidate)
+			accepted, err := promptYesNo(reader, setupOutput, "Use this server configuration?", true)
+			if err != nil {
+				return nil, err
+			}
+			if accepted {
+				discoveredCertPath = certbotCandidate.path
 			}
 		}
 	} else if verbose {
@@ -483,6 +501,31 @@ func discoverDirectAdminCertificatePath() (setupDiscoveryCandidate, bool, []stri
 	}, true, []string{diagnostic}
 }
 
+// discoverCertbotCertificatePath offers the certbot config directory as
+// host.cert_path, which loads the certificates of its lineages whichever web
+// server uses them.
+func discoverCertbotCertificatePath() (setupDiscoveryCandidate, bool, []string) {
+	path := setupCertbotRoot
+	if !certmanager.IsCertbotRoot(path) {
+		return setupDiscoveryCandidate{}, false, []string{fmt.Sprintf("certbot certificates: rejected %s: not a certbot config directory", path)}
+	}
+
+	summary, err := certmanager.ProbeCertificateDirectorySummary(path)
+	if err != nil {
+		return setupDiscoveryCandidate{}, false, []string{fmt.Sprintf("certbot certificates: rejected %s: %v", path, err)}
+	}
+
+	diagnostic := fmt.Sprintf(
+		"certbot certificates: accepted %s (%d usable certificate(s), %d hostname(s))",
+		path, summary.CertificateCount, summary.HostnameCount,
+	)
+	return setupDiscoveryCandidate{
+		kind:    "certbot",
+		path:    path,
+		summary: summary,
+	}, true, []string{diagnostic}
+}
+
 func setupPleskRoots() []string {
 	var roots []string
 	if root, err := readPleskProductRoot(setupPsaConfPath); err == nil && root != "" {
@@ -593,6 +636,8 @@ func printSetupDiscoveryCandidate(candidate setupDiscoveryCandidate) {
 		fmt.Fprintf(setupOutput, "  ✓ Discovered Plesk certificate directory: %s\n", candidate.path)
 	case "directadmin":
 		fmt.Fprintf(setupOutput, "  ✓ Discovered DirectAdmin installation: %s\n", candidate.path)
+	case "certbot":
+		fmt.Fprintf(setupOutput, "  ✓ Discovered certbot certificates: %s\n", candidate.path)
 	case "acme":
 		fmt.Fprintf(setupOutput, "  ✓ Discovered Traefik ACME storage: %s\n", candidate.path)
 	case "nginx":

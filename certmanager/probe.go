@@ -38,6 +38,14 @@ func ProbeCertificateDirectorySummary(path string) (ProbeSummary, error) {
 		return summary, nil
 	}
 
+	if IsCertbotRoot(path) {
+		probeCertificatePairs(&summary, certbotCertificates(path))
+		if summary.CertificateCount == 0 {
+			return summary, fmt.Errorf("no valid certificates found in certbot config directory %s", path)
+		}
+		return summary, nil
+	}
+
 	info, err := os.Stat(path)
 	if err != nil {
 		return summary, fmt.Errorf("certificate directory is not readable: %w", err)

@@ -591,7 +591,11 @@ FlowGuard can load certificates from any combination of these sources:
   from the certificate, so filenames do not need to match them. On a
   DirectAdmin server, point it at the installation (`/usr/local/directadmin`)
   instead. FlowGuard then loads each domain's certificate and the server
-  hostname's certificate, whichever web server DirectAdmin runs.
+  hostname's certificate, whichever web server DirectAdmin runs. On a server
+  that gets its certificates from certbot, point it at certbot's config
+  directory (`/etc/letsencrypt`). FlowGuard then loads `fullchain.pem` and
+  `privkey.pem` of each certificate in `live/`, whichever web server uses them,
+  and picks up renewals without a certbot deploy hook.
 - `host.acme_path` points to a Traefik v2 or v3 `acme.json` file. FlowGuard reads
   this file without changing it.
 - `host.nginx_config_path` points to an NGINX configuration. FlowGuard follows

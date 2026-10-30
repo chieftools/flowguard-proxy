@@ -99,7 +99,7 @@
                 },
                 "cert_path": {
                     "type": "string",
-                    "description": "Path to directory containing combined SSL certificate+key files, or to a DirectAdmin installation (/usr/local/directadmin) to load its domain and hostname certificates. Optional - can be combined with other certificate sources."
+                    "description": "Path to directory containing combined SSL certificate+key files, to a DirectAdmin installation (/usr/local/directadmin) to load its domain and hostname certificates, or to a certbot config directory (/etc/letsencrypt) to load the certificates in its live directory. Optional - can be combined with other certificate sources."
                 },
                 "acme_path": {
                     "type": "string",
