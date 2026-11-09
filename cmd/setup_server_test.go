@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -524,5 +525,80 @@ func TestPromptSetupServerConfigurationWarnsWithoutPublicAddresses(t *testing.T)
 
 	if !strings.Contains(output.String(), "Warning: no public IP addresses found on this machine; run flowguard setup --bind 10.0.0.5") {
 		t.Fatalf("expected --bind hint, got:\n%s", output.String())
+	}
+}
+
+func TestPromptSetupServerConfigurationOffersReservedIPAnchor(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantBind  []string
+		wantPairs []string
+	}{
+		{
+			name:      "accepted",
+			input:     "\n" + strings.Repeat("\n", 5),
+			wantBind:  []string{"203.0.113.10", "2001:db8::10", "10.18.0.5"},
+			wantPairs: []string{"10.18.0.5=2001:db8::10", "203.0.113.10="},
+		},
+		{
+			name:      "declined",
+			input:     "n\n" + strings.Repeat("\n", 5),
+			wantBind:  nil,
+			wantPairs: []string{"203.0.113.10=2001:db8::10"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetSetupTestGlobals(t)
+			setupInspectNetwork = func(cfg *config.Config, _ []string) (proxy.NetworkInspection, error) {
+				bindAddrs := cfg.BindAddresses()
+				if len(bindAddrs) == 0 {
+					bindAddrs = []string{"203.0.113.10", "2001:db8::10"}
+				}
+				pairing, err := proxy.ResolveAddressPairs(cfg, bindAddrs)
+				if err != nil {
+					return proxy.NetworkInspection{}, err
+				}
+				return proxy.NetworkInspection{
+					BindAddresses:    bindAddrs,
+					Pairing:          pairing,
+					HeaderReady:      true,
+					TransparentReady: pairing.Complete(),
+					ReservedIPAnchor: &proxy.ReservedIPAnchor{
+						Provider:   "DigitalOcean",
+						ReservedIP: "198.51.100.20",
+						AnchorIP:   "10.18.0.5",
+						PublicIP:   "203.0.113.10",
+						Bound:      slices.Contains(bindAddrs, "10.18.0.5"),
+					},
+				}, nil
+			}
+			var output bytes.Buffer
+			setupOutput = &output
+
+			patch, err := promptSetupServerConfiguration(bufio.NewReader(strings.NewReader(tt.input)), &config.Config{}, false)
+			if err != nil {
+				t.Fatalf("promptSetupServerConfiguration: %v", err)
+			}
+			if !slices.Equal(patch.BindAddresses, tt.wantBind) {
+				t.Fatalf("bind addresses = %v, want %v", patch.BindAddresses, tt.wantBind)
+			}
+			if patch.Upstream.ClientIPMode != config.UpstreamClientIPModeTransparent {
+				t.Fatalf("expected transparent mode, got %s", patch.Upstream.ClientIPMode)
+			}
+			var pairs []string
+			for _, pair := range patch.Upstream.Transparent.AddressPairs {
+				pairs = append(pairs, pair.IPv4+"="+pair.IPv6)
+			}
+			slices.Sort(pairs)
+			if !slices.Equal(pairs, tt.wantPairs) {
+				t.Fatalf("address pairs = %v, want %v", pairs, tt.wantPairs)
+			}
+			if !strings.Contains(output.String(), "DigitalOcean delivers traffic for reserved IP 198.51.100.20 to the anchor IP 10.18.0.5") {
+				t.Fatalf("expected the reserved IP explanation, got:\n%s", output.String())
+			}
+		})
 	}
 }

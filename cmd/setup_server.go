@@ -37,6 +37,10 @@ func promptSetupServerConfiguration(reader *bufio.Reader, cfg *config.Config, re
 	if err := validateSetupAddressPairs(setupAddressPairs, inspection.BindAddresses); err != nil {
 		return api.ServerConfigPatch{}, err
 	}
+	inspection, err := offerSetupReservedIPAnchor(reader, cfg, inspection)
+	if err != nil {
+		return api.ServerConfigPatch{}, err
+	}
 	printSetupNetworkOptions(inspection)
 	defaultMode := config.UpstreamClientIPModeHeaders
 	allowConfiguredTransparent := false
@@ -120,15 +124,39 @@ func inspectSetupNetwork(cfg *config.Config) proxy.NetworkInspection {
 	}
 }
 
+const setupIPv4OnlyChoice = "none (IPv4-only; validated IPv6 clients use header fallback)"
+
 func promptSetupAddressPairs(reader *bufio.Reader, cfg *config.Config, inspection proxy.NetworkInspection) (bool, error) {
 	ipv4, ipv6 := setupUnresolvedAddressFamilies(inspection.Pairing.Unresolved)
 
 	fmt.Fprintln(setupOutput, "\nTransparent mode needs an IPv4/IPv6 mapping for each dual-stack bind address.")
 	fmt.Fprintf(setupOutput, "  Unpaired IPv4 addresses: %s\n", setupListOrNone(ipv4))
 	fmt.Fprintf(setupOutput, "  Unpaired IPv6 addresses: %s\n", setupListOrNone(ipv6))
-	if len(ipv4) == 0 || len(ipv4) != len(ipv6) {
-		fmt.Fprintln(setupOutput, "  These addresses cannot form a complete one-to-one mapping; update the bind addresses or nginx configuration, or pass --address-pair IPV4= for each IPv4 address without an IPv6 counterpart, before selecting transparent mode.")
+	if len(ipv4) == 0 || len(ipv4) < len(ipv6) {
+		fmt.Fprintln(setupOutput, "  Every IPv6 bind address needs its own IPv4 counterpart, so these addresses cannot be paired.")
+		printSetupSuggestions(inspection)
 		return false, nil
+	}
+
+	configuredPairs := make([]config.AddressPair, 0, len(inspection.Pairing.Pairs)+len(ipv4))
+	for _, pair := range inspection.Pairing.Pairs {
+		configuredPairs = append(configuredPairs, config.AddressPair{IPv4: pair.IPv4, IPv6: pair.IPv6})
+	}
+
+	if anchor := inspection.ReservedIPAnchor; anchor != nil && anchor.Bound && slices.Equal(ipv4, []string{anchor.AnchorIP}) && len(ipv6) == 0 {
+		if anchorPairs := anchor.AddressPairs(inspection.Pairing); anchorPairs != nil {
+			fmt.Fprintf(setupOutput, "  The anchor IP %s receives the traffic for reserved IP %s.\n", anchor.AnchorIP, anchor.ReservedIP)
+			accepted, err := promptYesNo(reader, setupOutput, fmt.Sprintf(
+				"Pair %s with %s and keep %s as IPv4-only?", anchor.AnchorIP, anchorPairs[0].IPv6, anchor.PublicIP,
+			), true)
+			if err != nil {
+				return false, err
+			}
+			if accepted {
+				setSetupAddressPairs(cfg, mergeSetupAddressPairs(configuredPairs, anchorPairs))
+				return true, nil
+			}
+		}
 	}
 
 	configure, err := promptYesNo(reader, setupOutput, "Configure address pairs now?", true)
@@ -137,27 +165,64 @@ func promptSetupAddressPairs(reader *bufio.Reader, cfg *config.Config, inspectio
 	}
 
 	availableV6 := append([]string(nil), ipv6...)
-	manualPairs := make([]config.AddressPair, 0, len(ipv4))
-	for _, v4 := range ipv4 {
-		labels := make([]string, len(availableV6))
-		for i, v6 := range availableV6 {
-			labels[i] = v6
+	for index, v4 := range ipv4 {
+		labels := append([]string(nil), availableV6...)
+		// An address may stay IPv4-only while more IPv4 than IPv6 addresses
+		// remain, so every IPv6 address still gets a counterpart.
+		if len(ipv4)-index > len(availableV6) {
+			labels = append(labels, setupIPv4OnlyChoice)
 		}
 		selected, err := promptChoice(reader, setupOutput, "IPv6 counterpart for "+v4, labels, 0)
 		if err != nil {
 			return false, err
 		}
-		manualPairs = append(manualPairs, config.AddressPair{IPv4: v4, IPv6: availableV6[selected]})
+		if selected == len(availableV6) {
+			configuredPairs = append(configuredPairs, config.AddressPair{IPv4: v4})
+			continue
+		}
+		configuredPairs = append(configuredPairs, config.AddressPair{IPv4: v4, IPv6: availableV6[selected]})
 		availableV6 = append(availableV6[:selected], availableV6[selected+1:]...)
 	}
 
-	pairs := make([]config.AddressPair, 0, len(inspection.Pairing.Pairs)+len(manualPairs))
-	for _, pair := range inspection.Pairing.Pairs {
-		pairs = append(pairs, config.AddressPair{IPv4: pair.IPv4, IPv6: pair.IPv6})
-	}
-	pairs = append(pairs, manualPairs...)
-	setSetupAddressPairs(cfg, pairs)
+	setSetupAddressPairs(cfg, configuredPairs)
 	return true, nil
+}
+
+// offerSetupReservedIPAnchor offers to listen on the private anchor address
+// that receives a cloud reserved IP's traffic, which bind address
+// auto-detection skips because it only picks public addresses.
+func offerSetupReservedIPAnchor(reader *bufio.Reader, cfg *config.Config, inspection proxy.NetworkInspection) (proxy.NetworkInspection, error) {
+	anchor := inspection.ReservedIPAnchor
+	if anchor == nil || anchor.Bound {
+		return inspection, nil
+	}
+
+	fmt.Fprintf(setupOutput, "  %s delivers traffic for reserved IP %s to the anchor IP %s, which FlowGuard does not listen on yet,\n", anchor.Provider, anchor.ReservedIP, anchor.AnchorIP)
+	fmt.Fprintln(setupOutput, "  so that traffic bypasses FlowGuard. The web server must accept connections on the anchor IP, for example with a wildcard listen.")
+	accepted, err := promptYesNo(reader, setupOutput, "Listen on the anchor IP "+anchor.AnchorIP+" too?", true)
+	if err != nil || !accepted {
+		return inspection, err
+	}
+
+	setupBindAddrs = append(slices.Clone(inspection.BindAddresses), anchor.AnchorIP)
+	setSetupBindAddresses(cfg, setupBindAddrs)
+	// The reserved IP is the address clients use, so its anchor takes over the
+	// IPv6 counterpart, unless the command line already chose the pairs.
+	if len(setupAddressPairs) == 0 {
+		if pairs := anchor.AddressPairs(inspection.Pairing); pairs != nil {
+			setSetupAddressPairs(cfg, mergeSetupAddressPairs(cfg.TransparentUpstreamSettings().AddressPairs, pairs))
+		}
+	}
+	return inspectSetupNetwork(cfg), nil
+}
+
+func printSetupSuggestions(inspection proxy.NetworkInspection) {
+	for _, suggestion := range inspection.Suggestions {
+		fmt.Fprintf(setupOutput, "  Suggestion: %s\n", suggestion.Summary)
+		if suggestion.Command != "" {
+			fmt.Fprintf(setupOutput, "    %s\n", suggestion.Command)
+		}
+	}
 }
 
 func setupUnresolvedAddressFamilies(unresolved []string) ([]string, []string) {
@@ -192,7 +257,7 @@ func setupTransparentCanBeSelected(inspection proxy.NetworkInspection, allowConf
 	}
 
 	ipv4, ipv6 := setupUnresolvedAddressFamilies(inspection.Pairing.Unresolved)
-	return len(ipv4) > 0 && len(ipv4) == len(ipv6)
+	return len(ipv4) > 0 && len(ipv4) >= len(ipv6)
 }
 
 // parseSetupAddressPairs parses --address-pair values in the form IPV4=IPV6,

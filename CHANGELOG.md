@@ -9,9 +9,15 @@ release.
 
 ## [Unreleased]
 
+### Added
+
+- `flowguard network inspect` now ends with suggestions and the `flowguard setup` command that applies each, for example to mark surplus IPv4 addresses as IPv4-only or to stop listening on an IPv6 address without an IPv4 counterpart.
+- FlowGuard now detects a DigitalOcean reserved IP whose traffic bypasses it. DigitalOcean delivers that traffic to the droplet's private anchor IP, which bind address auto-detection skips. `flowguard setup` offers to listen on the anchor IP too and, in transparent mode, moves the IPv6 counterpart to it. See [Initial setup](README.md#initial-setup).
+
 ### Changed
 
 - Updated dependencies
+- The address-pair prompt in `flowguard setup` now offers IPv4-only when a server has more IPv4 than IPv6 addresses, instead of stopping setup.
 
 ### Fixed
 

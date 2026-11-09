@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -121,9 +122,15 @@ func TestPromptSetupAddressPairsRejectsMismatchedFamiliesWithoutPrompting(t *tes
 	var output bytes.Buffer
 	setupOutput = &output
 	cfg := &config.Config{}
-	inspection := proxy.NetworkInspection{Pairing: proxy.AddressPairResolution{Unresolved: []string{
-		"192.0.2.10", "192.0.2.20", "2001:db8::10",
-	}}}
+	inspection := proxy.NetworkInspection{
+		Pairing: proxy.AddressPairResolution{Unresolved: []string{
+			"192.0.2.10", "2001:db8::10", "2001:db8::20",
+		}},
+		Suggestions: []proxy.NetworkSuggestion{{
+			Summary: "Stop listening on 2001:db8::20.",
+			Command: "flowguard setup --bind 192.0.2.10,2001:db8::10",
+		}},
+	}
 
 	updated, err := promptSetupAddressPairs(bufio.NewReader(strings.NewReader("")), cfg, inspection)
 	if err != nil {
@@ -132,8 +139,59 @@ func TestPromptSetupAddressPairsRejectsMismatchedFamiliesWithoutPrompting(t *tes
 	if updated || len(cfg.TransparentUpstreamSettings().AddressPairs) != 0 {
 		t.Fatalf("expected no configured pairs, got %+v", cfg.TransparentUpstreamSettings().AddressPairs)
 	}
-	if !strings.Contains(output.String(), "cannot form a complete one-to-one mapping") {
+	if !strings.Contains(output.String(), "cannot be paired") ||
+		!strings.Contains(output.String(), "Suggestion: Stop listening on 2001:db8::20.\n    flowguard setup --bind 192.0.2.10,2001:db8::10\n") {
 		t.Fatalf("expected actionable mismatch output, got:\n%s", output.String())
+	}
+}
+
+func TestPromptSetupAddressPairsOffersIPv4OnlyForSurplusIPv4Addresses(t *testing.T) {
+	resetSetupTestGlobals(t)
+	var output bytes.Buffer
+	setupOutput = &output
+	cfg := &config.Config{}
+	inspection := proxy.NetworkInspection{Pairing: proxy.AddressPairResolution{Unresolved: []string{
+		"192.0.2.10", "192.0.2.20", "2001:db8::10",
+	}}}
+
+	// Configure now, pair 192.0.2.10 with the IPv6 address, then 192.0.2.20
+	// only has the IPv4-only choice left.
+	updated, err := promptSetupAddressPairs(bufio.NewReader(strings.NewReader("\n1\n\n")), cfg, inspection)
+	if err != nil {
+		t.Fatalf("promptSetupAddressPairs: %v", err)
+	}
+	want := []config.AddressPair{{IPv4: "192.0.2.10", IPv6: "2001:db8::10"}, {IPv4: "192.0.2.20"}}
+	if !updated || !reflect.DeepEqual(cfg.TransparentUpstreamSettings().AddressPairs, want) {
+		t.Fatalf("address pairs = %+v, want %+v", cfg.TransparentUpstreamSettings().AddressPairs, want)
+	}
+	if !strings.Contains(output.String(), setupIPv4OnlyChoice) {
+		t.Fatalf("expected the IPv4-only choice, got:\n%s", output.String())
+	}
+}
+
+func TestPromptSetupAddressPairsMovesIPv6CounterpartToBoundReservedIPAnchor(t *testing.T) {
+	resetSetupTestGlobals(t)
+	cfg := &config.Config{}
+	pairing, err := proxy.ResolveAddressPairs(&config.Config{Server: &config.ServerConfig{Upstream: &config.UpstreamConfig{
+		Transparent: &config.TransparentUpstreamConfig{AddressPairs: []config.AddressPair{{IPv4: "203.0.113.10", IPv6: "2001:db8::10"}}},
+	}}}, []string{"203.0.113.10", "10.18.0.5", "2001:db8::10"})
+	if err != nil {
+		t.Fatalf("ResolveAddressPairs: %v", err)
+	}
+	inspection := proxy.NetworkInspection{
+		Pairing: pairing,
+		ReservedIPAnchor: &proxy.ReservedIPAnchor{
+			Provider: "DigitalOcean", ReservedIP: "198.51.100.20", AnchorIP: "10.18.0.5", PublicIP: "203.0.113.10", Bound: true,
+		},
+	}
+
+	updated, err := promptSetupAddressPairs(bufio.NewReader(strings.NewReader("\n")), cfg, inspection)
+	if err != nil {
+		t.Fatalf("promptSetupAddressPairs: %v", err)
+	}
+	want := []config.AddressPair{{IPv4: "10.18.0.5", IPv6: "2001:db8::10"}, {IPv4: "203.0.113.10"}}
+	if !updated || !reflect.DeepEqual(cfg.TransparentUpstreamSettings().AddressPairs, want) {
+		t.Fatalf("address pairs = %+v, want %+v", cfg.TransparentUpstreamSettings().AddressPairs, want)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,12 +26,16 @@ type NetworkInspection struct {
 	Prerequisites       []NetworkPrerequisite
 	Diagnostics         []string
 	TransparentWarnings []string
+	ReservedIPAnchor    *ReservedIPAnchor
+	Suggestions         []NetworkSuggestion
 	HeaderReady         bool
 	TransparentReady    bool
 	Ready               bool
 }
 
 func InspectNetwork(cfg *config.Config, bindAddrs []string) (NetworkInspection, error) {
+	// Suggested commands must name bind addresses that are not saved yet.
+	unsavedBindAddrs := len(bindAddrs) > 0 && !sameAddresses(bindAddrs, cfg.BindAddresses())
 	if len(bindAddrs) == 0 {
 		bindAddrs = cfg.BindAddresses()
 	}
@@ -74,6 +79,8 @@ func InspectNetwork(cfg *config.Config, bindAddrs []string) (NetworkInspection, 
 		default:
 			inspection.Ready = false
 		}
+		inspection.ReservedIPAnchor = inspectReservedIPAnchor(inspection.BindAddresses)
+		inspection.Suggestions = networkSuggestions(inspection, unsavedBindAddrs)
 		return inspection, nil
 	}
 
@@ -183,6 +190,14 @@ func InspectNetwork(cfg *config.Config, bindAddrs []string) (NetworkInspection, 
 		}
 	}
 	return finish()
+}
+
+func sameAddresses(a, b []string) bool {
+	a = slices.Clone(a)
+	b = slices.Clone(b)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
 }
 
 func FormatNetworkDiagnostics(inspection NetworkInspection) string {
@@ -441,5 +456,14 @@ func FormatNetworkInspection(inspection NetworkInspection) string {
 	}
 	fmt.Fprintf(&output, "  Ready: %s\n", strconv.FormatBool(inspection.TransparentReady))
 	fmt.Fprintf(&output, "\nConfigured mode ready: %s\n", strconv.FormatBool(inspection.Ready))
+	if len(inspection.Suggestions) > 0 {
+		output.WriteString("\nSuggestions:\n")
+		for _, suggestion := range inspection.Suggestions {
+			fmt.Fprintf(&output, "  - %s\n", suggestion.Summary)
+			if suggestion.Command != "" {
+				fmt.Fprintf(&output, "    %s\n", suggestion.Command)
+			}
+		}
+	}
 	return output.String()
 }

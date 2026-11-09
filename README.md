@@ -228,6 +228,14 @@ When FlowGuard finds no public IP address, setup, `flowguard run`, and
 `flowguard network inspect` suggest a `--bind` value from the machine's other
 addresses.
 
+On a DigitalOcean droplet with a reserved IP, DigitalOcean delivers the reserved
+IP's traffic to the droplet's private anchor IP, which auto-detection skips, so
+that traffic bypasses FlowGuard. Setup and `flowguard network inspect` read the
+droplet metadata to detect this. Setup offers to listen on the anchor IP too
+and, in transparent mode, moves the IPv6 counterpart of the droplet's own IPv4
+address to the anchor IP. The web server must accept connections on the anchor
+IP, for example with a wildcard `listen`.
+
 When transparent mode cannot pair dual-stack bind addresses automatically, pass
 each pair with `--address-pair IPV4=IPV6`. Setup checks that both addresses are
 bind addresses, replaces configured pairs that share an address, makes
@@ -252,7 +260,8 @@ sudo flowguard setup \
 On a capable terminal, setup uses an interactive form: use the arrow keys (or
 `j`/`k`) to move, Space to toggle checkboxes, and Enter to confirm. Address-pair
 configuration always lists IPv4 addresses as the fixed bases and asks for an
-unused IPv6 counterpart for each one. Set `ACCESSIBLE=1` for screen-reader
+unused IPv6 counterpart for each one, or offers IPv4-only while more IPv4 than
+IPv6 addresses remain. Set `ACCESSIBLE=1` for screen-reader
 friendly prompts. Use the global `--no-tui` flag or set `FLOWGUARD_NO_TUI` to
 force line-oriented prompts; FlowGuard also falls back to these prompts when
 input or output is redirected or `TERM=dumb`.
