@@ -9,6 +9,8 @@ release.
 
 ## [Unreleased]
 
+## [0.33.2]
+
 ### Added
 
 - `flowguard network inspect` now ends with suggestions and the `flowguard setup` command that applies each, for example to mark surplus IPv4 addresses as IPv4-only or to stop listening on an IPv6 address without an IPv4 counterpart.
@@ -823,7 +825,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.33.1...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.33.2...HEAD
+[0.33.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.2
 [0.33.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.1
 [0.33.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.0
 [0.32.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.32.0
