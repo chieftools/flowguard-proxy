@@ -9,6 +9,10 @@ release.
 
 ## [Unreleased]
 
+### Changed
+
+- Updated dependencies
+
 ## [0.33.1]
 
 ### Added
