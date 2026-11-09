@@ -27,6 +27,12 @@ var rootCmd = &cobra.Command{
 	Short: "FlowGuard - High-performance reverse proxy with advanced security filtering",
 	Long: `FlowGuard is a high-performance reverse proxy written in Go that provides
 transparent HTTP/HTTPS traffic interception with advanced security filtering.`,
+	// Cobra runs this after parsing flags and validating arguments, so usage
+	// still accompanies those mistakes but not errors from the command itself,
+	// such as a failed readiness check.
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		cmd.SilenceUsage = true
+	},
 }
 
 // Execute adds all child commands to the root command and sets appropriate flags.

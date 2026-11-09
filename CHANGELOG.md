@@ -13,6 +13,10 @@ release.
 
 - Updated dependencies
 
+### Fixed
+
+- Fixed CLI commands such as `flowguard network inspect` printing their usage after an error that was not caused by the command line, such as a configured mode that is not ready.
+
 ## [0.33.1]
 
 ### Added
