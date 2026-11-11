@@ -9,6 +9,10 @@ release.
 
 ## [Unreleased]
 
+### Changed
+
+- The firewall monitor now lists each iptables chain once per check and only re-checks FlowGuard's rules one by one when a chain changed, or every 10 minutes. It used to run `iptables -C` for every rule on every check (every 30 seconds by default), and on iptables-legacy each of those calls writes a record to the kernel audit log. On a host with five address pairs that was about 100,000 audit records a day.
+
 ## [0.33.2]
 
 ### Added

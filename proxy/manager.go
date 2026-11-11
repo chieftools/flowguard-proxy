@@ -531,8 +531,11 @@ func (p *Manager) evaluateFirewall(autoRepair bool) api.FirewallHeartbeat {
 
 	checkServers := func(repair bool) {
 		if p.managesRedirect() {
+			// Servers on the same address family share chains, so each pass
+			// lists every chain once.
+			snapshot := newChainSnapshot()
 			for _, server := range p.servers {
-				missing, err := server.CheckPortRedirect()
+				missing, err := server.checkPortRedirect(snapshot)
 				if err != nil {
 					lastError = err.Error()
 					if totalMissing == 0 {
@@ -547,7 +550,9 @@ func (p *Manager) evaluateFirewall(autoRepair bool) api.FirewallHeartbeat {
 				}
 
 				log.Printf("[firewall] Detected %d missing redirect rule(s) for %s:%s, attempting repair", len(missing), server.config.bindAddr, server.config.bindPort)
-				if err := server.RepairPortRedirect(missing); err != nil {
+				err = server.RepairPortRedirect(missing)
+				snapshot.invalidate()
+				if err != nil {
 					lastError = err.Error()
 					repairError = lastError
 					continue

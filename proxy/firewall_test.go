@@ -3,15 +3,21 @@ package proxy
 import (
 	"errors"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"go.chief.tools/flowguard-proxy/config"
 )
 
 type fakeFirewallRunner struct {
-	installed map[string]bool
-	failures  map[string]error
+	installed    map[string]bool
+	failures     map[string]error
+	checkCalls   int
+	listCalls    int
+	listFailures map[string]error
 }
 
 type orderedFirewallRunner struct {
@@ -21,8 +27,9 @@ type orderedFirewallRunner struct {
 
 func newFakeFirewallRunner() *fakeFirewallRunner {
 	return &fakeFirewallRunner{
-		installed: make(map[string]bool),
-		failures:  make(map[string]error),
+		installed:    make(map[string]bool),
+		failures:     make(map[string]error),
+		listFailures: make(map[string]error),
 	}
 }
 
@@ -47,6 +54,7 @@ func (f *fakeFirewallRunner) Run(name string, args ...string) error {
 
 	switch args[verbIndex] {
 	case "-C":
+		f.checkCalls++
 		if f.installed[checkKey] {
 			return nil
 		}
@@ -63,6 +71,44 @@ func (f *fakeFirewallRunner) Run(name string, args ...string) error {
 	default:
 		return nil
 	}
+}
+
+// Output lists one chain the way "iptables [-t table] -S chain" does, in a
+// stable order.
+func (f *fakeFirewallRunner) Output(name string, args ...string) ([]byte, error) {
+	f.listCalls++
+	verbIndex := firewallVerbIndex(args)
+	if verbIndex == -1 || args[verbIndex] != "-S" || len(args) <= verbIndex+1 {
+		return nil, errors.New("unsupported listing")
+	}
+	if err, ok := f.listFailures[firewallCommandKey(name, args)]; ok {
+		return nil, err
+	}
+
+	prefix := firewallCommandKey(name, append(append([]string(nil), args[:verbIndex]...), "-C", args[verbIndex+1])) + " "
+	var lines []string
+	for key := range f.installed {
+		if rule, ok := strings.CutPrefix(key, prefix); ok {
+			lines = append(lines, "-A "+args[verbIndex+1]+" "+rule)
+		}
+	}
+	slices.Sort(lines)
+	output := "-N " + args[verbIndex+1] + "\n"
+	for _, line := range lines {
+		output += line + "\n"
+	}
+	return []byte(output), nil
+}
+
+func (f *orderedFirewallRunner) Output(name string, args ...string) ([]byte, error) {
+	if name != "iptables" || len(args) < 4 || args[0] != "-t" || args[1] != "nat" || args[2] != "-S" || args[3] != "PREROUTING" {
+		return f.fallback.Output(name, args...)
+	}
+	output := "-P PREROUTING ACCEPT\n"
+	for _, rule := range f.prerouting {
+		output += "-A PREROUTING " + rule + "\n"
+	}
+	return []byte(output), nil
 }
 
 func (f *orderedFirewallRunner) Run(name string, args ...string) error {
@@ -480,5 +526,153 @@ func TestManagerEvaluateFirewallDisabledWhenNoRedirect(t *testing.T) {
 	state := manager.evaluateFirewall(true)
 	if state.Status != firewallStatusDisabled {
 		t.Fatalf("expected disabled status, got %q", state.Status)
+	}
+}
+
+func installedTestServer(t *testing.T, runner *fakeFirewallRunner) *Server {
+	t.Helper()
+	server := newTestServerWithScheme("https", "203.0.113.10", "443", runner)
+	if err := server.SetupPortRedirect(); err != nil {
+		t.Fatalf("SetupPortRedirect: %v", err)
+	}
+	return server
+}
+
+func checkCallsFor(t *testing.T, server *Server, runner *fakeFirewallRunner) (int, int) {
+	t.Helper()
+	before := runner.checkCalls
+	missing, err := server.CheckPortRedirect()
+	if err != nil {
+		t.Fatalf("CheckPortRedirect: %v", err)
+	}
+	return runner.checkCalls - before, len(missing)
+}
+
+func TestServerCheckPortRedirectSkipsChecksWhileChainsAreUnchanged(t *testing.T) {
+	runner := newFakeFirewallRunner()
+	server := installedTestServer(t, runner)
+
+	if calls, missing := checkCallsFor(t, server, runner); calls != 6 || missing != 0 {
+		t.Fatalf("first check: expected 6 -C calls and no missing rules, got %d calls and %d missing", calls, missing)
+	}
+	if calls, missing := checkCallsFor(t, server, runner); calls != 0 || missing != 0 {
+		t.Fatalf("unchanged chains: expected no -C calls, got %d calls and %d missing", calls, missing)
+	}
+}
+
+func TestServerCheckPortRedirectDetectsRemovedRule(t *testing.T) {
+	runner := newFakeFirewallRunner()
+	server := installedTestServer(t, runner)
+	checkCallsFor(t, server, runner)
+
+	rules, _, err := server.firewallRules()
+	if err != nil {
+		t.Fatalf("firewallRules: %v", err)
+	}
+	delete(runner.installed, normalizeFirewallCommand(rules[2].command, rules[2].commandArgs("-C")))
+
+	if calls, missing := checkCallsFor(t, server, runner); calls != 6 || missing != 1 {
+		t.Fatalf("expected a full check that finds the removed rule, got %d calls and %d missing", calls, missing)
+	}
+	if calls, missing := checkCallsFor(t, server, runner); calls != 6 || missing != 1 {
+		t.Fatalf("expected the missing rule to keep forcing full checks, got %d calls and %d missing", calls, missing)
+	}
+}
+
+func TestServerCheckPortRedirectRunsFullCheckAfterInterval(t *testing.T) {
+	runner := newFakeFirewallRunner()
+	server := installedTestServer(t, runner)
+	now := time.Unix(1_800_000_000, 0)
+	server.firewallVerified.now = func() time.Time { return now }
+
+	checkCallsFor(t, server, runner)
+	now = now.Add(firewallFullCheckInterval - time.Second)
+	if calls, _ := checkCallsFor(t, server, runner); calls != 0 {
+		t.Fatalf("expected no -C calls inside the interval, got %d", calls)
+	}
+	now = now.Add(2 * time.Second)
+	if calls, _ := checkCallsFor(t, server, runner); calls != 6 {
+		t.Fatalf("expected a full check after the interval, got %d -C calls", calls)
+	}
+	now = now.Add(-time.Hour)
+	if calls, _ := checkCallsFor(t, server, runner); calls != 6 {
+		t.Fatalf("expected a full check after the clock moved backwards, got %d -C calls", calls)
+	}
+}
+
+func TestServerCheckPortRedirectFallsBackWhenListingFails(t *testing.T) {
+	runner := newFakeFirewallRunner()
+	server := installedTestServer(t, runner)
+	runner.listFailures[firewallCommandKey("iptables", []string{"-t", "nat", "-S", "PREROUTING"})] = errors.New("xtables lock held")
+
+	for range 2 {
+		if calls, missing := checkCallsFor(t, server, runner); calls != 6 || missing != 0 {
+			t.Fatalf("expected full checks while a chain cannot be listed, got %d calls and %d missing", calls, missing)
+		}
+	}
+}
+
+// changingListRunner returns a different listing on every call, as when
+// another program edits the chain while FlowGuard checks it.
+type changingListRunner struct {
+	*fakeFirewallRunner
+}
+
+func (r changingListRunner) Output(name string, args ...string) ([]byte, error) {
+	output, err := r.fakeFirewallRunner.Output(name, args...)
+	return append(output, []byte("-A INPUT -m comment --comment "+strconv.Itoa(r.listCalls)+"\n")...), err
+}
+
+func TestServerCheckPortRedirectDoesNotRecordChangingChains(t *testing.T) {
+	runner := newFakeFirewallRunner()
+	server := installedTestServer(t, runner)
+	server.runner = changingListRunner{runner}
+
+	for range 2 {
+		if calls, _ := checkCallsFor(t, server, runner); calls != 6 {
+			t.Fatalf("expected full checks while the chains keep changing, got %d -C calls", calls)
+		}
+	}
+}
+
+func TestServerSetupPortRedirectForcesFullCheck(t *testing.T) {
+	runner := newFakeFirewallRunner()
+	server := installedTestServer(t, runner)
+	checkCallsFor(t, server, runner)
+
+	if err := server.SetupPortRedirect(); err != nil {
+		t.Fatalf("SetupPortRedirect: %v", err)
+	}
+	if calls, _ := checkCallsFor(t, server, runner); calls != 6 {
+		t.Fatalf("expected a full check after setup, got %d -C calls", calls)
+	}
+}
+
+func TestManagerEvaluateFirewallListsSharedChainsOnce(t *testing.T) {
+	runner := newFakeFirewallRunner()
+	servers := []*Server{
+		newTestServerWithScheme("http", "203.0.113.10", "80", runner),
+		newTestServerWithScheme("https", "203.0.113.10", "443", runner),
+		newTestServerWithScheme("http", "203.0.113.11", "80", runner),
+	}
+	manager := &Manager{config: &Config{}, servers: servers}
+	if err := manager.setupPortRedirects(); err != nil {
+		t.Fatalf("setupPortRedirects: %v", err)
+	}
+
+	if state := manager.evaluateFirewall(true); state.Status != firewallStatusHealthy {
+		t.Fatalf("expected healthy status, got %q (%s)", state.Status, state.LastError)
+	}
+
+	checks, lists := runner.checkCalls, runner.listCalls
+	state := manager.evaluateFirewall(true)
+	if state.Status != firewallStatusHealthy || state.MissingRuleCount != 0 {
+		t.Fatalf("expected healthy status, got %q with %d missing", state.Status, state.MissingRuleCount)
+	}
+	if got := runner.checkCalls - checks; got != 0 {
+		t.Fatalf("expected no -C calls on an unchanged firewall, got %d", got)
+	}
+	if got := runner.listCalls - lists; got != 2 {
+		t.Fatalf("expected the INPUT and PREROUTING chains to be listed once each, got %d listings", got)
 	}
 }

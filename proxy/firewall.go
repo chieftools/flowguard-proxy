@@ -15,6 +15,7 @@ const (
 
 type firewallRunner interface {
 	Run(name string, args ...string) error
+	Output(name string, args ...string) ([]byte, error)
 }
 
 type firewallRuleSpec struct {
@@ -29,6 +30,10 @@ type execFirewallRunner struct{}
 
 func (execFirewallRunner) Run(name string, args ...string) error {
 	return exec.Command(name, args...).Run()
+}
+
+func (execFirewallRunner) Output(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).Output()
 }
 
 func (r firewallRuleSpec) commandArgs(verb string) []string {
@@ -126,17 +131,33 @@ func (s *Server) runFirewallRule(rule firewallRuleSpec, verb string) error {
 }
 
 func (s *Server) CheckPortRedirect() ([]firewallRuleSpec, error) {
+	return s.checkPortRedirect(newChainSnapshot())
+}
+
+// checkPortRedirect confirms the redirect rules, skipping the per-rule -C calls
+// while the chains holding them are unchanged (see firewall_snapshot.go).
+func (s *Server) checkPortRedirect(snapshot *chainSnapshot) ([]firewallRuleSpec, error) {
 	rules, _, err := s.firewallRules()
 	if err != nil || len(rules) == 0 {
 		return nil, err
 	}
 
-	missing := make([]firewallRuleSpec, 0, len(rules))
+	expected := make([]string, 0, len(rules))
+	chains := make([]chainRef, 0, len(rules))
 	for _, rule := range rules {
-		if err := s.runFirewallRule(rule, "-C"); err != nil {
-			missing = append(missing, rule)
-		}
+		expected = append(expected, ruleCheckCommand(rule.command, rule.commandArgs("-C")))
+		chains = append(chains, chainRef{command: rule.command, table: rule.table, chain: rule.chain})
 	}
+
+	missing := checkWithSnapshot(&s.firewallVerified, snapshot, s.runner, expected, chains, func() []firewallRuleSpec {
+		missing := make([]firewallRuleSpec, 0, len(rules))
+		for _, rule := range rules {
+			if err := s.runFirewallRule(rule, "-C"); err != nil {
+				missing = append(missing, rule)
+			}
+		}
+		return missing
+	})
 
 	return missing, nil
 }
@@ -153,6 +174,7 @@ func (s *Server) SetupPortRedirect() error {
 		return nil
 	}
 
+	s.firewallVerified.reset()
 	s.CleanupPortRedirect()
 
 	rules, iface, err := s.firewallRules()
@@ -177,6 +199,8 @@ func (s *Server) CleanupPortRedirect() {
 	if !s.managesRedirect() {
 		return
 	}
+
+	s.firewallVerified.reset()
 
 	rules, _, err := s.firewallRules()
 	if err != nil {

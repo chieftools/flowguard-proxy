@@ -12,13 +12,19 @@ type fakeNetworkRunner struct {
 	runs         []string
 	outputs      map[string]string
 	outputErrors map[string]error
+	// installed makes -L and -C report the mangle chain and its rules as present.
+	installed  bool
+	checkCalls int
 }
 
 func (f *fakeNetworkRunner) Run(name string, args ...string) error {
 	command := strings.Join(append([]string{name}, args...), " ")
 	f.runs = append(f.runs, command)
-	if strings.Contains(command, " -L "+transparentFirewallChain) ||
-		strings.Contains(command, " -C ") {
+	if strings.Contains(command, " -C ") {
+		f.checkCalls++
+	}
+	if !f.installed && (strings.Contains(command, " -L "+transparentFirewallChain) ||
+		strings.Contains(command, " -C ")) {
 		return errors.New("not installed")
 	}
 	return nil
@@ -156,5 +162,51 @@ func TestManagedTransparentChainLinesAcceptsIptablesOutput(t *testing.T) {
 		if !isManagedTransparentChainLine(line, 17991) {
 			t.Fatalf("expected managed iptables output %q to be accepted", line)
 		}
+	}
+}
+
+func TestTransparentNetworkCheckSkipsRuleChecksWhileChainsAreUnchanged(t *testing.T) {
+	settings := config.TransparentUpstreamSettings{
+		FWMark:       17991,
+		RouteTable:   17991,
+		RulePriority: 17991,
+	}
+	runner := &fakeNetworkRunner{installed: true, outputs: map[string]string{
+		"ip -6 rule show":                                    "17991: from all fwmark 0x4647 lookup 17991\n",
+		"ip -6 route show table 17991":                       "local default dev lo metric 1024 pref medium\n",
+		"ip6tables -t mangle -S " + transparentFirewallChain: "-N FLOWGUARD_UPSTREAM\n",
+		"ip6tables -t mangle -S OUTPUT":                      "-P OUTPUT ACCEPT\n",
+	}}
+	manager := newTransparentNetworkManager(settings, []string{"2001:db8::10"})
+	manager.runner = runner
+
+	check := func() int {
+		t.Helper()
+		before := runner.checkCalls
+		missing, err := manager.Check()
+		if err != nil {
+			t.Fatalf("Check: %v", err)
+		}
+		if len(missing) != 0 {
+			t.Fatalf("expected no missing resources, got %v", missing)
+		}
+		return runner.checkCalls - before
+	}
+
+	if calls := check(); calls != 3 {
+		t.Fatalf("first check: expected 3 -C calls, got %d", calls)
+	}
+	if calls := check(); calls != 0 {
+		t.Fatalf("unchanged chains: expected no -C calls, got %d", calls)
+	}
+
+	runner.outputs["ip6tables -t mangle -S OUTPUT"] = "-P OUTPUT ACCEPT\n-A OUTPUT -j DOCKER\n"
+	if calls := check(); calls != 3 {
+		t.Fatalf("changed chain: expected 3 -C calls, got %d", calls)
+	}
+
+	manager.Cleanup()
+	if calls := check(); calls != 3 {
+		t.Fatalf("after cleanup: expected 3 -C calls, got %d", calls)
 	}
 }

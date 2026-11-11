@@ -48,6 +48,29 @@ type transparentNetworkManager struct {
 	originalSrcMark *string
 	lockFile        *os.File
 	active          bool
+	verified        map[int]*verifiedFirewallState
+}
+
+// verifiedFamily returns the check state of one address family. The caller
+// holds m.mu.
+func (m *transparentNetworkManager) verifiedFamily(family int) *verifiedFirewallState {
+	if m.verified == nil {
+		m.verified = make(map[int]*verifiedFirewallState)
+	}
+	state, ok := m.verified[family]
+	if !ok {
+		state = &verifiedFirewallState{}
+		m.verified[family] = state
+	}
+	return state
+}
+
+// resetVerified forces the next check to confirm every rule. The caller holds
+// m.mu.
+func (m *transparentNetworkManager) resetVerified() {
+	for _, state := range m.verified {
+		state.reset()
+	}
 }
 
 func newTransparentNetworkManager(settings config.TransparentUpstreamSettings, bindAddrs []string) *transparentNetworkManager {
@@ -62,6 +85,7 @@ func newTransparentNetworkManager(settings config.TransparentUpstreamSettings, b
 func (m *transparentNetworkManager) Setup() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.resetVerified()
 	if m.active {
 		return nil
 	}
@@ -107,6 +131,7 @@ func (m *transparentNetworkManager) Setup() error {
 func (m *transparentNetworkManager) Cleanup() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.resetVerified()
 	m.rollbackLocked()
 	m.active = false
 }
@@ -145,6 +170,7 @@ func (m *transparentNetworkManager) Check() ([]string, error) {
 func (m *transparentNetworkManager) Repair() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.resetVerified()
 	if !m.active || m.lockFile == nil {
 		return fmt.Errorf("transparent upstream networking is not active")
 	}
@@ -387,32 +413,41 @@ func (m *transparentNetworkManager) checkFamily(family int) ([]string, error) {
 		routePrefix = "-6"
 		routeCIDR = "::/0"
 	}
-	var missing []string
-	if err := m.runner.Run(binary, "-t", "mangle", "-L", transparentFirewallChain); err != nil {
-		missing = append(missing, binary+" mangle chain")
-	} else {
-		mark := strconv.FormatUint(uint64(m.settings.FWMark), 10)
-		expectedRules := [][]string{
-			{"-m", "mark", "--mark", mark, "-j", "CONNMARK", "--save-mark"},
-			{"-m", "connmark", "--mark", mark, "-j", "CONNMARK", "--restore-mark"},
-		}
-		for _, args := range expectedRules {
-			checkArgs := append([]string{"-t", "mangle", "-C", transparentFirewallChain}, args...)
-			if err := m.runner.Run(binary, checkArgs...); err != nil {
-				missing = append(missing, binary+" mark rule")
-			}
-		}
-		jumpArgs := []string{
+	mark := strconv.FormatUint(uint64(m.settings.FWMark), 10)
+	checks := [][]string{
+		{"-t", "mangle", "-C", transparentFirewallChain, "-m", "mark", "--mark", mark, "-j", "CONNMARK", "--save-mark"},
+		{"-t", "mangle", "-C", transparentFirewallChain, "-m", "connmark", "--mark", mark, "-j", "CONNMARK", "--restore-mark"},
+		{
 			"-t", "mangle", "-C", "OUTPUT", "-j", transparentFirewallChain,
 			"-m", "comment", "--comment", "FlowGuard transparent upstream",
-		}
-		if err := m.runner.Run(binary, jumpArgs...); err != nil {
-			missing = append(missing, binary+" OUTPUT jump")
-		}
+		},
 	}
+	expected := make([]string, 0, len(checks))
+	for _, args := range checks {
+		expected = append(expected, ruleCheckCommand(binary, args))
+	}
+	chains := []chainRef{
+		{command: binary, table: "mangle", chain: transparentFirewallChain},
+		{command: binary, table: "mangle", chain: "OUTPUT"},
+	}
+	missing := checkWithSnapshot(m.verifiedFamily(family), newChainSnapshot(), m.runner, expected, chains, func() []string {
+		if err := m.runner.Run(binary, "-t", "mangle", "-L", transparentFirewallChain); err != nil {
+			return []string{binary + " mangle chain"}
+		}
+		var missing []string
+		for i, args := range checks {
+			if err := m.runner.Run(binary, args...); err != nil {
+				if i < 2 {
+					missing = append(missing, binary+" mark rule")
+				} else {
+					missing = append(missing, binary+" OUTPUT jump")
+				}
+			}
+		}
+		return missing
+	})
 
 	priority := strconv.FormatUint(uint64(m.settings.RulePriority), 10)
-	mark := strconv.FormatUint(uint64(m.settings.FWMark), 10)
 	table := strconv.FormatUint(uint64(m.settings.RouteTable), 10)
 	rules, err := m.runner.Output("ip", routePrefix, "rule", "show")
 	if err != nil {

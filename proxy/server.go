@@ -37,6 +37,7 @@ const (
 type Server struct {
 	config               *ServerConfig
 	runner               firewallRunner
+	firewallVerified     verifiedFirewallState
 	udpConn              net.PacketConn
 	udpOnce              sync.Once
 	listener             net.Listener
