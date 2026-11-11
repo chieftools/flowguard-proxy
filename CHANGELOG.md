@@ -9,6 +9,8 @@ release.
 
 ## [Unreleased]
 
+## [0.33.3]
+
 ### Changed
 
 - The firewall monitor now lists each iptables chain once per check and only re-checks FlowGuard's rules one by one when a chain changed, or every 10 minutes. It used to run `iptables -C` for every rule on every check (every 30 seconds by default), and on iptables-legacy each of those calls writes a record to the kernel audit log. On a host with five address pairs that was about 100,000 audit records a day.
@@ -829,7 +831,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.33.2...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.33.3...HEAD
+[0.33.3]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.3
 [0.33.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.2
 [0.33.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.1
 [0.33.0]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.0
