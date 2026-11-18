@@ -9,6 +9,8 @@ release.
 
 ## [Unreleased]
 
+## [0.33.4]
+
 ### Added
 
 - `flowguard network inspect` now warns when a public address on the host is not a bind address. FlowGuard only redirects traffic for its bind addresses, so a web server listening on a wildcard address still accepts connections to the others directly, bypassing FlowGuard. The suggestion includes the `flowguard setup --bind` command that adds them.
@@ -836,7 +838,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.33.3...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.33.4...HEAD
+[0.33.4]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.4
 [0.33.3]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.3
 [0.33.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.2
 [0.33.1]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.1
