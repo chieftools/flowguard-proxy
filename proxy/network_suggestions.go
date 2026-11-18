@@ -167,6 +167,18 @@ func inspectReservedIPAnchor(bindAddrs []string) *ReservedIPAnchor {
 func networkSuggestions(inspection NetworkInspection, includeBind bool) []NetworkSuggestion {
 	var suggestions []NetworkSuggestion
 	transparent := inspection.Mode == config.UpstreamClientIPModeTransparent
+
+	if len(inspection.UncoveredAddresses) > 0 {
+		bindAddrs := append(append([]string(nil), inspection.BindAddresses...), inspection.UncoveredAddresses...)
+		suggestions = append(suggestions, NetworkSuggestion{
+			Summary: fmt.Sprintf(
+				"FlowGuard does not listen on the public address(es) %s. If the web server accepts connections on them, for example with a wildcard listen, that traffic bypasses FlowGuard. Listen on them too, or restrict the web server to the bind addresses.",
+				strings.Join(inspection.UncoveredAddresses, ", "),
+			),
+			Command: formatSetupCommand(bindAddrs, nil),
+		})
+	}
+
 	hasIPv6 := slices.ContainsFunc(inspection.BindAddresses, func(raw string) bool {
 		addr, err := netip.ParseAddr(raw)
 		return err == nil && addr.Unmap().Is6()

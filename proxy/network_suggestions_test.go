@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"net"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,6 +32,31 @@ func stubReservedIPAnchor(t *testing.T, anchor *ReservedIPAnchor, local []string
 		return *anchor, true
 	}
 	localInterfaceAddresses = func() ([]string, error) { return local, nil }
+}
+
+// stubInterfaceAddresses replaces the machine's interface addresses, and the
+// public addresses that bind address auto-detection picks from them, with
+// addresses on eth0.
+func stubInterfaceAddresses(t *testing.T, addresses []string) {
+	t.Helper()
+	oldPublic, oldAll := publicInterfaceAddresses, interfaceAddresses
+	t.Cleanup(func() { publicInterfaceAddresses, interfaceAddresses = oldPublic, oldAll })
+	interfaceAddresses = func() ([]InterfaceAddress, error) {
+		stubbed := make([]InterfaceAddress, 0, len(addresses))
+		for _, address := range addresses {
+			stubbed = append(stubbed, InterfaceAddress{Address: address, Interface: "eth0"})
+		}
+		return stubbed, nil
+	}
+	publicInterfaceAddresses = func() ([]string, error) {
+		public := slices.DeleteFunc(slices.Clone(addresses), func(address string) bool {
+			return !isPublicIP(net.ParseIP(address))
+		})
+		if len(public) == 0 {
+			return nil, ErrNoPublicIPAddresses
+		}
+		return public, nil
+	}
 }
 
 func transparentTestConfig(pairs ...config.AddressPair) *config.Config {
@@ -93,6 +120,7 @@ func TestInspectNetworkSuggestions(t *testing.T) {
 		bindAddrs   []string
 		anchor      *ReservedIPAnchor
 		local       []string
+		public      []string // addresses on the machine's interfaces
 		wantCommand []string
 		wantSummary string
 	}{
@@ -157,6 +185,34 @@ func TestInspectNetworkSuggestions(t *testing.T) {
 			wantCommand: []string{"flowguard setup --bind 192.0.2.10,2001:db8::10"},
 		},
 		{
+			name:        "public addresses outside the bind addresses bypass FlowGuard",
+			cfg:         &config.Config{},
+			bindAddrs:   []string{"192.0.2.10"},
+			public:      []string{"192.0.2.10", "192.0.2.30", "2001:db8::30"},
+			wantCommand: []string{"flowguard setup --bind 192.0.2.10,192.0.2.30,2001:db8::30"},
+			wantSummary: "does not listen on the public address(es) 192.0.2.30, 2001:db8::30",
+		},
+		{
+			name:        "bind addresses match public addresses in any notation",
+			cfg:         &config.Config{},
+			bindAddrs:   []string{"192.0.2.10", "[2001:DB8::10]"},
+			public:      []string{"192.0.2.10", "2001:db8::10"},
+			wantCommand: nil,
+		},
+		{
+			name:        "carrier-grade NAT addresses are not treated as public",
+			cfg:         &config.Config{},
+			bindAddrs:   []string{"192.0.2.10"},
+			public:      []string{"192.0.2.10", "100.101.102.103"},
+			wantCommand: nil,
+		},
+		{
+			name:        "auto-detected bind addresses cover every public address",
+			cfg:         &config.Config{},
+			public:      []string{"192.0.2.10", "192.0.2.30"},
+			wantCommand: nil,
+		},
+		{
 			name:        "header mode ignores incomplete pairing",
 			cfg:         &config.Config{},
 			bindAddrs:   []string{"192.0.2.10", "192.0.2.20", "2001:db8::10"},
@@ -167,6 +223,7 @@ func TestInspectNetworkSuggestions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stubReservedIPAnchor(t, tt.anchor, tt.local)
+			stubInterfaceAddresses(t, tt.public)
 
 			inspection, err := InspectNetwork(tt.cfg, tt.bindAddrs)
 			if err != nil {

@@ -27,10 +27,17 @@ type NetworkInspection struct {
 	Diagnostics         []string
 	TransparentWarnings []string
 	ReservedIPAnchor    *ReservedIPAnchor
-	Suggestions         []NetworkSuggestion
-	HeaderReady         bool
-	TransparentReady    bool
-	Ready               bool
+	// UncoveredAddresses are public addresses on this machine that are not
+	// bind addresses, so connections to them never pass through FlowGuard.
+	UncoveredAddresses []string
+	// NonPublicAddresses are the machine's other addresses that are not bind
+	// addresses. They are usually unreachable from the internet, but the
+	// report lists them so the user can confirm that for themselves.
+	NonPublicAddresses []NonPublicAddress
+	Suggestions        []NetworkSuggestion
+	HeaderReady        bool
+	TransparentReady   bool
+	Ready              bool
 }
 
 func InspectNetwork(cfg *config.Config, bindAddrs []string) (NetworkInspection, error) {
@@ -42,7 +49,7 @@ func InspectNetwork(cfg *config.Config, bindAddrs []string) (NetworkInspection, 
 	autoDetected := len(bindAddrs) == 0
 	if len(bindAddrs) == 0 {
 		var err error
-		bindAddrs, err = DetectPublicIPAddresses()
+		bindAddrs, err = publicInterfaceAddresses()
 		if err != nil {
 			return NetworkInspection{}, err
 		}
@@ -80,6 +87,9 @@ func InspectNetwork(cfg *config.Config, bindAddrs []string) (NetworkInspection, 
 			inspection.Ready = false
 		}
 		inspection.ReservedIPAnchor = inspectReservedIPAnchor(inspection.BindAddresses)
+		inspection.UncoveredAddresses, inspection.NonPublicAddresses = inspectUnboundAddresses(
+			inspection.BindAddresses, inspection.ReservedIPAnchor,
+		)
 		inspection.Suggestions = networkSuggestions(inspection, unsavedBindAddrs)
 		return inspection, nil
 	}
@@ -413,6 +423,18 @@ func FormatNetworkInspection(inspection NetworkInspection) string {
 	var output strings.Builder
 	fmt.Fprintf(&output, "Configured upstream client IP mode: %s\n", inspection.Mode)
 	fmt.Fprintf(&output, "Bind addresses: %s\n", strings.Join(inspection.BindAddresses, ", "))
+	if len(inspection.NonPublicAddresses) > 0 {
+		output.WriteString("Non-public addresses FlowGuard does not listen on:\n")
+		for _, address := range inspection.NonPublicAddresses {
+			fmt.Fprintf(&output, "  %s on %s (%s)", address.Address, address.Interface, address.Kind)
+			if address.Hint != "" {
+				fmt.Fprintf(&output, ": %s", address.Hint)
+			}
+			output.WriteString("\n")
+		}
+		output.WriteString("  The internet usually cannot reach these, but if the web server listens on a wildcard address,\n")
+		output.WriteString("  connections to them bypass FlowGuard. Check that only clients you trust can reach them.\n")
+	}
 	output.WriteString("\nHeader mode")
 	if inspection.Mode == config.UpstreamClientIPModeHeaders {
 		output.WriteString(" (configured)")

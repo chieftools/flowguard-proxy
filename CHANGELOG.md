@@ -9,6 +9,11 @@ release.
 
 ## [Unreleased]
 
+### Added
+
+- `flowguard network inspect` now warns when a public address on the host is not a bind address. FlowGuard only redirects traffic for its bind addresses, so a web server listening on a wildcard address still accepts connections to the others directly, bypassing FlowGuard. The suggestion includes the `flowguard setup --bind` command that adds them.
+- `flowguard network inspect` now lists the host's non-public addresses that FlowGuard does not listen on (private, carrier-grade NAT, and IPv6 unique local), with the interface that holds each and a hint when it looks like Tailscale, Docker, WireGuard, ZeroTier, a VM bridge, or a DigitalOcean reserved IP anchor. The internet usually cannot reach them, but a web server listening on a wildcard address accepts connections to them without FlowGuard, so you can check who can reach them.
+
 ## [0.33.3]
 
 ### Changed
