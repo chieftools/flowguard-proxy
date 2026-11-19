@@ -62,7 +62,7 @@ func inspectUnboundAddresses(bindAddrs []string, anchor *ReservedIPAnchor) ([]st
 
 	bound := make(map[netip.Addr]bool, len(bindAddrs))
 	for _, raw := range bindAddrs {
-		if addr, err := netip.ParseAddr(strings.Trim(raw, "[]")); err == nil {
+		if addr, err := netip.ParseAddr(raw); err == nil {
 			bound[addr.Unmap()] = true
 		}
 	}

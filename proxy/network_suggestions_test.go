@@ -195,7 +195,7 @@ func TestInspectNetworkSuggestions(t *testing.T) {
 		{
 			name:        "bind addresses match public addresses in any notation",
 			cfg:         &config.Config{},
-			bindAddrs:   []string{"192.0.2.10", "[2001:DB8::10]"},
+			bindAddrs:   []string{"192.0.2.10", "2001:DB8::10"},
 			public:      []string{"192.0.2.10", "2001:db8::10"},
 			wantCommand: nil,
 		},
