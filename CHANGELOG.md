@@ -9,6 +9,8 @@ release.
 
 ## [Unreleased]
 
+## [0.33.5]
+
 The 0.33.4 release failed its build and was never published, so this release ships its changes.
 
 ### Added
@@ -847,7 +849,8 @@ _No source changes; this release republishes 0.3.5._
 
 _Initial release._
 
-[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.33.4...HEAD
+[Unreleased]: https://github.com/chieftools/flowguard-proxy/compare/v0.33.5...HEAD
+[0.33.5]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.5
 [0.33.4]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.4
 [0.33.3]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.3
 [0.33.2]: https://github.com/chieftools/flowguard-proxy/releases/tag/v0.33.2
