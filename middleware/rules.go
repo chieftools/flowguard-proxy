@@ -558,54 +558,19 @@ func isIPTargetMatch(operator string) bool {
 }
 
 func (rm *RulesMiddleware) matchesIPValue(value string, match *config.MatchCondition) bool {
-	ip := net.ParseIP(value)
-	if ip == nil {
+	ip, err := netip.ParseAddr(value)
+	if err != nil || ip.Zone() != "" {
+		return false
+	}
+	if match.Value == "" && len(match.Values) == 0 {
 		return false
 	}
 
-	targets := ipMatchTargets(match)
-	if len(targets) == 0 {
-		return false
-	}
-
-	matched := ipMatchesAnyTarget(ip, targets)
+	matched := match.IPTargets().Contains(ip)
 	if match.Match == "not-equals" || match.Match == "not-in" {
 		return !matched
 	}
 	return matched
-}
-
-func ipMatchTargets(match *config.MatchCondition) []string {
-	targets := make([]string, 0, len(match.Values)+1)
-	if match.Value != "" {
-		targets = append(targets, match.Value)
-	}
-	targets = append(targets, match.Values...)
-	return targets
-}
-
-func ipMatchesAnyTarget(ip net.IP, targets []string) bool {
-	for _, target := range targets {
-		if ipMatchesTarget(ip, target) {
-			return true
-		}
-	}
-	return false
-}
-
-func ipMatchesTarget(ip net.IP, target string) bool {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return false
-	}
-
-	if strings.Contains(target, "/") {
-		_, network, err := net.ParseCIDR(target)
-		return err == nil && network.Contains(ip)
-	}
-
-	targetIP := net.ParseIP(target)
-	return targetIP != nil && targetIP.Equal(ip)
 }
 
 // matchesStringValue checks if a string value matches the given criteria

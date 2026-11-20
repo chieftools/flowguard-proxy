@@ -9,8 +9,9 @@ release.
 
 ## [Unreleased]
 
-### Changed
+### Performance
 
+- Rules that match the client or proxy IP against a list of addresses and CIDRs now take the same time however long the list is. Before, every request parsed each listed address again, which took about 70 µs per request for a rule with 1,000 CIDRs.
 - Certificate lookups during the TLS handshake now take the same time no matter how many hostnames are loaded. Before, every handshake checked each loaded hostname for a matching wildcard, which slowed handshakes on hosts with thousands of hostnames.
 
 ### Fixed

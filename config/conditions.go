@@ -33,6 +33,25 @@ func (m *Manager) compileConditionRegex(cond *RuleConditions) {
 	}
 }
 
+// compileConditionIPTargets recursively builds the target sets of ip and
+// proxy-ip matches, so requests are not matched against the raw strings.
+func compileConditionIPTargets(cond *RuleConditions) {
+	for i := range cond.Matches {
+		match := &cond.Matches[i]
+		if match.Type != "ip" && match.Type != "proxy-ip" {
+			continue
+		}
+		switch match.Match {
+		case "equals", "not-equals", "in", "not-in":
+			match.ipTargets = buildIPTargets(match)
+		}
+	}
+
+	for i := range cond.Groups {
+		compileConditionIPTargets(&cond.Groups[i])
+	}
+}
+
 // normalizeHostMatchValues recursively normalizes the values of domain and
 // registerable-domain matches. Request hosts are normalized before matching
 // (see normalization.Host), so configured values must be too: exact matches

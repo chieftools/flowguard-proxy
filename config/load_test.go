@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"net/netip"
+	"testing"
+)
 
 func TestComputeSortedRules(t *testing.T) {
 	manager := &Manager{}
@@ -350,5 +353,55 @@ func TestLoadRejectsZeroChallengeTokenTTL(t *testing.T) {
 	}
 	if err.Error() != "challenges.pow.challenge_ttl_seconds must be greater than 0" {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadBuildsIPMatchTargets(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "rules": {
+    "ip-rule": {
+      "action": "block",
+      "conditions": {
+        "matches": [
+          {"type": "ip", "match": "in", "values": ["203.0.113.0/24", "2001:db8::1"]},
+          {"type": "path", "match": "in", "values": ["/a"]}
+        ],
+        "groups": [
+          {"matches": [{"type": "proxy-ip", "match": "equals", "value": "198.51.100.7"}]}
+        ]
+      }
+    }
+  }
+}`)
+
+	manager, err := loadTestManager(configPath)
+	if err != nil {
+		t.Fatalf("load manager: %v", err)
+	}
+
+	conditions := manager.config.Rules["ip-rule"].Conditions
+	ipMatch := conditions.Matches[0]
+	proxyIPMatch := conditions.Groups[0].Matches[0]
+	if ipMatch.ipTargets == nil || proxyIPMatch.ipTargets == nil {
+		t.Fatal("expected ip and proxy-ip match targets to be built at load")
+	}
+	if conditions.Matches[1].ipTargets != nil {
+		t.Fatal("expected no IP targets for a path match")
+	}
+
+	for _, test := range []struct {
+		match *MatchCondition
+		addr  string
+		want  bool
+	}{
+		{&ipMatch, "203.0.113.10", true},
+		{&ipMatch, "2001:db8::1", true},
+		{&ipMatch, "2001:db8::2", false},
+		{&proxyIPMatch, "198.51.100.7", true},
+		{&proxyIPMatch, "198.51.100.8", false},
+	} {
+		if got := test.match.IPTargets().Contains(netip.MustParseAddr(test.addr)); got != test.want {
+			t.Fatalf("IPTargets().Contains(%s) = %v, want %v", test.addr, got, test.want)
+		}
 	}
 }

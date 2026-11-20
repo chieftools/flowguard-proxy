@@ -51,6 +51,7 @@ func (m *Manager) Load() error {
 				}
 				normalizeHostMatchValues(rule.Conditions)
 				m.compileConditionRegex(rule.Conditions)
+				compileConditionIPTargets(rule.Conditions)
 			}
 		}
 	}

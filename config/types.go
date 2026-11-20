@@ -1,8 +1,10 @@
 package config
 
 import (
+	"net/netip"
 	"regexp"
 
+	"go.chief.tools/flowguard-proxy/iplist"
 	"go.chief.tools/flowguard-proxy/pusher"
 )
 
@@ -201,6 +203,7 @@ type MatchCondition struct {
 	Confidence      int      `json:"confidence,omitempty"` // Minimum confidence level (0-100) for IP list matches
 	RawMatch        bool     `json:"raw_match,omitempty"`  // Skip normalization for path matching
 	compiledRegex   *regexp.Regexp
+	ipTargets       *iplist.Set
 }
 
 type RuleActionChallengeConfig struct {
@@ -218,6 +221,28 @@ type RuleActionChallengeConfig struct {
 // GetCompiledRegex returns the compiled regex for a MatchCondition
 func (m *MatchCondition) GetCompiledRegex() *regexp.Regexp {
 	return m.compiledRegex
+}
+
+// IPTargets returns the IP addresses and CIDRs in Value and Values as a set.
+// Conditions loaded from the configuration file have it built once at load;
+// others build it on each call.
+func (m *MatchCondition) IPTargets() *iplist.Set {
+	if m.ipTargets != nil {
+		return m.ipTargets
+	}
+
+	return buildIPTargets(m)
+}
+
+func buildIPTargets(m *MatchCondition) *iplist.Set {
+	prefixes := make([]netip.Prefix, 0, len(m.Values)+1)
+	for _, target := range append([]string{m.Value}, m.Values...) {
+		if prefix, err := iplist.ParsePrefix(target); err == nil {
+			prefixes = append(prefixes, prefix)
+		}
+	}
+
+	return iplist.NewSet(prefixes)
 }
 
 // SetCompiledRegexInternal sets the compiled regex (for testing)
