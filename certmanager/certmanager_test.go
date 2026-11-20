@@ -9,8 +9,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -191,9 +194,11 @@ func TestGetTLSConfigHandshakePolicy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			serverConfig := (&Manager{}).GetTlsConfig()
-			serverConfig.GetCertificate = nil
-			serverConfig.Certificates = []tls.Certificate{*tt.certificate}
+			manager := &Manager{hostnameCache: make(map[string][]*certificateWithMetadata)}
+			manager.hostnameCache["edge.test"] = []*certificateWithMetadata{
+				manager.extractCertificateMetadata(tt.certificate, "edge.test.pem", []string{"edge.test"}),
+			}
+			serverConfig := manager.GetTlsConfig()
 
 			clientConfig := &tls.Config{
 				CipherSuites:       tt.cipherSuites,
@@ -250,6 +255,87 @@ func performTLSHandshake(t *testing.T, serverConfig, clientConfig *tls.Config) (
 	clientErr := client.Handshake()
 	serverErr := <-serverResult
 	return client.ConnectionState(), clientErr, serverErr
+}
+
+func TestGetTLSConfigRejectsSessionResumptionAfterCertificateRemoval(t *testing.T) {
+	tests := []struct {
+		name    string
+		version uint16
+	}{
+		{name: "TLS 1.2", version: tls.VersionTLS12},
+		{name: "TLS 1.3", version: tls.VersionTLS13},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			certDir := t.TempDir()
+			certFile := filepath.Join(certDir, "tenant.test.pem")
+			writeCombinedPEM(t, certFile, createSelfSignedRSACert(t, "tenant.test", time.Now().Add(time.Hour)))
+
+			manager := &Manager{config: Config{CertPath: certDir}}
+			manager.loadAllCertificates(false)
+			serverConfig := manager.GetTlsConfig()
+
+			clientConfig := &tls.Config{
+				ClientSessionCache: tls.NewLRUClientSessionCache(1),
+				InsecureSkipVerify: true,
+				MinVersion:         tt.version,
+				MaxVersion:         tt.version,
+				ServerName:         "tenant.test",
+			}
+
+			if state, err := performLoopbackTLSHandshake(t, serverConfig, clientConfig); err != nil || state.DidResume {
+				t.Fatalf("first handshake: resumed %v, error %v; want a full handshake", state.DidResume, err)
+			}
+			if state, err := performLoopbackTLSHandshake(t, serverConfig, clientConfig); err != nil || !state.DidResume {
+				t.Fatalf("second handshake: resumed %v, error %v; want a resumed session", state.DidResume, err)
+			}
+
+			if err := os.Remove(certFile); err != nil {
+				t.Fatalf("remove certificate: %v", err)
+			}
+			manager.loadAllCertificates(false)
+
+			if state, err := performLoopbackTLSHandshake(t, serverConfig, clientConfig); err == nil {
+				t.Fatalf("handshake after certificate removal succeeded (resumed %v); want it rejected", state.DidResume)
+			}
+		})
+	}
+}
+
+// performLoopbackTLSHandshake completes a handshake over TCP and reads one
+// byte from the server, so the client also processes TLS 1.3 session tickets.
+func performLoopbackTLSHandshake(t *testing.T, serverConfig, clientConfig *tls.Config) (tls.ConnectionState, error) {
+	t.Helper()
+
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", serverConfig)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		_, _ = conn.Write([]byte{1})
+	}()
+
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", listener.Addr().String(), clientConfig)
+	if err != nil {
+		return tls.ConnectionState{}, err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	if _, err := io.ReadFull(conn, make([]byte, 1)); err != nil {
+		return conn.ConnectionState(), err
+	}
+
+	return conn.ConnectionState(), nil
 }
 
 // Create a CA-signed ECDSA certificate

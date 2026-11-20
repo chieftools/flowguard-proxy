@@ -109,8 +109,9 @@ func (cm *Manager) NginxConfigLoaded() bool {
 // GetTlsConfig returns the tls configuration for use in servers
 func (cm *Manager) GetTlsConfig() *tls.Config {
 	return &tls.Config{
-		GetCertificate: cm.getCertificate,
-		MinVersion:     tls.VersionTLS12,
+		GetCertificate:     cm.getCertificate,
+		GetConfigForClient: cm.rejectHostnameWithoutCertificate,
+		MinVersion:         tls.VersionTLS12,
 		// NCSC TLS Security Guidelines 2025-05 classify CBC as phase out and
 		// SHA-1 as insufficient. TLS 1.3 cipher suites remain managed by Go.
 		CipherSuites: []uint16{
@@ -1041,6 +1042,18 @@ func (cm *Manager) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate,
 	}
 
 	return nil, fmt.Errorf("no certificate found for %s", hello.ServerName)
+}
+
+// rejectHostnameWithoutCertificate fails the handshake when no certificate
+// covers the requested hostname. It runs before session resumption, which
+// skips GetCertificate, so a client cannot resume a session for a hostname
+// whose certificate has since been removed.
+func (cm *Manager) rejectHostnameWithoutCertificate(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+	if cm.GetCertificateForHostname(hello.ServerName) == nil {
+		return nil, fmt.Errorf("no certificate found for %s", hello.ServerName)
+	}
+
+	return nil, nil
 }
 
 func (cm *Manager) watchCertificates() {

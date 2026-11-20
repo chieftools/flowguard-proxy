@@ -9,6 +9,10 @@ release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed FlowGuard accepting a resumed TLS session for a hostname whose certificate was removed, for up to 7 days. A browser that had visited the site, such as a tenant deleted in Ploi, got a `Bad Gateway` error from FlowGuard instead of the connection error it gets from the web server. FlowGuard now rejects the connection the same way it rejects one for a hostname it never had a certificate for.
+
 ## [0.33.5]
 
 The 0.33.4 release failed its build and was never published, so this release ships its changes.
