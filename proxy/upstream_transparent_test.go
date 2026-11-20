@@ -538,6 +538,69 @@ func TestTransparentTransportPoolUsesEphemeralTransportWhenAllEntriesActive(t *t
 	pool.release(active)
 }
 
+func TestTransparentTransportPoolExpiresIdleEntriesButNotInFlightOnes(t *testing.T) {
+	pool := newTransparentTransportPool(10, time.Minute, 1)
+	pool.newTransport = func(_ transparentTransportKey, disableKeepAlives bool) (*http.Transport, error) {
+		return &http.Transport{DisableKeepAlives: disableKeepAlives}, nil
+	}
+	t.Cleanup(pool.Close)
+
+	longRunning := transparentTestKey("192.0.2.1")
+	_, active, _, _ := pool.acquire(longRunning)
+	for _, source := range []string{"192.0.2.2", "192.0.2.3"} {
+		_, entry, _, _ := pool.acquire(transparentTestKey(source))
+		pool.release(entry)
+	}
+
+	evictAt := func(at time.Time) {
+		pool.mu.Lock()
+		defer pool.mu.Unlock()
+		pool.evictExpiredLocked(at)
+	}
+
+	evictAt(time.Now().Add(2 * time.Minute))
+	if len(pool.entries) != 1 || pool.entries[longRunning] == nil {
+		t.Fatalf("pooled entries = %d, want only the entry with a request in flight", len(pool.entries))
+	}
+
+	pool.release(active)
+	evictAt(time.Now().Add(30 * time.Second))
+	if pool.entries[longRunning] == nil {
+		t.Fatal("expected a recently released entry to be kept")
+	}
+	evictAt(time.Now().Add(2 * time.Minute))
+	if len(pool.entries) != 0 || pool.idle.Len() != 0 {
+		t.Fatalf("pooled entries = %d, idle = %d, want the released entry to expire", len(pool.entries), pool.idle.Len())
+	}
+}
+
+func TestTransparentTransportPoolEvictsByLastUse(t *testing.T) {
+	pool := newTransparentTransportPool(2, time.Hour, 1)
+	pool.newTransport = func(_ transparentTransportKey, disableKeepAlives bool) (*http.Transport, error) {
+		return &http.Transport{DisableKeepAlives: disableKeepAlives}, nil
+	}
+	t.Cleanup(pool.Close)
+
+	use := func(source string) {
+		_, entry, ephemeral, err := pool.acquire(transparentTestKey(source))
+		if err != nil || ephemeral {
+			t.Fatalf("acquire %s: ephemeral=%v err=%v", source, ephemeral, err)
+		}
+		pool.release(entry)
+	}
+	use("192.0.2.1")
+	use("192.0.2.2")
+	use("192.0.2.1")
+	use("192.0.2.3")
+
+	if _, ok := pool.entries[transparentTestKey("192.0.2.2")]; ok {
+		t.Fatal("expected the least recently used entry to be evicted")
+	}
+	if _, ok := pool.entries[transparentTestKey("192.0.2.1")]; !ok {
+		t.Fatal("expected the reused entry to be kept")
+	}
+}
+
 func transparentTestKey(source string) transparentTransportKey {
 	addr, _ := netip.ParseAddr(source)
 	return transparentTransportKey{

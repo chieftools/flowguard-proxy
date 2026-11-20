@@ -32,12 +32,17 @@ type transparentTransportEntry struct {
 	transport *http.Transport
 	lastUsed  time.Time
 	inFlight  int
+	idle      *list.Element // Position in the pool's idle list, nil while requests are in flight
 }
 
+// transparentTransportPool keeps a transport per client source address. Only
+// entries without requests in flight are in the idle list, ordered from most
+// to least recently used, so expiry and eviction work from its back without
+// visiting the other entries.
 type transparentTransportPool struct {
 	mu           sync.Mutex
-	entries      map[transparentTransportKey]*list.Element
-	lru          *list.List
+	entries      map[transparentTransportKey]*transparentTransportEntry
+	idle         *list.List
 	maxEntries   int
 	idleTimeout  time.Duration
 	fwmark       uint32
@@ -47,8 +52,8 @@ type transparentTransportPool struct {
 
 func newTransparentTransportPool(maxEntries int, idleTimeout time.Duration, fwmark uint32) *transparentTransportPool {
 	return &transparentTransportPool{
-		entries:     make(map[transparentTransportKey]*list.Element),
-		lru:         list.New(),
+		entries:     make(map[transparentTransportKey]*transparentTransportEntry),
+		idle:        list.New(),
 		maxEntries:  maxEntries,
 		idleTimeout: idleTimeout,
 		fwmark:      fwmark,
@@ -78,11 +83,13 @@ func (p *transparentTransportPool) acquire(key transparentTransportKey) (*http.T
 		return nil, nil, false, fmt.Errorf("transparent upstream transport pool is closed")
 	}
 	p.evictExpiredLocked(now)
-	if element, ok := p.entries[key]; ok {
-		entry := element.Value.(*transparentTransportEntry)
+	if entry, ok := p.entries[key]; ok {
+		if entry.idle != nil {
+			p.idle.Remove(entry.idle)
+			entry.idle = nil
+		}
 		entry.inFlight++
 		entry.lastUsed = now
-		p.lru.MoveToFront(element)
 		return entry.transport, entry, false, nil
 	}
 
@@ -110,8 +117,7 @@ func (p *transparentTransportPool) acquire(key transparentTransportKey) (*http.T
 		lastUsed:  now,
 		inFlight:  1,
 	}
-	element := p.lru.PushFront(entry)
-	p.entries[key] = element
+	p.entries[key] = entry
 	return transport, entry, false, nil
 }
 
@@ -122,37 +128,42 @@ func (p *transparentTransportPool) release(entry *transparentTransportEntry) {
 		entry.inFlight--
 	}
 	entry.lastUsed = time.Now()
+	if entry.inFlight == 0 && entry.idle == nil && !p.closed && p.entries[entry.key] == entry {
+		entry.idle = p.idle.PushFront(entry)
+	}
 }
 
+// evictExpiredLocked removes idle entries unused for the idle timeout. The
+// idle list is ordered by last use, so it stops at the first recent entry.
 func (p *transparentTransportPool) evictExpiredLocked(now time.Time) {
 	if p.idleTimeout <= 0 {
 		return
 	}
-	for element := p.lru.Back(); element != nil; {
-		previous := element.Prev()
+	for element := p.idle.Back(); element != nil; element = p.idle.Back() {
 		entry := element.Value.(*transparentTransportEntry)
-		if entry.inFlight == 0 && now.Sub(entry.lastUsed) >= p.idleTimeout {
-			p.removeLocked(element)
+		if now.Sub(entry.lastUsed) < p.idleTimeout {
+			return
 		}
-		element = previous
+		p.removeLocked(entry)
 	}
 }
 
+// evictOldestInactiveLocked removes the least recently used idle entry.
 func (p *transparentTransportPool) evictOldestInactiveLocked() bool {
-	for element := p.lru.Back(); element != nil; element = element.Prev() {
-		entry := element.Value.(*transparentTransportEntry)
-		if entry.inFlight == 0 {
-			p.removeLocked(element)
-			return true
-		}
+	element := p.idle.Back()
+	if element == nil {
+		return false
 	}
-	return false
+	p.removeLocked(element.Value.(*transparentTransportEntry))
+	return true
 }
 
-func (p *transparentTransportPool) removeLocked(element *list.Element) {
-	entry := element.Value.(*transparentTransportEntry)
+func (p *transparentTransportPool) removeLocked(entry *transparentTransportEntry) {
 	delete(p.entries, entry.key)
-	p.lru.Remove(element)
+	if entry.idle != nil {
+		p.idle.Remove(entry.idle)
+		entry.idle = nil
+	}
 	entry.transport.CloseIdleConnections()
 }
 
@@ -183,8 +194,8 @@ func (p *transparentTransportPool) buildTransport(key transparentTransportKey, d
 func (p *transparentTransportPool) CloseIdleConnections() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for _, element := range p.entries {
-		element.Value.(*transparentTransportEntry).transport.CloseIdleConnections()
+	for _, entry := range p.entries {
+		entry.transport.CloseIdleConnections()
 	}
 }
 
@@ -195,11 +206,11 @@ func (p *transparentTransportPool) Close() {
 		return
 	}
 	p.closed = true
-	for element := p.lru.Front(); element != nil; element = element.Next() {
-		element.Value.(*transparentTransportEntry).transport.CloseIdleConnections()
+	for _, entry := range p.entries {
+		entry.transport.CloseIdleConnections()
 	}
-	p.entries = make(map[transparentTransportKey]*list.Element)
-	p.lru.Init()
+	p.entries = make(map[transparentTransportKey]*transparentTransportEntry)
+	p.idle.Init()
 }
 
 type transparentRoundTripper struct {
