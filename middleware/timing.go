@@ -20,6 +20,7 @@ func (tm *TimingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next 
 	ctx := context.WithValue(r.Context(), ContextKeyStartTime, startTime)
 	ctx = context.WithValue(ctx, ContextKeyStreamID, generateStreamID())
 	ctx = context.WithValue(ctx, ContextKeyMiddlewareEndTime, &middlewareTiming{})
+	ctx = contextWithRequestLogState(ctx)
 
 	// Run the rest of the chain; it records the end time right before the
 	// final handler (the proxy) starts

@@ -1,10 +1,13 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"go.chief.tools/flowguard-proxy/config"
 )
 
 type middlewareFunc func(w http.ResponseWriter, r *http.Request, next http.Handler)
@@ -41,5 +44,36 @@ func TestTimingMiddlewareRecordsWhenTheMiddlewareFinished(t *testing.T) {
 	}
 	if end.Before(lastMiddlewareDone) || end.After(finalStarted) {
 		t.Fatalf("middleware end %v, want between the last middleware finishing (%v) and the final handler starting (%v)", end, lastMiddlewareDone, finalStarted)
+	}
+}
+
+func TestRuleDecisionsAreSharedByEveryCopyOfTheRequest(t *testing.T) {
+	rule := &config.Rule{ID: "rule-1"}
+	action := &config.RuleAction{ID: "action-1", Action: "log"}
+	var observed *http.Request
+
+	chain := NewChain()
+	chain.Add(NewTimingMiddleware())
+	chain.Add(middlewareFunc(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		observed = r
+		next.ServeHTTP(w, r)
+	}))
+	chain.Add(middlewareFunc(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		// A later middleware works on its own copy of the request.
+		copied := r.WithContext(context.WithValue(r.Context(), contextKey("copy"), true))
+		SetRuleMatch(copied, rule, action, "log")
+		SetRateLimitApplied(copied)
+		next.ServeHTTP(w, copied)
+	}))
+	chain.ServeHTTPWithHandler(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "http://example.test/", nil), http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+
+	if GetRuleMatched(observed) != rule || GetActionMatched(observed) != action || GetRuleResult(observed) != "log" || !GetRateLimitApplied(observed) {
+		t.Fatal("expected decisions recorded on a later copy of the request to be visible from an earlier one")
+	}
+
+	bare := httptest.NewRequest(http.MethodGet, "http://example.test/", nil)
+	SetChallengeMatched(bare)
+	if !GetChallengeMatched(bare) || GetRuleResult(bare) != "proxy" {
+		t.Fatal("expected decisions on a request without timing middleware to be recorded")
 	}
 }

@@ -24,17 +24,9 @@ import (
 )
 
 const (
-	ContextKeyRule              contextKey = "matched_rule"
-	ContextKeyAction            contextKey = "matched_action"
 	ContextKeyStreamID          contextKey = "stream_id"
 	ContextKeyStartTime         contextKey = "start_time"
-	ContextKeyRuleResult        contextKey = "rule_result"
-	ContextKeyChallengeInfo     contextKey = "challenge_info"
-	ContextKeyChallengeMatched  contextKey = "challenge_matched"
-	ContextKeyRateLimitApplied  contextKey = "rate_limit_applied"
 	ContextKeyMiddlewareEndTime contextKey = "middleware_end_time"
-	ContextKeyFail2BanInfo      contextKey = "fail2ban_info"
-	ContextKeySkipLog           contextKey = "skip_log"
 )
 
 type RequestLogEntryIPInfo struct {
@@ -436,19 +428,55 @@ func GetStartTime(r *http.Request) time.Time {
 	return time.Time{}
 }
 
+// requestLogState holds what the middleware decided about a request, for its
+// log entry. It is a single value in the request context that the setters
+// change, so recording a decision neither copies the request nor makes every
+// later context lookup walk past another layer. TimingMiddleware adds it, so
+// every copy of the request sees the same state.
+type requestLogState struct {
+	rule             *config.Rule
+	action           *config.RuleAction
+	ruleResult       string // Empty means proxied
+	skipLog          bool
+	fail2ban         *RequestLogEntryFail2BanInfo
+	challenge        *RequestLogEntryChallengeInfo
+	challengeMatched bool
+	rateLimitApplied bool
+}
+
+type requestLogStateContextKey struct{}
+
+func contextWithRequestLogState(ctx context.Context) context.Context {
+	return context.WithValue(ctx, requestLogStateContextKey{}, &requestLogState{})
+}
+
+func getRequestLogState(r *http.Request) *requestLogState {
+	state, _ := r.Context().Value(requestLogStateContextKey{}).(*requestLogState)
+	return state
+}
+
+// requestLogStateFor returns the state of r, adding it to r when the request
+// did not pass through TimingMiddleware.
+func requestLogStateFor(r *http.Request) *requestLogState {
+	if state := getRequestLogState(r); state != nil {
+		return state
+	}
+	state := &requestLogState{}
+	*r = *r.WithContext(context.WithValue(r.Context(), requestLogStateContextKey{}, state))
+	return state
+}
+
 func SetRuleMatch(r *http.Request, rule *config.Rule, action *config.RuleAction, result string) {
-	ctx := r.Context()
-	ctx = context.WithValue(ctx, ContextKeyRule, rule)
-	ctx = context.WithValue(ctx, ContextKeyAction, action)
-	ctx = context.WithValue(ctx, ContextKeyRuleResult, result)
-	*r = *r.WithContext(ctx)
+	state := requestLogStateFor(r)
+	state.rule = rule
+	state.action = action
+	state.ruleResult = result
 }
 
 // SetSkipLog marks a request whose log entry is skipped if it ends up proxied
 // with a successful response.
 func SetSkipLog(r *http.Request, rule *config.Rule) {
-	ctx := context.WithValue(r.Context(), ContextKeySkipLog, rule)
-	*r = *r.WithContext(ctx)
+	requestLogStateFor(r).skipLog = true
 }
 
 // shouldSkipLog reports whether a request marked by a skip_log rule can go
@@ -456,81 +484,78 @@ func SetSkipLog(r *http.Request, rule *config.Rule) {
 // limited, or that failed, is always logged, so skipping never hides
 // enforcement or errors.
 func shouldSkipLog(r *http.Request, status int) bool {
-	if _, ok := r.Context().Value(ContextKeySkipLog).(*config.Rule); !ok {
+	if state := getRequestLogState(r); state == nil || !state.skipLog {
 		return false
 	}
 	return GetRuleResult(r) == "proxy" && status < http.StatusBadRequest
 }
 
 func SetRuleResult(r *http.Request, result string) {
-	ctx := context.WithValue(r.Context(), ContextKeyRuleResult, result)
-	*r = *r.WithContext(ctx)
+	requestLogStateFor(r).ruleResult = result
 }
 
 func SetFail2BanInfo(r *http.Request, info RequestLogEntryFail2BanInfo) {
-	ctx := context.WithValue(r.Context(), ContextKeyFail2BanInfo, info)
-	*r = *r.WithContext(ctx)
+	requestLogStateFor(r).fail2ban = &info
 }
 
 func GetFail2BanInfo(r *http.Request) *RequestLogEntryFail2BanInfo {
-	if info, ok := r.Context().Value(ContextKeyFail2BanInfo).(RequestLogEntryFail2BanInfo); ok {
+	if state := getRequestLogState(r); state != nil && state.fail2ban != nil {
+		info := *state.fail2ban
 		return &info
 	}
 	return nil
 }
 
 func GetRuleResult(r *http.Request) string {
-	if actionTaken, ok := r.Context().Value(ContextKeyRuleResult).(string); ok {
-		return actionTaken
+	if state := getRequestLogState(r); state != nil && state.ruleResult != "" {
+		return state.ruleResult
 	}
 	return "proxy"
 }
 
 func GetRuleMatched(r *http.Request) *config.Rule {
-	if rule, ok := r.Context().Value(ContextKeyRule).(*config.Rule); ok {
-		return rule
+	if state := getRequestLogState(r); state != nil {
+		return state.rule
 	}
 	return nil
 }
 
 func GetActionMatched(r *http.Request) *config.RuleAction {
-	if action, ok := r.Context().Value(ContextKeyAction).(*config.RuleAction); ok {
-		return action
+	if state := getRequestLogState(r); state != nil {
+		return state.action
 	}
 	return nil
 }
 
 func SetChallengeInfo(r *http.Request, info RequestLogEntryChallengeInfo) {
 	info.Present = true
-	ctx := context.WithValue(r.Context(), ContextKeyChallengeInfo, info)
-	*r = *r.WithContext(ctx)
+	requestLogStateFor(r).challenge = &info
 }
 
 func GetChallengeInfo(r *http.Request) *RequestLogEntryChallengeInfo {
-	if info, ok := r.Context().Value(ContextKeyChallengeInfo).(RequestLogEntryChallengeInfo); ok {
+	if state := getRequestLogState(r); state != nil && state.challenge != nil {
+		info := *state.challenge
 		return &info
 	}
 	return nil
 }
 
 func SetChallengeMatched(r *http.Request) {
-	ctx := context.WithValue(r.Context(), ContextKeyChallengeMatched, true)
-	*r = *r.WithContext(ctx)
+	requestLogStateFor(r).challengeMatched = true
 }
 
 func GetChallengeMatched(r *http.Request) bool {
-	matched, _ := r.Context().Value(ContextKeyChallengeMatched).(bool)
-	return matched
+	state := getRequestLogState(r)
+	return state != nil && state.challengeMatched
 }
 
 func SetRateLimitApplied(r *http.Request) {
-	ctx := context.WithValue(r.Context(), ContextKeyRateLimitApplied, true)
-	*r = *r.WithContext(ctx)
+	requestLogStateFor(r).rateLimitApplied = true
 }
 
 func GetRateLimitApplied(r *http.Request) bool {
-	applied, _ := r.Context().Value(ContextKeyRateLimitApplied).(bool)
-	return applied
+	state := getRequestLogState(r)
+	return state != nil && state.rateLimitApplied
 }
 
 func generateStreamID() string {
