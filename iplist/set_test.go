@@ -80,3 +80,32 @@ func TestUnionSetsDoesNotMutateInputs(t *testing.T) {
 		t.Fatal("set equality returned an unexpected result")
 	}
 }
+
+func TestSetWithAndWithoutPrefixLeaveReceiverUnchanged(t *testing.T) {
+	original := NewSet([]netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
+	added := original.WithPrefix(netip.MustParsePrefix("198.51.100.7/32"))
+	removed := added.WithoutPrefix(netip.MustParsePrefix("192.0.2.0/24"))
+
+	for _, test := range []struct {
+		name string
+		set  *Set
+		addr string
+		want bool
+	}{
+		{name: "original keeps its prefix", set: original, addr: "192.0.2.10", want: true},
+		{name: "original does not gain the added prefix", set: original, addr: "198.51.100.7", want: false},
+		{name: "added has both prefixes", set: added, addr: "192.0.2.10", want: true},
+		{name: "added has the new prefix", set: added, addr: "198.51.100.7", want: true},
+		{name: "removed drops the prefix", set: removed, addr: "192.0.2.10", want: false},
+		{name: "removed keeps the other prefix", set: removed, addr: "198.51.100.7", want: true},
+	} {
+		if got := test.set.Contains(netip.MustParseAddr(test.addr)); got != test.want {
+			t.Errorf("%s: Contains(%s) = %v, want %v", test.name, test.addr, got, test.want)
+		}
+	}
+
+	var empty *Set
+	if !empty.WithPrefix(netip.MustParsePrefix("203.0.113.0/24")).Contains(netip.MustParseAddr("203.0.113.9")) {
+		t.Error("expected WithPrefix on a nil set to return a set with the prefix")
+	}
+}

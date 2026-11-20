@@ -14,6 +14,7 @@ release.
 - Rules that match the client or proxy IP against a list of addresses and CIDRs now take the same time however long the list is. Before, every request parsed each listed address again, which took about 70 µs per request for a rule with 1,000 CIDRs.
 - Rules with an `in` or `not-in` list now take the same time however long the list is. Case-insensitive lists were slowest: every request lowercased each listed value again, about 37 µs per request for 1,000 values.
 - FlowGuard now reuses the 32 KiB buffer it copies each response body through, instead of allocating a new one for every response. This cuts memory allocated per proxied request from about 42 KiB to 10 KiB, which means less garbage collection under load.
+- Fail2Ban bans and unbans now take the same time however many addresses a jail holds. Before, every ban or unban rebuilt the whole jail, about 9 ms for a jail of 100,000 addresses, and requests waited for it to finish before their jails were checked.
 - Certificate lookups during the TLS handshake now take the same time no matter how many hostnames are loaded. Before, every handshake checked each loaded hostname for a matching wildcard, which slowed handshakes on hosts with thousands of hostnames.
 
 ### Fixed

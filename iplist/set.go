@@ -101,6 +101,35 @@ func UnionSets(sets ...*Set) *Set {
 	return &Set{trie: trie}
 }
 
+// WithPrefix returns a set that also contains prefix. It copies only the
+// trie nodes on the path to prefix, so it is cheap however large the set is,
+// and leaves the receiver unchanged.
+func (s *Set) WithPrefix(prefix netip.Prefix) *Set {
+	if !prefix.IsValid() {
+		return s
+	}
+
+	return &Set{trie: s.lite().InsertPersist(prefix.Masked())}
+}
+
+// WithoutPrefix returns a set without prefix. Like WithPrefix, it leaves the
+// receiver unchanged.
+func (s *Set) WithoutPrefix(prefix netip.Prefix) *Set {
+	if !prefix.IsValid() {
+		return s
+	}
+
+	return &Set{trie: s.lite().DeletePersist(prefix.Masked())}
+}
+
+func (s *Set) lite() *bart.Lite {
+	if s == nil || s.trie == nil {
+		return new(bart.Lite)
+	}
+
+	return s.trie
+}
+
 // Contains reports whether addr belongs to the set.
 func (s *Set) Contains(addr netip.Addr) bool {
 	return s != nil && s.trie != nil && addr.IsValid() && s.trie.Contains(addr.Unmap())

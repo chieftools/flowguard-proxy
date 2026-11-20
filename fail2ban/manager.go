@@ -32,8 +32,7 @@ type Options struct {
 }
 
 type jailState struct {
-	prefixes map[netip.Prefix]struct{}
-	set      *iplist.Set
+	set *iplist.Set
 }
 
 type Manager struct {
@@ -519,38 +518,31 @@ func (m *Manager) applyEvent(event Event) {
 
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
-	state := m.jails[event.Jail]
-	if state == nil {
-		state = &jailState{prefixes: make(map[netip.Prefix]struct{})}
+	var set *iplist.Set
+	if state := m.jails[event.Jail]; state != nil {
+		set = state.set
 	}
 	if event.Operation == "ban" {
-		state.prefixes[prefix] = struct{}{}
+		set = set.WithPrefix(prefix)
 	} else {
-		delete(state.prefixes, prefix)
+		set = set.WithoutPrefix(prefix)
 	}
-	state.set = setFromPrefixMap(state.prefixes)
-	m.jails[event.Jail] = state
+	m.jails[event.Jail] = &jailState{set: set}
 }
 
 func (m *Manager) replaceJail(jail string, values []string) {
-	prefixes := make(map[netip.Prefix]struct{}, len(values))
+	prefixes := make([]netip.Prefix, 0, len(values))
 	for _, value := range values {
 		prefix, err := iplist.ParsePrefix(value)
 		if err == nil {
-			prefixes[prefix] = struct{}{}
+			prefixes = append(prefixes, prefix)
 		}
 	}
-	m.stateMu.Lock()
-	m.jails[jail] = &jailState{prefixes: prefixes, set: setFromPrefixMap(prefixes)}
-	m.stateMu.Unlock()
-}
+	set := iplist.NewSet(prefixes)
 
-func setFromPrefixMap(values map[netip.Prefix]struct{}) *iplist.Set {
-	prefixes := make([]netip.Prefix, 0, len(values))
-	for prefix := range values {
-		prefixes = append(prefixes, prefix)
-	}
-	return iplist.NewSet(prefixes)
+	m.stateMu.Lock()
+	m.jails[jail] = &jailState{set: set}
+	m.stateMu.Unlock()
 }
 
 func (m *Manager) clearState() {
@@ -565,7 +557,7 @@ func (m *Manager) entryCount() int {
 	count := 0
 	for _, state := range m.jails {
 		if state != nil {
-			count += len(state.prefixes)
+			count += state.set.Size()
 		}
 	}
 	return count
