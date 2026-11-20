@@ -96,6 +96,9 @@ type BehaviorTracker struct {
 	clientInFlight      map[string]int64
 	cardinality         *recencyList[*fingerprintCardinality]
 	cardinalityKeyCount int
+
+	epoch      time.Time // When the tracker first read the clock
+	lastSecond int64     // The latest second returned by currentSecond
 }
 
 func NewBehaviorTracker() *BehaviorTracker {
@@ -112,7 +115,6 @@ func NewBehaviorTracker() *BehaviorTracker {
 }
 
 func (t *BehaviorTracker) Handle(w http.ResponseWriter, r *http.Request, next http.Handler) {
-	now := t.now().Unix()
 	clientIP := clientBucketKey(GetClientIP(r))
 	ja4 := GetJA4Fingerprint(r)
 	domain := normalization.Host(r.Host)
@@ -123,6 +125,7 @@ func (t *BehaviorTracker) Handle(w http.ResponseWriter, r *http.Request, next ht
 	}
 
 	t.mu.Lock()
+	now := t.currentSecond()
 	t.expire(now)
 
 	clientWindow := t.add(t.client, clientIP, now)
@@ -176,6 +179,24 @@ func (t *BehaviorTracker) Handle(w http.ResponseWriter, r *http.Request, next ht
 }
 
 func (t *BehaviorTracker) Stop() {}
+
+// currentSecond returns the current time in whole seconds. It counts from the
+// tracker's first reading on the monotonic clock, so a wall clock step, such
+// as from NTP or resuming a virtual machine, does not move it, and it never
+// returns less than before: expiry relies on entries being seen in time order.
+// The caller holds t.mu.
+func (t *BehaviorTracker) currentSecond() int64 {
+	now := t.now()
+	if t.epoch.IsZero() {
+		t.epoch = now
+	}
+	second := t.epoch.Unix() + int64(now.Sub(t.epoch)/time.Second)
+	if second < t.lastSecond {
+		second = t.lastSecond
+	}
+	t.lastSecond = second
+	return second
+}
 
 func GetBehaviorSnapshot(r *http.Request) *BehaviorSnapshot {
 	if r == nil {

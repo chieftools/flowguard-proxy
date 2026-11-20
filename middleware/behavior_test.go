@@ -188,3 +188,28 @@ func TestRecencyListExpiresOldestEntriesFirst(t *testing.T) {
 		t.Fatalf("expire of the last entry removed %d and left %d entries", count, list.len())
 	}
 }
+
+func TestBehaviorTrackerKeepsExpiringAfterTheClockStepsBack(t *testing.T) {
+	clock := time.Unix(1_800_000_000, 0)
+	tracker := NewBehaviorTracker()
+	tracker.now = func() time.Time { return clock }
+	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	request := func(ip string) {
+		req := httptest.NewRequest(http.MethodGet, "https://edge.example.test/", nil)
+		req = req.WithContext(context.WithValue(req.Context(), ContextKeyClientIP, ip))
+		tracker.Handle(httptest.NewRecorder(), req, next)
+	}
+
+	request("192.0.2.1")
+	clock = clock.Add(-time.Hour)
+	request("192.0.2.2")
+	if first, second := tracker.client.get("192.0.2.1"), tracker.client.get("192.0.2.2"); second.lastSeen < first.lastSeen {
+		t.Fatalf("client seen after the clock stepped back has time %d, before %d", second.lastSeen, first.lastSeen)
+	}
+
+	clock = clock.Add(time.Hour + 61*time.Second)
+	request("192.0.2.3")
+	if tracker.client.len() != 1 || tracker.client.get("192.0.2.3") == nil {
+		t.Fatalf("tracked clients = %d, want only the latest after a minute", tracker.client.len())
+	}
+}
