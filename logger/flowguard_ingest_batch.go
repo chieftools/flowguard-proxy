@@ -8,7 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -117,32 +119,18 @@ func prepareIngestRequests(entries []*LogEntry, generation string) ([]ingestRequ
 }
 
 func prepareIngestEvent(entry *LogEntry) (ingestEvent, int64, error) {
-	encoded, err := entry.jsonBytes()
+	payload, err := entry.jsonBytes()
 	if err != nil {
 		return ingestEvent{}, 0, fmt.Errorf("failed to encode flowguard ingest event")
 	}
 
-	// HTML escapes in the shared encoding can expand a canonical byte to six bytes.
-	if len(encoded) > 6*ingestMaxPayloadBytes {
-		return ingestEvent{}, 0, fmt.Errorf("flowguard ingest event exceeds payload limit")
-	}
-
-	var fields map[string]any
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
-	decoder.UseNumber()
-	if err := decoder.Decode(&fields); err != nil || fields == nil {
+	if len(payload) == 0 || payload[0] != '{' {
 		return ingestEvent{}, 0, fmt.Errorf("flowguard ingest event must be an object")
 	}
 
-	stamp, ok := fields["_timestamp"].(json.Number)
-	micros, err := stamp.Int64()
-	if !ok || err != nil || micros <= 0 || time.UnixMicro(micros).UTC().Year() > 2105 {
+	micros, ok := ingestTimestampMicros(entry.timestampValue())
+	if !ok || micros <= 0 || time.UnixMicro(micros).UTC().Year() > 2105 {
 		return ingestEvent{}, 0, fmt.Errorf("flowguard ingest event requires a valid _timestamp in microseconds")
-	}
-
-	payload, err := encodeIngestJSON(fields)
-	if err != nil {
-		return ingestEvent{}, 0, err
 	}
 
 	if len(payload) > ingestMaxPayloadBytes {
@@ -158,6 +146,31 @@ func prepareIngestEvent(entry *LogEntry) (ingestEvent, int64, error) {
 	return event, micros / int64(24*time.Hour/time.Microsecond), nil
 }
 
+// ingestTimestampMicros returns a _timestamp value as whole microseconds.
+func ingestTimestampMicros(value any) (int64, bool) {
+	switch timestamp := value.(type) {
+	case int64:
+		return timestamp, true
+	case int:
+		return int64(timestamp), true
+	case float64:
+		if timestamp != math.Trunc(timestamp) || math.Abs(timestamp) >= math.MaxInt64 {
+			return 0, false
+		}
+		return int64(timestamp), true
+	case json.Number:
+		micros, err := timestamp.Int64()
+		return micros, err == nil
+	default:
+		return 0, false
+	}
+}
+
+// ingestGzipWriters reuses compressors, which allocate about 1 MiB each.
+var ingestGzipWriters = sync.Pool{
+	New: func() any { return gzip.NewWriter(nil) },
+}
+
 func (e ingestEnvelope) request(rawBytes int) (ingestRequest, error) {
 	body, err := encodeIngestJSON(e)
 	if err != nil {
@@ -170,7 +183,9 @@ func (e ingestEnvelope) request(rawBytes int) (ingestRequest, error) {
 
 	digest := sha256.Sum256(body)
 	var compressed bytes.Buffer
-	writer := gzip.NewWriter(&compressed)
+	writer := ingestGzipWriters.Get().(*gzip.Writer)
+	defer ingestGzipWriters.Put(writer)
+	writer.Reset(&compressed)
 	if _, err := writer.Write(body); err != nil {
 		return ingestRequest{}, fmt.Errorf("failed to compress flowguard ingest request")
 	}

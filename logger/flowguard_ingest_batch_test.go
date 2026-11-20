@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFlowGuardIngestSplitsCompleteEnvelopeAtByteLimit(t *testing.T) {
@@ -85,5 +86,30 @@ func TestFlowGuardIngestRejectsInvalidBatchBeforeFirstSend(t *testing.T) {
 				t.Fatal("returned a partial batch after validation failed")
 			}
 		})
+	}
+}
+
+func TestFlowGuardIngestPayloadIsTheEntryEncodingWithoutHTMLEscapes(t *testing.T) {
+	entry := ingestTestEntry(2031, 6, 7)
+	entry.Data["url"] = "https://shop.example.test/?a=1&b=<2>"
+	encoded, err := entry.jsonBytes()
+	if err != nil {
+		t.Fatalf("encode entry: %v", err)
+	}
+
+	event, _, err := prepareIngestEvent(entry)
+	if err != nil {
+		t.Fatalf("prepare event: %v", err)
+	}
+	if !strings.Contains(string(event.Payload), `"url":"https://shop.example.test/?a=1&b=<2>"`) {
+		t.Fatalf("payload %s, want the URL without HTML escapes", event.Payload)
+	}
+	if string(event.Payload) != string(encoded) {
+		t.Fatalf("payload %s differs from the entry encoding %s", event.Payload, encoded)
+	}
+
+	whole := &LogEntry{Data: map[string]interface{}{"_timestamp": float64(time.Date(2031, 6, 7, 0, 0, 0, 0, time.UTC).UnixMicro())}}
+	if _, _, err := prepareIngestEvent(whole); err != nil {
+		t.Fatalf("expected a whole-number float timestamp to be accepted: %v", err)
 	}
 }

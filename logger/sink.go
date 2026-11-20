@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -26,8 +27,9 @@ type Sink interface {
 type LogEntry struct {
 	Data map[string]interface{}
 
-	mu      sync.Mutex
-	encoded []byte
+	mu        sync.Mutex
+	encoded   []byte
+	timestamp any // Data["_timestamp"], kept when Data is released after encoding
 }
 
 // MarshalJSON marshals the log entry to JSON
@@ -52,14 +54,26 @@ func (e *LogEntry) prepare() (int64, error) {
 		return int64(len(e.encoded)), nil
 	}
 
-	encoded, err := json.Marshal(e.Data)
-	if err != nil {
+	// Leave <, > and & unescaped: entries are not embedded in HTML, and the
+	// FlowGuard ingest payload must not contain the escapes.
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(e.Data); err != nil {
 		return 0, fmt.Errorf("failed to marshal entry: %w", err)
 	}
-	e.encoded = encoded
+	e.encoded = bytes.TrimSuffix(buffer.Bytes(), []byte{'\n'})
+	e.timestamp = e.Data["_timestamp"]
 	e.Data = nil
 
-	return int64(len(encoded)), nil
+	return int64(len(e.encoded)), nil
+}
+
+// timestampValue returns the entry's _timestamp value. Call it after prepare.
+func (e *LogEntry) timestampValue() any {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.timestamp
 }
 
 func (e *LogEntry) jsonBytes() ([]byte, error) {
