@@ -74,43 +74,45 @@ func (w *behaviorWindow) total(now int64, seconds int64) uint64 {
 	return total
 }
 
+// behaviorExpiryBatch caps how many expired entries one request removes from
+// each list, so a burst of expiries is spread over the following requests
+// instead of stalling one of them.
+const behaviorExpiryBatch = 256
+
 type fingerprintCardinality struct {
-	clients         map[string]int64
-	asns            map[string]int64
-	countries       map[string]int64
-	lastCountedAt   int64
-	uniqueClients   int
-	uniqueASNs      int
-	uniqueCountries int
+	clients   *recencyList[struct{}]
+	asns      *recencyList[struct{}]
+	countries *recencyList[struct{}]
 }
 
 type BehaviorTracker struct {
 	mu                  sync.Mutex
-	client              map[string]*behaviorWindow
-	clientPath          map[string]*behaviorWindow
-	fingerprint         map[string]*behaviorWindow
-	domain              map[string]*behaviorWindow
-	domainPath          map[string]*behaviorWindow
+	now                 func() time.Time
+	client              *recencyList[behaviorWindow]
+	clientPath          *recencyList[behaviorWindow]
+	fingerprint         *recencyList[behaviorWindow]
+	domain              *recencyList[behaviorWindow]
+	domainPath          *recencyList[behaviorWindow]
 	clientInFlight      map[string]int64
-	cardinality         map[string]*fingerprintCardinality
+	cardinality         *recencyList[*fingerprintCardinality]
 	cardinalityKeyCount int
-	requestCount        uint64
 }
 
 func NewBehaviorTracker() *BehaviorTracker {
 	return &BehaviorTracker{
-		client:         make(map[string]*behaviorWindow),
-		clientPath:     make(map[string]*behaviorWindow),
-		fingerprint:    make(map[string]*behaviorWindow),
-		domain:         make(map[string]*behaviorWindow),
-		domainPath:     make(map[string]*behaviorWindow),
+		now:            time.Now,
+		client:         newRecencyList[behaviorWindow](),
+		clientPath:     newRecencyList[behaviorWindow](),
+		fingerprint:    newRecencyList[behaviorWindow](),
+		domain:         newRecencyList[behaviorWindow](),
+		domainPath:     newRecencyList[behaviorWindow](),
 		clientInFlight: make(map[string]int64),
-		cardinality:    make(map[string]*fingerprintCardinality),
+		cardinality:    newRecencyList[*fingerprintCardinality](),
 	}
 }
 
 func (t *BehaviorTracker) Handle(w http.ResponseWriter, r *http.Request, next http.Handler) {
-	now := time.Now().Unix()
+	now := t.now().Unix()
 	clientIP := clientBucketKey(GetClientIP(r))
 	ja4 := GetJA4Fingerprint(r)
 	domain := normalization.Host(r.Host)
@@ -121,10 +123,7 @@ func (t *BehaviorTracker) Handle(w http.ResponseWriter, r *http.Request, next ht
 	}
 
 	t.mu.Lock()
-	t.requestCount++
-	if t.requestCount%1024 == 0 {
-		t.cleanup(now)
-	}
+	t.expire(now)
 
 	clientWindow := t.add(t.client, clientIP, now)
 	clientPathWindow := t.add(t.clientPath, clientPathKey, now)
@@ -154,28 +153,19 @@ func (t *BehaviorTracker) Handle(w http.ResponseWriter, r *http.Request, next ht
 	}
 
 	if ja4 != "" {
-		cardinality := t.cardinalityFor(ja4)
-		if cardinality != nil {
-			if t.recordCardinality(cardinality.clients, clientIP, now) && cardinality.lastCountedAt == now {
-				cardinality.uniqueClients++
-			}
-			if asn := GetClientASN(r); asn != nil {
-				if t.recordCardinality(cardinality.asns, asn.ASN, now) && cardinality.lastCountedAt == now {
-					cardinality.uniqueASNs++
-				}
-				if t.recordCardinality(cardinality.countries, asn.CountryCode, now) && cardinality.lastCountedAt == now {
-					cardinality.uniqueCountries++
-				}
-			}
-		}
 		snapshot.Fingerprint = FingerprintBehaviorSnapshot{
 			Requests10S: windowTotal(fingerprintWindow, now, 10),
 			Requests60S: windowTotal(fingerprintWindow, now, 60),
 		}
-		if cardinality != nil {
-			snapshot.Fingerprint.UniqueIPs60S,
-				snapshot.Fingerprint.UniqueASNs60S,
-				snapshot.Fingerprint.UniqueCountries = cardinalityCounts(cardinality, now)
+		if cardinality := t.cardinalityFor(ja4, now); cardinality != nil {
+			t.recordCardinality(cardinality.clients, clientIP, now)
+			if asn := GetClientASN(r); asn != nil {
+				t.recordCardinality(cardinality.asns, asn.ASN, now)
+				t.recordCardinality(cardinality.countries, asn.CountryCode, now)
+			}
+			snapshot.Fingerprint.UniqueIPs60S = cardinality.clients.len()
+			snapshot.Fingerprint.UniqueASNs60S = cardinality.asns.len()
+			snapshot.Fingerprint.UniqueCountries = cardinality.countries.len()
 		}
 	}
 	t.mu.Unlock()
@@ -238,79 +228,67 @@ func BehaviorMetric(r *http.Request, key string) (float64, bool) {
 	}
 }
 
-func (t *BehaviorTracker) add(windows map[string]*behaviorWindow, key string, now int64) *behaviorWindow {
+func (t *BehaviorTracker) add(windows *recencyList[behaviorWindow], key string, now int64) *behaviorWindow {
 	if key == "" {
 		return nil
 	}
-	window := windows[key]
-	if window == nil {
+	entry := windows.get(key)
+	if entry == nil {
 		if t.totalWindowKeys() >= maxBehaviorKeys {
 			return nil
 		}
-		window = &behaviorWindow{}
-		windows[key] = window
+		entry = windows.insert(key, now)
+	} else {
+		windows.touch(entry, now)
 	}
-	window.add(now)
-	return window
+	entry.value.add(now)
+	return &entry.value
 }
 
 func (t *BehaviorTracker) totalWindowKeys() int {
-	return len(t.client) + len(t.clientPath) + len(t.fingerprint) + len(t.domain) + len(t.domainPath)
+	return t.client.len() + t.clientPath.len() + t.fingerprint.len() + t.domain.len() + t.domainPath.len()
 }
 
-func (t *BehaviorTracker) cardinalityFor(ja4 string) *fingerprintCardinality {
-	entry := t.cardinality[ja4]
+// cardinalityFor returns the fingerprint's clients, ASNs and countries, with
+// those not seen in the last minute removed.
+func (t *BehaviorTracker) cardinalityFor(ja4 string, now int64) *fingerprintCardinality {
+	entry := t.cardinality.get(ja4)
 	if entry == nil {
-		if len(t.cardinality) >= maxBehaviorKeys {
+		if t.cardinality.len() >= maxBehaviorKeys {
 			return nil
 		}
-		entry = &fingerprintCardinality{
-			clients:   make(map[string]int64),
-			asns:      make(map[string]int64),
-			countries: make(map[string]int64),
+		entry = t.cardinality.insert(ja4, now)
+		entry.value = &fingerprintCardinality{
+			clients:   newRecencyList[struct{}](),
+			asns:      newRecencyList[struct{}](),
+			countries: newRecencyList[struct{}](),
 		}
-		t.cardinality[ja4] = entry
+		return entry.value
 	}
-	return entry
+
+	// Remove every expired value, not a batch, so the unique counts read from
+	// the list lengths stay exact.
+	t.cardinality.touch(entry, now)
+	cutoff := now - behaviorWindowSeconds
+	for _, values := range []*recencyList[struct{}]{entry.value.clients, entry.value.asns, entry.value.countries} {
+		t.cardinalityKeyCount -= values.expire(cutoff, values.len(), nil)
+	}
+	return entry.value
 }
 
-func (t *BehaviorTracker) recordCardinality(values map[string]int64, value string, now int64) bool {
+func (t *BehaviorTracker) recordCardinality(values *recencyList[struct{}], value string, now int64) {
 	if value == "" {
-		return false
+		return
 	}
-	_, exists := values[value]
-	if !exists {
-		if t.cardinalityKeyCount >= maxCardinalityKeys {
-			return false
-		}
-		t.cardinalityKeyCount++
+	if entry := values.get(value); entry != nil {
+		values.touch(entry, now)
+		return
 	}
-	values[value] = now
-
-	return !exists
-}
-
-func activeCardinality(values map[string]int64, now int64) int {
-	count := 0
-	for _, lastSeen := range values {
-		if lastSeen > now-behaviorWindowSeconds {
-			count++
-		}
+	if t.cardinalityKeyCount >= maxCardinalityKeys {
+		return
 	}
-	return count
-}
-
-func cardinalityCounts(entry *fingerprintCardinality, now int64) (int, int, int) {
-	if entry.lastCountedAt == now {
-		return entry.uniqueClients, entry.uniqueASNs, entry.uniqueCountries
-	}
-
-	entry.lastCountedAt = now
-	entry.uniqueClients = activeCardinality(entry.clients, now)
-	entry.uniqueASNs = activeCardinality(entry.asns, now)
-	entry.uniqueCountries = activeCardinality(entry.countries, now)
-
-	return entry.uniqueClients, entry.uniqueASNs, entry.uniqueCountries
+	values.insert(value, now)
+	t.cardinalityKeyCount++
 }
 
 func windowTotal(window *behaviorWindow, now int64, seconds int64) uint64 {
@@ -332,28 +310,17 @@ func (t *BehaviorTracker) finish(clientIP string) {
 	}
 }
 
-func (t *BehaviorTracker) cleanup(now int64) {
-	for _, windows := range []map[string]*behaviorWindow{t.client, t.clientPath, t.fingerprint, t.domain, t.domainPath} {
-		for key, window := range windows {
-			if window.lastSeen <= now-behaviorWindowSeconds {
-				delete(windows, key)
-			}
-		}
+// expire removes windows and fingerprints not seen in the last minute, oldest
+// first, so it only visits the entries it removes.
+func (t *BehaviorTracker) expire(now int64) {
+	cutoff := now - behaviorWindowSeconds
+	for _, windows := range []*recencyList[behaviorWindow]{t.client, t.clientPath, t.fingerprint, t.domain, t.domainPath} {
+		windows.expire(cutoff, behaviorExpiryBatch, nil)
 	}
-
-	for fingerprint, entry := range t.cardinality {
-		for _, values := range []map[string]int64{entry.clients, entry.asns, entry.countries} {
-			for value, lastSeen := range values {
-				if lastSeen <= now-behaviorWindowSeconds {
-					delete(values, value)
-					t.cardinalityKeyCount--
-				}
-			}
-		}
-		if len(entry.clients) == 0 && len(entry.asns) == 0 && len(entry.countries) == 0 {
-			delete(t.cardinality, fingerprint)
-		}
-	}
+	t.cardinality.expire(cutoff, behaviorExpiryBatch, func(entry *recencyEntry[*fingerprintCardinality]) {
+		cardinality := entry.value
+		t.cardinalityKeyCount -= cardinality.clients.len() + cardinality.asns.len() + cardinality.countries.len()
+	})
 }
 
 func behaviorNumber(value string) (float64, bool) {

@@ -16,6 +16,7 @@ release.
 - FlowGuard now reuses the 32 KiB buffer it copies each response body through, instead of allocating a new one for every response. This cuts memory allocated per proxied request from about 42 KiB to 10 KiB, which means less garbage collection under load.
 - Fail2Ban bans and unbans now take the same time however many addresses a jail holds. Before, every ban or unban rebuilt the whole jail, about 9 ms for a jail of 100,000 addresses, and requests waited for it to finish before their jails were checked.
 - Requests no longer wait while a changed or removed log sink sends its last entries. Rotating a sink's credentials or removing it held up every request until the sink finished, up to 10 seconds with a slow log endpoint.
+- Behavior tracking no longer stalls requests while it removes clients and fingerprints that went quiet. Before, every 1024th request scanned all tracked clients, and once a second a request recounted every IP address seen with a fingerprint, while all other requests waited. With 45,000 tracked clients this took up to about 4 ms; the slowest requests now take about 20 µs, and twice as many requests get through on 8 cores.
 - Certificate lookups during the TLS handshake now take the same time no matter how many hostnames are loaded. Before, every handshake checked each loaded hostname for a matching wildcard, which slowed handshakes on hosts with thousands of hostnames.
 
 ### Fixed

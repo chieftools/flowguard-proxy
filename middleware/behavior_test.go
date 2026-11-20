@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
+	"time"
 
 	"go.chief.tools/flowguard-proxy/config"
 )
@@ -115,5 +117,74 @@ func TestBehaviorTrackerGroupsIPv6ClientsBySlash64(t *testing.T) {
 	}
 	if last.Fingerprint.UniqueIPs60S != 1 {
 		t.Fatalf("expected one /64 to count as one unique client, got %+v", last.Fingerprint)
+	}
+}
+
+func TestBehaviorTrackerExpiresQuietClientsAndFingerprints(t *testing.T) {
+	clock := time.Unix(1_800_000_000, 0)
+	tracker := NewBehaviorTracker()
+	tracker.now = func() time.Time { return clock }
+	var last *BehaviorSnapshot
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		last = GetBehaviorSnapshot(r)
+	})
+	request := func(ip, ja4 string) {
+		req := httptest.NewRequest(http.MethodGet, "https://edge.example.test/landing", nil)
+		ctx := context.WithValue(req.Context(), ContextKeyClientIP, ip)
+		ctx = context.WithValue(ctx, ContextKeyClientASNInfo, &ASNInfo{ASN: "AS-" + ip, CountryCode: "XZ"})
+		tracker.Handle(httptest.NewRecorder(), WithJA4Fingerprint(req.WithContext(ctx), ja4), next)
+	}
+
+	for _, ip := range []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"} {
+		request(ip, "t13d-busy")
+	}
+	request("198.51.100.9", "t13d-quiet")
+	clock = clock.Add(30 * time.Second)
+	request("192.0.2.4", "t13d-busy")
+	clock = clock.Add(31 * time.Second)
+	request("192.0.2.5", "t13d-busy")
+
+	if last.Fingerprint.UniqueIPs60S != 2 || last.Fingerprint.UniqueASNs60S != 2 {
+		t.Fatalf("fingerprint counters = %+v, want only the 2 clients seen in the last minute", last.Fingerprint)
+	}
+	if tracker.client.len() != 2 || tracker.client.get("192.0.2.1") != nil {
+		t.Fatalf("tracked clients = %d, want the 3 quiet clients removed", tracker.client.len())
+	}
+	if tracker.cardinality.get("t13d-quiet") != nil {
+		t.Fatal("expected the quiet fingerprint to be removed")
+	}
+	// Two clients and two ASNs plus one country, for the busy fingerprint only.
+	if tracker.cardinalityKeyCount != 5 {
+		t.Fatalf("cardinality key count = %d, want 5", tracker.cardinalityKeyCount)
+	}
+
+	clock = clock.Add(time.Second)
+	request("192.0.2.1", "t13d-busy")
+	if last.Client.Requests60S != 1 {
+		t.Fatalf("returning client requests_60s = %d, want 1", last.Client.Requests60S)
+	}
+}
+
+func TestRecencyListExpiresOldestEntriesFirst(t *testing.T) {
+	list := newRecencyList[struct{}]()
+	list.insert("a", 10)
+	list.insert("b", 20)
+	list.insert("c", 30)
+	list.touch(list.get("a"), 40)
+
+	var removed []string
+	record := func(entry *recencyEntry[struct{}]) { removed = append(removed, entry.key) }
+
+	if count := list.expire(35, 1, record); count != 1 || !slices.Equal(removed, []string{"b"}) {
+		t.Fatalf("expire with limit 1 removed %v (%d), want [b]", removed, count)
+	}
+	if count := list.expire(35, 10, record); count != 1 || !slices.Equal(removed, []string{"b", "c"}) {
+		t.Fatalf("expire removed %v (%d), want [b c]", removed, count)
+	}
+	if list.len() != 1 || list.get("a") == nil {
+		t.Fatalf("remaining entries = %d, want only the touched entry a", list.len())
+	}
+	if count := list.expire(40, 10, nil); count != 1 || list.len() != 0 || list.newest != nil || list.oldest != nil {
+		t.Fatalf("expire of the last entry removed %d and left %d entries", count, list.len())
 	}
 }
