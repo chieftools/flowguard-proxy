@@ -594,6 +594,40 @@ func TestGetCertificateForHostnameFallsBackWhenMatchesAreExpired(t *testing.T) {
 	}
 }
 
+func TestGetCertificateForHostnameMatchesWildcardsOneLabelDeep(t *testing.T) {
+	now := time.Now()
+	exactCert := createSelfSignedRSACert(t, "www.example.test", now.Add(24*time.Hour))
+	wildcardCert := createWildcardCert(t, "example.test", now.Add(24*time.Hour), true)
+
+	manager := &Manager{hostnameCache: make(map[string][]*certificateWithMetadata)}
+	for path, cert := range map[string]*tls.Certificate{"/certs/www.pem": exactCert, "/certs/wild.pem": wildcardCert} {
+		hostnames := manager.getCertificateHostnames(cert.Leaf)
+		metadata := manager.extractCertificateMetadata(cert, path, hostnames)
+		for _, name := range hostnames {
+			manager.hostnameCache[name] = append(manager.hostnameCache[name], metadata)
+		}
+	}
+
+	tests := map[string]*tls.Certificate{
+		"api.example.test": wildcardCert,
+		// Both certificates cover it, and wildcards are preferred
+		"www.example.test":     wildcardCert,
+		"a.api.example.test":   nil,
+		"example.test":         nil,
+		"api.other.test":       nil,
+		"localhost":            nil,
+		"":                     nil,
+		"api.example.test.com": nil,
+	}
+	for hostname, want := range tests {
+		t.Run(hostname, func(t *testing.T) {
+			if got := manager.GetCertificateForHostname(hostname); got != want {
+				t.Fatalf("GetCertificateForHostname(%q) returned %p, want %p", hostname, got, want)
+			}
+		})
+	}
+}
+
 func TestGetCertificateForHostnameIgnoresCase(t *testing.T) {
 	now := time.Now()
 	exactCert := createSelfSignedRSACert(t, "App.Example.TEST", now.Add(24*time.Hour))

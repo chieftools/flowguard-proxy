@@ -9,6 +9,10 @@ release.
 
 ## [Unreleased]
 
+### Changed
+
+- Certificate lookups during the TLS handshake now take the same time no matter how many hostnames are loaded. Before, every handshake checked each loaded hostname for a matching wildcard, which slowed handshakes on hosts with thousands of hostnames.
+
 ### Fixed
 
 - Fixed FlowGuard accepting a resumed TLS session for a hostname whose certificate was removed, for up to 7 days. A browser that had visited the site, such as a tenant deleted in Ploi, got a `Bad Gateway` error from FlowGuard instead of the connection error it gets from the web server. FlowGuard now rejects the connection the same way it rejects one for a hostname it never had a certificate for.

@@ -155,15 +155,12 @@ func (cm *Manager) GetCertificateForHostname(hostname string) *tls.Certificate {
 		}
 	}
 
-	// Check for wildcard matches by iterating through all wildcard patterns in cache
-	// For example, if hostname is "www.example.com", check if "*.example.com" matches
-	for cachedHostname, candidates := range cm.hostnameCache {
-		if strings.HasPrefix(cachedHostname, "*.") && cm.matchesWildcard(cachedHostname, hostname) {
-			for _, candidate := range candidates {
-				if !seenPaths[candidate.filePath] {
-					allCandidates = append(allCandidates, candidate)
-					seenPaths[candidate.filePath] = true
-				}
+	// Check for a wildcard match, such as "*.example.com" for "www.example.com"
+	if pattern, ok := wildcardHostname(hostname); ok {
+		for _, candidate := range cm.hostnameCache[pattern] {
+			if !seenPaths[candidate.filePath] {
+				allCandidates = append(allCandidates, candidate)
+				seenPaths[candidate.filePath] = true
 			}
 		}
 	}
@@ -215,15 +212,13 @@ func (cm *Manager) ShowCertificatesForHostname(hostname string) {
 		}
 	}
 
-	// Check for wildcard matches - iterate through all cached hostnames
-	for cachedHostname, candidates := range cm.hostnameCache {
-		if strings.HasPrefix(cachedHostname, "*.") && cm.matchesWildcard(cachedHostname, hostname) {
-			for _, meta := range candidates {
-				if _, exists := uniqueCandidates[meta.filePath]; !exists {
-					uniqueCandidates[meta.filePath] = &candidateWithMatch{
-						meta:      meta,
-						matchType: "wildcard",
-					}
+	// Check for a wildcard match
+	if pattern, ok := wildcardHostname(hostname); ok {
+		for _, meta := range cm.hostnameCache[pattern] {
+			if _, exists := uniqueCandidates[meta.filePath]; !exists {
+				uniqueCandidates[meta.filePath] = &candidateWithMatch{
+					meta:      meta,
+					matchType: "wildcard",
 				}
 			}
 		}
@@ -1019,20 +1014,16 @@ func normalizeHostname(hostname string) string {
 	return strings.ToLower(strings.TrimSuffix(hostname, "."))
 }
 
-func (cm *Manager) matchesWildcard(pattern, hostname string) bool {
-	if !strings.HasPrefix(pattern, "*.") {
-		return pattern == hostname
+// wildcardHostname returns the only wildcard name that can cover hostname,
+// such as "*.example.com" for "www.example.com". A wildcard covers exactly one
+// label, so hostnames without a dot have none.
+func wildcardHostname(hostname string) (string, bool) {
+	_, parent, found := strings.Cut(hostname, ".")
+	if !found {
+		return "", false
 	}
 
-	// For wildcard certificates like *.example.com
-	suffix := pattern[1:] // .example.com
-	if !strings.HasSuffix(hostname, suffix) {
-		return false
-	}
-
-	// Check that there's exactly one more domain component
-	prefix := strings.TrimSuffix(hostname, suffix)
-	return !strings.Contains(prefix, ".")
+	return "*." + parent, true
 }
 
 func (cm *Manager) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
