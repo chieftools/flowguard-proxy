@@ -604,11 +604,17 @@ func (s *Server) newOrdinaryUpstreamTransport(pinSource bool) *http.Transport {
 	if s.config.scheme == "https" {
 		transport.TLSClientConfig = &tls.Config{
 			InsecureSkipVerify: true,
+			ClientSessionCache: tls.NewLRUClientSessionCache(upstreamTLSSessionCacheSize),
 		}
 	}
 
 	return transport
 }
+
+// upstreamTLSSessionCacheSize is how many backend TLS sessions are kept for
+// resumption. Sessions are kept per hostname, so a new connection to the web
+// server skips the full handshake for any recently used site.
+const upstreamTLSSessionCacheSize = 1024
 
 func newUpstreamDialer(source string, pinSource bool) *net.Dialer {
 	dialer := &net.Dialer{

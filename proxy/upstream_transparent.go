@@ -48,6 +48,7 @@ type transparentTransportPool struct {
 	fwmark       uint32
 	closed       bool
 	newTransport func(transparentTransportKey, bool) (*http.Transport, error)
+	tlsSessions  tls.ClientSessionCache // Shared by all transports, so a new client resumes TLS with the backend
 }
 
 func newTransparentTransportPool(maxEntries int, idleTimeout time.Duration, fwmark uint32) *transparentTransportPool {
@@ -57,6 +58,7 @@ func newTransparentTransportPool(maxEntries int, idleTimeout time.Duration, fwma
 		maxEntries:  maxEntries,
 		idleTimeout: idleTimeout,
 		fwmark:      fwmark,
+		tlsSessions: tls.NewLRUClientSessionCache(upstreamTLSSessionCacheSize),
 	}
 }
 
@@ -172,6 +174,10 @@ func (p *transparentTransportPool) buildTransport(key transparentTransportKey, d
 	if err != nil {
 		return nil, err
 	}
+	return p.transportWithDialer(key, dialContext, disableKeepAlives), nil
+}
+
+func (p *transparentTransportPool) transportWithDialer(key transparentTransportKey, dialContext func(context.Context, string, string) (net.Conn, error), disableKeepAlives bool) *http.Transport {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return dialContext(ctx, network, key.destination)
@@ -186,9 +192,12 @@ func (p *transparentTransportPool) buildTransport(key transparentTransportKey, d
 		ExpectContinueTimeout: time.Second,
 	}
 	if key.scheme == "https" {
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		transport.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true,
+			ClientSessionCache: p.tlsSessions,
+		}
 	}
-	return transport, nil
+	return transport
 }
 
 func (p *transparentTransportPool) CloseIdleConnections() {
