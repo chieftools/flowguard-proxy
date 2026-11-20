@@ -33,22 +33,25 @@ func (m *Manager) compileConditionRegex(cond *RuleConditions) {
 	}
 }
 
-// compileConditionIPTargets recursively builds the target sets of ip and
-// proxy-ip matches, so requests are not matched against the raw strings.
-func compileConditionIPTargets(cond *RuleConditions) {
+// compileConditionValues recursively builds the target sets of ip and
+// proxy-ip matches and the value sets of other in and not-in matches, so
+// requests are not matched against each listed value in turn.
+func compileConditionValues(cond *RuleConditions) {
 	for i := range cond.Matches {
 		match := &cond.Matches[i]
-		if match.Type != "ip" && match.Type != "proxy-ip" {
-			continue
-		}
-		switch match.Match {
-		case "equals", "not-equals", "in", "not-in":
-			match.ipTargets = buildIPTargets(match)
+		switch {
+		case match.Type == "ip" || match.Type == "proxy-ip":
+			switch match.Match {
+			case "equals", "not-equals", "in", "not-in":
+				match.ipTargets = buildIPTargets(match)
+			}
+		case (match.Match == "in" || match.Match == "not-in") && len(match.Values) > 0:
+			match.valueSet = buildValueSet(match)
 		}
 	}
 
 	for i := range cond.Groups {
-		compileConditionIPTargets(&cond.Groups[i])
+		compileConditionValues(&cond.Groups[i])
 	}
 }
 

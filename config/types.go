@@ -3,6 +3,7 @@ package config
 import (
 	"net/netip"
 	"regexp"
+	"strings"
 
 	"go.chief.tools/flowguard-proxy/iplist"
 	"go.chief.tools/flowguard-proxy/pusher"
@@ -204,6 +205,7 @@ type MatchCondition struct {
 	RawMatch        bool     `json:"raw_match,omitempty"`  // Skip normalization for path matching
 	compiledRegex   *regexp.Regexp
 	ipTargets       *iplist.Set
+	valueSet        map[string]struct{}
 }
 
 type RuleActionChallengeConfig struct {
@@ -243,6 +245,29 @@ func buildIPTargets(m *MatchCondition) *iplist.Set {
 	}
 
 	return iplist.NewSet(prefixes)
+}
+
+// ValueSet returns Values as a set, lowercased for case-insensitive matches.
+// Conditions loaded from the configuration file have it built once at load;
+// others build it on each call.
+func (m *MatchCondition) ValueSet() map[string]struct{} {
+	if m.valueSet != nil {
+		return m.valueSet
+	}
+
+	return buildValueSet(m)
+}
+
+func buildValueSet(m *MatchCondition) map[string]struct{} {
+	set := make(map[string]struct{}, len(m.Values))
+	for _, value := range m.Values {
+		if m.CaseInsensitive {
+			value = strings.ToLower(value)
+		}
+		set[value] = struct{}{}
+	}
+
+	return set
 }
 
 // SetCompiledRegexInternal sets the compiled regex (for testing)

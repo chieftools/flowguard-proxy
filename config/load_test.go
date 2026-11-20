@@ -405,3 +405,36 @@ func TestLoadBuildsIPMatchTargets(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadBuildsInMatchValueSets(t *testing.T) {
+	configPath := writeTestConfig(t, `{
+  "rules": {
+    "agent-rule": {
+      "action": "block",
+      "conditions": {
+        "matches": [
+          {"type": "agent", "match": "in", "case_insensitive": true, "values": ["BadBot/1.0", "Scraper"]},
+          {"type": "method", "match": "not-in", "values": ["GET", "HEAD"]},
+          {"type": "path", "match": "equals", "value": "/a"}
+        ]
+      }
+    }
+  }
+}`)
+
+	manager, err := loadTestManager(configPath)
+	if err != nil {
+		t.Fatalf("load manager: %v", err)
+	}
+
+	matches := manager.config.Rules["agent-rule"].Conditions.Matches
+	if _, ok := matches[0].valueSet["badbot/1.0"]; !ok || len(matches[0].valueSet) != 2 {
+		t.Fatalf("case-insensitive value set = %v, want lowercased values", matches[0].valueSet)
+	}
+	if _, ok := matches[1].valueSet["GET"]; !ok || len(matches[1].valueSet) != 2 {
+		t.Fatalf("case-sensitive value set = %v, want values unchanged", matches[1].valueSet)
+	}
+	if matches[2].valueSet != nil {
+		t.Fatal("expected no value set for an equals match")
+	}
+}

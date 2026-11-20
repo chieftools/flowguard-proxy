@@ -597,35 +597,12 @@ func (rm *RulesMiddleware) matchesStringValue(value string, match *config.MatchC
 	}
 
 	// Handle list-based matches
-	if len(match.Values) > 0 {
-		switch match.Match {
-		case "in":
-			for _, v := range match.Values {
-				if match.CaseInsensitive {
-					if strings.ToLower(v) == compareValue {
-						return true
-					}
-				} else {
-					if v == value {
-						return true
-					}
-				}
-			}
-			return false
-		case "not-in":
-			for _, v := range match.Values {
-				if match.CaseInsensitive {
-					if strings.ToLower(v) == compareValue {
-						return false
-					}
-				} else {
-					if v == value {
-						return false
-					}
-				}
-			}
-			return true
+	if len(match.Values) > 0 && (match.Match == "in" || match.Match == "not-in") {
+		_, listed := match.ValueSet()[compareValue]
+		if match.Match == "not-in" {
+			return !listed
 		}
+		return listed
 	}
 
 	// Handle string matches
