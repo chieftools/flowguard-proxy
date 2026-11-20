@@ -226,6 +226,26 @@ func (m *Manager) HasList(listName string) bool {
 	return exists
 }
 
+// ReloadLocalLists rereads the lists that come only from a local file. Such
+// lists have no refresh loop, so a configuration change is when they pick up
+// edits to their file.
+func (m *Manager) ReloadLocalLists() {
+	m.mu.RLock()
+	var localLists []*IPList
+	for _, list := range m.lists {
+		if list.config.URL == "" && list.config.Path != "" {
+			localLists = append(localLists, list)
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, list := range localLists {
+		if err := list.loadInitial(m.cache, m.verbose); err != nil {
+			log.Printf("[ip_list] Failed to reload list %s: %v", list.name, err)
+		}
+	}
+}
+
 // refreshLoop periodically refreshes a list from its URL
 func (m *Manager) refreshLoop(name string, list *IPList) {
 	defer m.wg.Done()

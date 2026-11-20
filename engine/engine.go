@@ -6,6 +6,7 @@ package engine
 
 import (
 	"log"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,6 +36,7 @@ type Engine struct {
 
 	mu            sync.RWMutex
 	ipListManager *iplist.Manager
+	ipListsConfig map[string]iplist.ListConfig // The lists ipListManager was built from
 
 	stopHeartbeat    chan struct{}
 	forceHeartbeat   chan struct{}
@@ -181,15 +183,7 @@ func (e *Engine) initializeIPListManager(cfg *config.Config) {
 		return
 	}
 
-	// Convert config.IPListConfig to iplist.ListConfig
-	listsConfig := make(map[string]iplist.ListConfig)
-	for name, listCfg := range *cfg.IPLists {
-		listsConfig[name] = iplist.ListConfig{
-			URL:                    listCfg.URL,
-			Path:                   listCfg.Path,
-			RefreshIntervalSeconds: listCfg.RefreshIntervalSeconds,
-		}
-	}
+	listsConfig := ipListsConfig(cfg)
 
 	// Create the IP list manager with the cache instance
 	ipListMgr, err := iplist.New(listsConfig, e.configManager.GetCache(), e.options.Verbose)
@@ -202,6 +196,7 @@ func (e *Engine) initializeIPListManager(cfg *config.Config) {
 	e.mu.Lock()
 	oldManager := e.ipListManager
 	e.ipListManager = ipListMgr
+	e.ipListsConfig = listsConfig
 	e.mu.Unlock()
 
 	// Stop the old manager if it exists
@@ -221,6 +216,22 @@ func (e *Engine) initializeIPListManager(cfg *config.Config) {
 		entryLabel = "entry"
 	}
 	log.Printf("[ip_list] Initialized %d %s with %d total %s", listCount, listLabel, entryCount, entryLabel)
+}
+
+// ipListsConfig converts the configured IP lists to the IP list manager's form.
+func ipListsConfig(cfg *config.Config) map[string]iplist.ListConfig {
+	listsConfig := make(map[string]iplist.ListConfig)
+	if cfg == nil || cfg.IPLists == nil {
+		return listsConfig
+	}
+	for name, listCfg := range *cfg.IPLists {
+		listsConfig[name] = iplist.ListConfig{
+			URL:                    listCfg.URL,
+			Path:                   listCfg.Path,
+			RefreshIntervalSeconds: listCfg.RefreshIntervalSeconds,
+		}
+	}
+	return listsConfig
 }
 
 // handleIPListConfigChange handles changes to IP list configuration during hot-reload
@@ -245,6 +256,7 @@ func (e *Engine) handleIPListConfigChange(newConfig *config.Config) {
 		e.mu.Lock()
 		oldManager := e.ipListManager
 		e.ipListManager = nil
+		e.ipListsConfig = nil
 		e.mu.Unlock()
 
 		if oldManager != nil {
@@ -254,8 +266,19 @@ func (e *Engine) handleIPListConfigChange(newConfig *config.Config) {
 		return
 	}
 
-	// Case 3: IP lists were modified (had manager, still have config)
+	// Case 3: IP lists still configured. Rebuild the manager only when the
+	// lists changed; otherwise keep the loaded lists and their refresh loops,
+	// and reread only lists from local files, which have no refresh loop.
 	if hadIPListManager && hasIPLists {
+		e.mu.RLock()
+		currentManager := e.ipListManager
+		unchanged := maps.Equal(e.ipListsConfig, ipListsConfig(newConfig))
+		e.mu.RUnlock()
+		if unchanged {
+			currentManager.ReloadLocalLists()
+			return
+		}
+
 		log.Printf("[ip_list] IP lists configuration changed, reinitializing manager")
 		e.initializeIPListManager(newConfig)
 		return

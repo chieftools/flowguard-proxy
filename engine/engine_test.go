@@ -154,6 +154,38 @@ func TestIPListConfigChangeAddsAndRemovesManager(t *testing.T) {
 	}
 }
 
+func TestIPListConfigChangeKeepsUnchangedListsAndRereadsLocalFiles(t *testing.T) {
+	listPath := filepath.Join(t.TempDir(), "allowlist.txt")
+	if err := os.WriteFile(listPath, []byte("192.0.2.0/24\n"), 0o644); err != nil {
+		t.Fatalf("write list: %v", err)
+	}
+	lists := config.IPListsConfig{"allowlist": {Path: listPath}}
+	e := newTestEngine(t, config.Config{IPLists: &lists}, Options{})
+	manager := e.ipListManager
+	if manager == nil {
+		t.Fatal("expected an IP list manager for the configured list")
+	}
+
+	if err := os.WriteFile(listPath, []byte("198.51.100.0/24\n"), 0o644); err != nil {
+		t.Fatalf("rewrite list: %v", err)
+	}
+	unchanged := config.IPListsConfig{"allowlist": {Path: listPath}}
+	e.handleIPListConfigChange(&config.Config{IPLists: &unchanged})
+
+	if e.ipListManager != manager {
+		t.Fatal("expected the IP list manager to be kept when the lists did not change")
+	}
+	if !manager.Contains("allowlist", "198.51.100.7") || manager.Contains("allowlist", "192.0.2.7") {
+		t.Fatal("expected the local list to be reread from its file")
+	}
+
+	changed := config.IPListsConfig{"allowlist": {Path: listPath}, "blocklist": {Path: listPath}}
+	e.handleIPListConfigChange(&config.Config{IPLists: &changed})
+	if e.ipListManager == manager || !e.ipListManager.HasList("blocklist") {
+		t.Fatal("expected the IP list manager to be rebuilt when a list was added")
+	}
+}
+
 func TestStopIsIdempotent(t *testing.T) {
 	e := newTestEngine(t, config.Config{}, Options{})
 	e.StopBackground()
