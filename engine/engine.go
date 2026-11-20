@@ -234,6 +234,17 @@ func ipListsConfig(cfg *config.Config) map[string]iplist.ListConfig {
 	return listsConfig
 }
 
+// allListsLoaded reports whether manager holds every list in listsConfig. A
+// list whose first load failed is left out of the manager.
+func allListsLoaded(manager *iplist.Manager, listsConfig map[string]iplist.ListConfig) bool {
+	for name := range listsConfig {
+		if !manager.HasList(name) {
+			return false
+		}
+	}
+	return true
+}
+
 // handleIPListConfigChange handles changes to IP list configuration during hot-reload
 func (e *Engine) handleIPListConfigChange(newConfig *config.Config) {
 	// Check if IP lists configuration exists and has changed
@@ -266,16 +277,18 @@ func (e *Engine) handleIPListConfigChange(newConfig *config.Config) {
 		return
 	}
 
-	// Case 3: IP lists still configured. Rebuild the manager only when the
-	// lists changed; otherwise keep the loaded lists and their refresh loops,
-	// and reread only lists from local files, which have no refresh loop.
+	// Case 3: IP lists still configured. When the lists did not change and
+	// all of them loaded, keep them and their refresh loops, and reload only
+	// the lists without a refresh loop. Otherwise rebuild the manager, which
+	// also retries lists that failed to load.
 	if hadIPListManager && hasIPLists {
+		listsConfig := ipListsConfig(newConfig)
 		e.mu.RLock()
 		currentManager := e.ipListManager
-		unchanged := maps.Equal(e.ipListsConfig, ipListsConfig(newConfig))
+		unchanged := maps.Equal(e.ipListsConfig, listsConfig) && allListsLoaded(currentManager, listsConfig)
 		e.mu.RUnlock()
 		if unchanged {
-			currentManager.ReloadLocalLists()
+			currentManager.ReloadListsWithoutRefresh()
 			return
 		}
 

@@ -3,10 +3,13 @@ package iplist
 import (
 	"bytes"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"go.chief.tools/flowguard-proxy/cache"
@@ -606,5 +609,52 @@ func TestEmptyIPList(t *testing.T) {
 	}
 	if manager.Contains("empty_list", "2001:db8::1") {
 		t.Error("Empty list should not contain any IPv6")
+	}
+}
+
+func TestReloadListsWithoutRefreshFetchesURLListsWithoutAnInterval(t *testing.T) {
+	var fetches atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetches.Add(1)
+		_, _ = w.Write([]byte("192.0.2.1\n"))
+	}))
+	defer server.Close()
+
+	cacheDir := t.TempDir()
+	cacheInstance, err := cache.NewCache(cacheDir, "test-agent", false)
+	if err != nil {
+		t.Fatalf("NewCache: %v", err)
+	}
+	manager, err := New(map[string]ListConfig{
+		"without-interval": {URL: server.URL + "/without-interval"},
+		"with-interval":    {URL: server.URL + "/with-interval", RefreshIntervalSeconds: 3600},
+	}, cacheInstance, false)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer manager.Stop()
+	if fetches.Load() != 2 {
+		t.Fatalf("initial fetches = %d, want 2", fetches.Load())
+	}
+
+	manager.ReloadListsWithoutRefresh()
+	if fetches.Load() != 2 {
+		t.Fatalf("fetches with a fresh cache = %d, want 2", fetches.Load())
+	}
+
+	// Without a cached copy, as when the cache expired, the list without a
+	// refresh interval is fetched again; the other refreshes on its own.
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(cacheDir, entry.Name())); err != nil {
+			t.Fatalf("clear cache: %v", err)
+		}
+	}
+	manager.ReloadListsWithoutRefresh()
+	if fetches.Load() != 3 {
+		t.Fatalf("fetches after the cache expired = %d, want 3", fetches.Load())
 	}
 }

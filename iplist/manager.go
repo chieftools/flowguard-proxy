@@ -61,7 +61,7 @@ func New(listsConfig map[string]ListConfig, cacheInstance *cache.Cache, verbose 
 
 	// Start refresh goroutines for lists with URL sources
 	for name, list := range m.lists {
-		if list.config.URL != "" && list.config.RefreshIntervalSeconds > 0 {
+		if list.hasRefreshLoop() {
 			m.wg.Add(1)
 			go m.refreshLoop(name, list)
 		}
@@ -226,24 +226,29 @@ func (m *Manager) HasList(listName string) bool {
 	return exists
 }
 
-// ReloadLocalLists rereads the lists that come only from a local file. Such
-// lists have no refresh loop, so a configuration change is when they pick up
-// edits to their file.
-func (m *Manager) ReloadLocalLists() {
+// ReloadListsWithoutRefresh reloads the lists without a refresh loop: lists
+// from a local file, which pick up edits to the file, and URL lists without a
+// refresh interval, which are fetched again once their cache expires.
+func (m *Manager) ReloadListsWithoutRefresh() {
 	m.mu.RLock()
-	var localLists []*IPList
+	var lists []*IPList
 	for _, list := range m.lists {
-		if list.config.URL == "" && list.config.Path != "" {
-			localLists = append(localLists, list)
+		if !list.hasRefreshLoop() {
+			lists = append(lists, list)
 		}
 	}
 	m.mu.RUnlock()
 
-	for _, list := range localLists {
+	for _, list := range lists {
 		if err := list.loadInitial(m.cache, m.verbose); err != nil {
 			log.Printf("[ip_list] Failed to reload list %s: %v", list.name, err)
 		}
 	}
+}
+
+// hasRefreshLoop reports whether the list refreshes itself from its URL.
+func (l *IPList) hasRefreshLoop() bool {
+	return l.config.URL != "" && l.config.RefreshIntervalSeconds > 0
 }
 
 // refreshLoop periodically refreshes a list from its URL

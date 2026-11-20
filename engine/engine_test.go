@@ -186,6 +186,25 @@ func TestIPListConfigChangeKeepsUnchangedListsAndRereadsLocalFiles(t *testing.T)
 	}
 }
 
+func TestIPListConfigChangeRetriesListsThatFailedToLoad(t *testing.T) {
+	listPath := filepath.Join(t.TempDir(), "blocklist.txt")
+	lists := config.IPListsConfig{"blocklist": {Path: listPath}}
+	e := newTestEngine(t, config.Config{IPLists: &lists}, Options{})
+	if e.ipListManager == nil || e.ipListManager.HasList("blocklist") {
+		t.Fatal("expected the manager without the list whose file is missing")
+	}
+
+	if err := os.WriteFile(listPath, []byte("192.0.2.0/24\n"), 0o644); err != nil {
+		t.Fatalf("write list: %v", err)
+	}
+	unchanged := config.IPListsConfig{"blocklist": {Path: listPath}}
+	e.handleIPListConfigChange(&config.Config{IPLists: &unchanged})
+
+	if !e.ipListManager.HasList("blocklist") || !e.ipListManager.Contains("blocklist", "192.0.2.7") {
+		t.Fatal("expected a list that failed to load to be loaded on the next configuration change")
+	}
+}
+
 func TestStopIsIdempotent(t *testing.T) {
 	e := newTestEngine(t, config.Config{}, Options{})
 	e.StopBackground()
