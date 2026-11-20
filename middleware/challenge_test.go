@@ -981,3 +981,26 @@ func assertChallengeInfoNames(t *testing.T, r *http.Request, ruleName string, ac
 		t.Fatalf("expected challenge action name %q, got %#v", actionName, info.Action)
 	}
 }
+
+func TestConsumeChallengeRejectsReplaysAndForgetsExpiredIDs(t *testing.T) {
+	cm := &ChallengeManager{consumedChallenges: make(map[string]time.Time)}
+	if !cm.consumeChallenge("fresh", time.Now().Add(time.Minute)) {
+		t.Fatal("expected a new challenge ID to be accepted")
+	}
+	if cm.consumeChallenge("fresh", time.Now().Add(time.Minute)) {
+		t.Fatal("expected a replayed challenge ID to be rejected")
+	}
+
+	// An expired ID counts as removed, even before the next sweep.
+	cm.consumedChallenges["expired"] = time.Now().Add(-time.Second)
+	if !cm.consumeChallenge("expired", time.Now().Add(time.Minute)) {
+		t.Fatal("expected an expired challenge ID to be treated as removed")
+	}
+
+	cm.consumedChallenges["stale"] = time.Now().Add(-time.Second)
+	cm.lastConsumedSweep = time.Time{}
+	cm.consumeChallenge("another", time.Now().Add(time.Minute))
+	if _, exists := cm.consumedChallenges["stale"]; exists {
+		t.Fatal("expected the sweep to remove expired challenge IDs")
+	}
+}

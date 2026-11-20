@@ -30,6 +30,7 @@ release.
 - The Loki and OpenObserve log sinks now flatten each log entry in one pass over its encoding, instead of decoding it, flattening it and encoding it again. A log line now takes about 3 µs instead of 17 µs, with 32 allocations instead of 241. Fields within a flattened entry now keep the order of the log entry instead of being sorted, and large numbers are sent exactly instead of rounded.
 - Removing repeated response header values no longer builds a lookup table for every header with more than one value, such as `Set-Cookie`, when no value repeats. This saves about 0.2 µs and 4 allocations on a typical response.
 - Recording which rule matched a request, and whether it was rate limited, blocked or challenged, no longer copies the request and adds layers to its context for every matching rule. With three matching log rules this cuts about 0.6 µs and 21 allocations per request, and later lookups no longer slow down with each matching rule.
+- Verifying a solved challenge no longer scans every challenge solved in the last minutes for expired ones; that now happens at most every 10 seconds. With 12,000 recently solved challenges, a verification now takes about 0.2 µs instead of 70 µs.
 - Certificate lookups during the TLS handshake now take the same time no matter how many hostnames are loaded. Before, every handshake checked each loaded hostname for a matching wildcard, which slowed handshakes on hosts with thousands of hostnames.
 
 ### Fixed

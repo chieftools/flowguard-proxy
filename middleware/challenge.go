@@ -57,6 +57,7 @@ type ChallengeManager struct {
 	mu                  sync.Mutex
 	processSecret       []byte
 	consumedChallenges  map[string]time.Time
+	lastConsumedSweep   time.Time
 	warnedProcessSecret bool
 	renderErrorLimiter  *challengeRenderErrorLimiter
 }
@@ -641,18 +642,28 @@ func (cm *ChallengeManager) consumeChallenge(id string, expiresAt time.Time) boo
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	for challengeID, expires := range cm.consumedChallenges {
-		if now.After(expires) {
-			delete(cm.consumedChallenges, challengeID)
+	// Remove expired IDs at most every consumedChallengeSweepInterval, so a
+	// verify does not scan every ID consumed in the last minutes. An expired
+	// ID that is still present is treated as removed.
+	if now.Sub(cm.lastConsumedSweep) >= consumedChallengeSweepInterval {
+		for challengeID, expires := range cm.consumedChallenges {
+			if now.After(expires) {
+				delete(cm.consumedChallenges, challengeID)
+			}
 		}
+		cm.lastConsumedSweep = now
 	}
 
-	if _, exists := cm.consumedChallenges[id]; exists {
+	if expires, exists := cm.consumedChallenges[id]; exists && !now.After(expires) {
 		return false
 	}
 	cm.consumedChallenges[id] = expiresAt
 	return true
 }
+
+// consumedChallengeSweepInterval is how often consumed challenge IDs that
+// expired are removed.
+const consumedChallengeSweepInterval = 10 * time.Second
 
 func (cm *ChallengeManager) allowAttempt(r *http.Request, settings challengeSettings) bool {
 	if settings.MaxAttemptsPerWindow == 0 || settings.AttemptWindow <= 0 {
