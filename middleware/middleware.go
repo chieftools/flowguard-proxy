@@ -45,6 +45,13 @@ func (mc *Chain) ServeHTTPWithHandler(w http.ResponseWriter, r *http.Request, fi
 		})
 	}
 
+	// Record when the middleware finished, right before the final handler
+	final := handler
+	handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		markMiddlewareEnd(r)
+		final.ServeHTTP(w, r)
+	})
+
 	// Build the middleware chain by wrapping handlers
 	// We iterate backwards so that the first middleware added becomes the outermost wrapper
 	// This means the first added middleware executes first and completes last (wrap pattern)

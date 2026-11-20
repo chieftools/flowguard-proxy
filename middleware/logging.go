@@ -582,7 +582,7 @@ func getRuleInfo(r *http.Request) RequestLogEntryRuleInfo {
 
 	// Calculate middleware latency (time from start to when proxy handler begins)
 	startTime := GetStartTime(r)
-	if middlewareEndTime, ok := r.Context().Value(ContextKeyMiddlewareEndTime).(time.Time); ok && !startTime.IsZero() {
+	if middlewareEndTime := GetMiddlewareEndTime(r); !middlewareEndTime.IsZero() && !startTime.IsZero() {
 		latency := middlewareEndTime.Sub(startTime)
 		if latency > 0 {
 			info.TookUS = new(latency.Microseconds())

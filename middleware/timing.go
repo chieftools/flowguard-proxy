@@ -19,21 +19,34 @@ func (tm *TimingMiddleware) Handle(w http.ResponseWriter, r *http.Request, next 
 	startTime := time.Now()
 	ctx := context.WithValue(r.Context(), ContextKeyStartTime, startTime)
 	ctx = context.WithValue(ctx, ContextKeyStreamID, generateStreamID())
-	r = r.WithContext(ctx)
+	ctx = context.WithValue(ctx, ContextKeyMiddlewareEndTime, &middlewareTiming{})
 
-	// Wrap the next handler to capture end time right before proxy executes
-	wrappedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Capture end time just before the proxy handler begins
-		endTime := time.Now()
-		ctx := context.WithValue(r.Context(), ContextKeyMiddlewareEndTime, endTime)
-		r = r.WithContext(ctx)
+	// Run the rest of the chain; it records the end time right before the
+	// final handler (the proxy) starts
+	next.ServeHTTP(w, r.WithContext(ctx))
+}
 
-		// Call the final handler (proxy)
-		next.ServeHTTP(w, r)
-	})
+// middlewareTiming holds when the middleware chain handed the request to its
+// final handler. It is a pointer in the context so middleware that log after
+// the request, holding the request as they received it, can read it.
+type middlewareTiming struct {
+	end time.Time
+}
 
-	// Execute all middleware in the chain
-	wrappedHandler.ServeHTTP(w, r)
+// markMiddlewareEnd records that the middleware chain finished with r.
+func markMiddlewareEnd(r *http.Request) {
+	if timing, ok := r.Context().Value(ContextKeyMiddlewareEndTime).(*middlewareTiming); ok && timing.end.IsZero() {
+		timing.end = time.Now()
+	}
+}
+
+// GetMiddlewareEndTime returns when the middleware chain handed r to its final
+// handler, or the zero time when it did not, such as for a blocked request.
+func GetMiddlewareEndTime(r *http.Request) time.Time {
+	if timing, ok := r.Context().Value(ContextKeyMiddlewareEndTime).(*middlewareTiming); ok {
+		return timing.end
+	}
+	return time.Time{}
 }
 
 func (tm *TimingMiddleware) Stop() {
