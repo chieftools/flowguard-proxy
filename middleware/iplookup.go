@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -94,6 +95,7 @@ type IPLookupMiddleware struct {
 	configMgr *config.Manager
 	asnDB     *maxminddb.Reader
 	dbPath    string
+	dbFile    os.FileInfo // The file asnDB was opened from, to notice when it is replaced
 	mu        sync.RWMutex
 	stopChan  chan struct{}
 	stopped   bool
@@ -126,33 +128,52 @@ func (m *IPLookupMiddleware) loadASNDatabase() error {
 		return fmt.Errorf("failed to get database path: %w", err)
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	return m.openASNDatabase(dbPath)
+}
 
-	// Close existing database if open
-	if m.asnDB != nil {
-		// Check if path changed
-		if m.dbPath == dbPath {
-			// Same path, no need to reload
-			return nil
-		}
-		m.asnDB.Close()
+// openASNDatabase opens the database at dbPath unless it is the file already
+// open. A refreshed download replaces the file at the same path, so the path
+// alone cannot tell whether the database changed. The new database is opened
+// before taking the lock that lookups need.
+func (m *IPLookupMiddleware) openASNDatabase(dbPath string) error {
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		return fmt.Errorf("failed to open MMDB file: %w", err)
 	}
 
-	// Open the MMDB file
+	m.mu.RLock()
+	unchanged := m.asnDB != nil && m.dbPath == dbPath && sameDatabaseFile(m.dbFile, info)
+	m.mu.RUnlock()
+	if unchanged {
+		return nil
+	}
+
 	db, err := maxminddb.Open(dbPath)
 	if err != nil {
 		return fmt.Errorf("failed to open MMDB file: %w", err)
 	}
 
+	m.mu.Lock()
+	oldDB := m.asnDB
 	m.asnDB = db
 	m.dbPath = dbPath
-	if m.configMgr.IsVerbose() {
+	m.dbFile = info
+	m.mu.Unlock()
+	if oldDB != nil {
+		oldDB.Close()
+	}
+
+	if m.configMgr != nil && m.configMgr.IsVerbose() {
 		log.Printf("[middleware:iplookup] Loaded ASN database from %s", dbPath)
 	} else {
 		log.Printf("[middleware:iplookup] Loaded ASN database")
 	}
 	return nil
+}
+
+func sameDatabaseFile(previous, current os.FileInfo) bool {
+	return previous != nil && os.SameFile(previous, current) &&
+		previous.ModTime().Equal(current.ModTime()) && previous.Size() == current.Size()
 }
 
 // Handle enriches the request with IP and ASN information using HTTP middleware pattern

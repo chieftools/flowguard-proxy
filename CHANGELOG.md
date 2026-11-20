@@ -23,6 +23,7 @@ release.
 
 ### Fixed
 
+- Fixed FlowGuard never loading a refreshed IP database. A refreshed download replaces the file at the same path, which FlowGuard took to mean nothing changed, so it kept using the ASN and country data it loaded at startup until it restarted, and kept the replaced file on disk.
 - Fixed FlowGuard accepting a resumed TLS session for a hostname whose certificate was removed, for up to 7 days. A browser that had visited the site, such as a tenant deleted in Ploi, got a `Bad Gateway` error from FlowGuard instead of the connection error it gets from the web server. FlowGuard now rejects the connection the same way it rejects one for a hostname it never had a certificate for.
 
 ## [0.33.5]
