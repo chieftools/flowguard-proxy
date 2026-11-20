@@ -224,10 +224,31 @@ func (s *Server) resetListenerState() {
 	s.udpOnce = sync.Once{}
 }
 
+// reverseProxyBufferPool reuses the buffers response bodies are copied with,
+// which ReverseProxy otherwise allocates for every response.
+var reverseProxyBufferPool = &proxyBufferPool{}
+
+type proxyBufferPool struct {
+	pool sync.Pool
+}
+
+func (p *proxyBufferPool) Get() []byte {
+	if buffer, ok := p.pool.Get().(*[]byte); ok {
+		return *buffer
+	}
+
+	return make([]byte, 32*1024)
+}
+
+func (p *proxyBufferPool) Put(buffer []byte) {
+	p.pool.Put(&buffer)
+}
+
 func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *httputil.ReverseProxy {
 	proxy := &httputil.ReverseProxy{
-		ErrorLog:  newFilteredLogger(s.config.verbose),
-		Transport: s.ensureUpstreamTransport(),
+		ErrorLog:   newFilteredLogger(s.config.verbose),
+		Transport:  s.ensureUpstreamTransport(),
+		BufferPool: reverseProxyBufferPool,
 		Rewrite: func(proxyRequest *httputil.ProxyRequest) {
 			out := proxyRequest.Out
 			out.URL.Host = maybeFormatV6Addr(proxyHost)

@@ -1473,3 +1473,15 @@ func TestReverseProxyGivesHostlessRequestsTheBindAddress(t *testing.T) {
 		})
 	}
 }
+
+func TestReverseProxyReusesCopyBuffers(t *testing.T) {
+	server := NewServer(&ServerConfig{scheme: "http", bindAddr: "127.0.0.1", bindPort: "0"})
+	proxy := server.createReverseProxyWithHost(&url.URL{Scheme: "http", Host: "example.test"}, "example.test")
+
+	if proxy.BufferPool != reverseProxyBufferPool {
+		t.Fatal("expected the reverse proxy to copy response bodies with the shared buffer pool")
+	}
+	if buffer := reverseProxyBufferPool.Get(); len(buffer) != 32*1024 {
+		t.Fatalf("buffer length = %d, want %d", len(buffer), 32*1024)
+	}
+}
