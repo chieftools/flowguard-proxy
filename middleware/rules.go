@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -74,9 +75,11 @@ func (rm *RulesMiddleware) Handle(w http.ResponseWriter, r *http.Request, next h
 		return
 	}
 
+	facts := newRequestFacts(r)
+
 ruleLoop:
 	for _, rule := range rules {
-		if rm.matchesRule(r, rule) {
+		if rm.matchesRule(facts, rule) {
 			actions := rm.configMgr.GetActions()
 
 			action, exists := actions[rule.Action]
@@ -177,15 +180,20 @@ ruleLoop:
 }
 
 // matchesRule checks if a request matches a specific rule
-func (rm *RulesMiddleware) matchesRule(r *http.Request, rule *config.Rule) bool {
+func (rm *RulesMiddleware) matchesRule(facts *requestFacts, rule *config.Rule) bool {
 	if rule.Conditions == nil {
 		return false
 	}
-	return rm.matchesConditions(r, rule.Conditions)
+	return rm.conditionsMatch(facts, rule.Conditions)
 }
 
-// matchesConditions evaluates conditions recursively
+// matchesConditions evaluates conditions against r.
 func (rm *RulesMiddleware) matchesConditions(r *http.Request, conditions *config.RuleConditions) bool {
+	return rm.conditionsMatch(newRequestFacts(r), conditions)
+}
+
+// conditionsMatch evaluates conditions recursively
+func (rm *RulesMiddleware) conditionsMatch(facts *requestFacts, conditions *config.RuleConditions) bool {
 	operator := normalizeConditionOperator(conditions.Operator)
 
 	hasMatches := len(conditions.Matches) > 0
@@ -206,7 +214,7 @@ func (rm *RulesMiddleware) matchesConditions(r *http.Request, conditions *config
 	case "OR":
 		if hasMatches {
 			for i := range conditions.Matches {
-				if rm.evaluateMatch(r, &conditions.Matches[i]) {
+				if rm.evaluateMatchFor(facts, &conditions.Matches[i]) {
 					result = true
 					break
 				}
@@ -214,7 +222,7 @@ func (rm *RulesMiddleware) matchesConditions(r *http.Request, conditions *config
 		}
 		if !result {
 			for _, group := range conditions.Groups {
-				if rm.matchesConditions(r, &group) {
+				if rm.conditionsMatch(facts, &group) {
 					result = true
 					break
 				}
@@ -224,7 +232,7 @@ func (rm *RulesMiddleware) matchesConditions(r *http.Request, conditions *config
 		result = true
 		if hasMatches {
 			for i := range conditions.Matches {
-				if !rm.evaluateMatch(r, &conditions.Matches[i]) {
+				if !rm.evaluateMatchFor(facts, &conditions.Matches[i]) {
 					result = false
 					break
 				}
@@ -232,7 +240,7 @@ func (rm *RulesMiddleware) matchesConditions(r *http.Request, conditions *config
 		}
 		if result {
 			for _, group := range conditions.Groups {
-				if !rm.matchesConditions(r, &group) {
+				if !rm.conditionsMatch(facts, &group) {
 					result = false
 					break
 				}
@@ -254,11 +262,12 @@ func (rm *RulesMiddleware) evaluateMatches(r *http.Request, operator string, mat
 	if len(matches) == 0 {
 		return false
 	}
+	facts := newRequestFacts(r)
 
 	switch operator {
 	case "OR":
 		for _, match := range matches {
-			if rm.evaluateMatch(r, &match) {
+			if rm.evaluateMatchFor(facts, &match) {
 				return true
 			}
 		}
@@ -266,7 +275,7 @@ func (rm *RulesMiddleware) evaluateMatches(r *http.Request, operator string, mat
 	default:
 		// Default to AND
 		for _, match := range matches {
-			if !rm.evaluateMatch(r, &match) {
+			if !rm.evaluateMatchFor(facts, &match) {
 				return false
 			}
 		}
@@ -282,16 +291,22 @@ func normalizeConditionOperator(operator string) string {
 	return operator
 }
 
-// evaluateMatch evaluates a single match condition
+// evaluateMatch evaluates a single match condition against r.
 func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCondition) bool {
+	return rm.evaluateMatchFor(newRequestFacts(r), match)
+}
+
+// evaluateMatchFor evaluates a single match condition
+func (rm *RulesMiddleware) evaluateMatchFor(facts *requestFacts, match *config.MatchCondition) bool {
+	r := facts.r
 	var value string
 
 	// Extract the value based on type
 	switch match.Type {
 	case "domain":
-		value = normalization.Host(r.Host)
+		value = facts.host()
 	case "registerable-domain":
-		value = normalization.RegisterableDomain(r.Host)
+		value = facts.registerableDomain()
 	case "path":
 		// Use the path as sent (still percent-encoded, as forwarded upstream)
 		// if raw_match is true, otherwise normalize for consistent matching
@@ -299,7 +314,7 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 			value = r.URL.EscapedPath()
 		} else {
 			// Normalize the path for consistent matching (Cloudflare-style normalization)
-			value = normalization.NormalizePath(r.URL.Path)
+			value = facts.normalizedPath()
 		}
 	case "method":
 		value = r.Method
@@ -316,14 +331,14 @@ func (rm *RulesMiddleware) evaluateMatch(r *http.Request, match *config.MatchCon
 			log.Printf("[middleware:rules] Query parameter match missing 'key' field")
 			return false
 		}
-		values, present := normalization.ParseQuery(r.URL.RawQuery)[match.Key]
+		values, present := facts.query()[match.Key]
 		return rm.matchesKeyedValues(match, values, present)
 	case "cookie":
 		if match.Key == "" {
 			log.Printf("[middleware:rules] Cookie match missing 'key' field")
 			return false
 		}
-		values := cookieValues(r, match.Key)
+		values := facts.cookieValues(match.Key)
 		return rm.matchesKeyedValues(match, values, len(values) > 0)
 	case "user-agent":
 		return rm.matchesHeaderValues(r, "User-Agent", match)
@@ -460,6 +475,65 @@ func matchesBehaviorNumber(metric float64, threshold float64, operator string) b
 	default:
 		return false
 	}
+}
+
+// requestFacts holds the request values rule conditions match against, each
+// derived from the request at most once while its rules are evaluated.
+type requestFacts struct {
+	r *http.Request
+
+	hostValue               *string
+	registerableDomainValue *string
+	normalizedPathValue     *string
+	queryValues             url.Values
+	cookies                 map[string][]string
+}
+
+func newRequestFacts(r *http.Request) *requestFacts {
+	return &requestFacts{r: r}
+}
+
+func (f *requestFacts) host() string {
+	if f.hostValue == nil {
+		host := normalization.Host(f.r.Host)
+		f.hostValue = &host
+	}
+	return *f.hostValue
+}
+
+func (f *requestFacts) registerableDomain() string {
+	if f.registerableDomainValue == nil {
+		domain := normalization.RegisterableDomain(f.r.Host)
+		f.registerableDomainValue = &domain
+	}
+	return *f.registerableDomainValue
+}
+
+func (f *requestFacts) normalizedPath() string {
+	if f.normalizedPathValue == nil {
+		path := normalization.NormalizePath(f.r.URL.Path)
+		f.normalizedPathValue = &path
+	}
+	return *f.normalizedPathValue
+}
+
+func (f *requestFacts) query() url.Values {
+	if f.queryValues == nil {
+		f.queryValues = normalization.ParseQuery(f.r.URL.RawQuery)
+	}
+	return f.queryValues
+}
+
+func (f *requestFacts) cookieValues(name string) []string {
+	if values, ok := f.cookies[name]; ok {
+		return values
+	}
+	values := cookieValues(f.r, name)
+	if f.cookies == nil {
+		f.cookies = make(map[string][]string)
+	}
+	f.cookies[name] = values
+	return values
 }
 
 func cookieValues(r *http.Request, name string) []string {
