@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -665,6 +666,30 @@ func TestServerDoesNotRecordFingerprintsOfRejectedHandshakes(t *testing.T) {
 
 	if got := server.fingerprints.Take(localAddr.String(), remoteAddr.String()); got != "" {
 		t.Fatalf("recorded fingerprint %q for a rejected handshake", got)
+	}
+}
+
+func TestUniqueHeaderValuesKeepFirstOccurrences(t *testing.T) {
+	many := make([]string, 0, 20)
+	for i := range 20 {
+		many = append(many, fmt.Sprintf("v%d", i%10))
+	}
+	tests := []struct {
+		values        []string
+		wantDuplicate bool
+		wantUnique    []string
+	}{
+		{values: []string{"a=1", "b=2", "c=3"}, wantDuplicate: false},
+		{values: []string{"Accept-Encoding", "Cookie", "Accept-Encoding"}, wantDuplicate: true, wantUnique: []string{"Accept-Encoding", "Cookie"}},
+		{values: many, wantDuplicate: true, wantUnique: many[:10]},
+	}
+	for _, test := range tests {
+		if got := hasDuplicateHeaderValue(test.values); got != test.wantDuplicate {
+			t.Fatalf("hasDuplicateHeaderValue(%v) = %v, want %v", test.values, got, test.wantDuplicate)
+		}
+		if test.wantDuplicate && !slices.Equal(uniqueHeaderValues(test.values), test.wantUnique) {
+			t.Fatalf("uniqueHeaderValues(%v) = %v, want %v", test.values, uniqueHeaderValues(test.values), test.wantUnique)
+		}
 	}
 }
 

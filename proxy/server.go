@@ -12,6 +12,7 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -217,6 +218,34 @@ func (s *Server) resetListenerState() {
 	s.udpOnce = sync.Once{}
 }
 
+// hasDuplicateHeaderValue reports whether a header value repeats. Headers
+// rarely have more than a few values, so comparing them pairwise is cheaper
+// than building a set.
+func hasDuplicateHeaderValue(values []string) bool {
+	if len(values) > 16 {
+		return len(uniqueHeaderValues(values)) < len(values)
+	}
+	for i := 1; i < len(values); i++ {
+		if slices.Contains(values[:i], values[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// uniqueHeaderValues returns values without repeats, in their original order.
+func uniqueHeaderValues(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		if !seen[value] {
+			seen[value] = true
+			unique = append(unique, value)
+		}
+	}
+	return unique
+}
+
 // reverseProxyBufferPool reuses the buffers response bodies are copied with,
 // which ReverseProxy otherwise allocates for every response.
 var reverseProxyBufferPool = &proxyBufferPool{}
@@ -312,22 +341,8 @@ func (s *Server) createReverseProxyWithHost(target *url.URL, proxyHost string) *
 
 		// Remove duplicate headers with identical values
 		for key, values := range resp.Header {
-			if len(values) > 1 {
-				// Create a map to track unique values while preserving order
-				seen := make(map[string]bool)
-				var unique []string
-
-				for _, value := range values {
-					if !seen[value] {
-						seen[value] = true
-						unique = append(unique, value)
-					}
-				}
-
-				// Only update if we actually removed duplicates
-				if len(unique) < len(values) {
-					resp.Header[key] = unique
-				}
+			if len(values) > 1 && hasDuplicateHeaderValue(values) {
+				resp.Header[key] = uniqueHeaderValues(values)
 			}
 		}
 
