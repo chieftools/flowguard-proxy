@@ -150,6 +150,7 @@ type LoggingMiddleware struct {
 	hostInfo        *RequestLogEntryHostInfo
 	headerWhitelist []string
 	mu              sync.RWMutex
+	updateMu        sync.Mutex // Serializes updateLogOutput without blocking requests on mu
 }
 
 type recordedResponseStatus struct {
@@ -347,13 +348,18 @@ func (lm *LoggingMiddleware) onConfigChange(cfg *config.Config) {
 	}
 }
 
+// updateLogOutput applies the logging configuration. The sinks are updated
+// without holding mu, because closing a replaced sink can wait for it to
+// flush its remaining entries, and every request takes mu.
 func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
-	lm.mu.Lock()
-	defer lm.mu.Unlock()
+	lm.updateMu.Lock()
+	defer lm.updateMu.Unlock()
 
 	if cfg == nil || cfg.Logging == nil {
+		lm.mu.Lock()
 		lm.enabled = false
 		lm.hostInfo = nil
+		lm.mu.Unlock()
 		if err := lm.loggerManager.UpdateSinks(nil); err != nil {
 			log.Printf("[middleware:logging] Error closing sinks: %v", err)
 		}
@@ -372,28 +378,27 @@ func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
 		return err
 	}
 
-	// Update enabled status
-	lm.enabled = lm.loggerManager.HasSinks()
-
-	// Update host info
+	hostInfo := &RequestLogEntryHostInfo{
+		Version: lm.version,
+	}
 	if cfg.Host != nil {
-		lm.hostInfo = &RequestLogEntryHostInfo{
+		hostInfo = &RequestLogEntryHostInfo{
 			ID:       cfg.Host.ID,
 			Name:     cfg.Host.Name,
 			Team:     cfg.Host.Team,
 			Instance: instance.ID(),
 			Version:  lm.version,
 		}
-	} else {
-		lm.hostInfo = &RequestLogEntryHostInfo{
-			Version: lm.version,
-		}
 	}
+	enabled := lm.loggerManager.HasSinks()
 
-	// Update header whitelist
+	lm.mu.Lock()
+	lm.enabled = enabled
+	lm.hostInfo = hostInfo
 	lm.headerWhitelist = loggingCfg.HeaderWhitelist
+	lm.mu.Unlock()
 
-	if lm.enabled {
+	if enabled {
 		log.Printf("[middleware:logging] Logging enabled with %d sink(s)", lm.loggerManager.SinkCount())
 	} else {
 		log.Printf("[middleware:logging] Logging disabled (no sinks configured)")

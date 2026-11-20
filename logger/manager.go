@@ -74,27 +74,36 @@ func (m *Manager) Write(entry *LogEntry) {
 
 // UpdateSinks updates the configured sinks based on new configuration
 // It intelligently detects which sinks have actually changed and only
-// recreates those that need to be updated
+// recreates those that need to be updated. Replaced and removed sinks are
+// closed after the new sinks are in place, so writes do not wait while they
+// flush their remaining entries.
 func (m *Manager) UpdateSinks(sinksConfig map[string]map[string]interface{}) error {
+	closing, err := m.replaceSinks(sinksConfig)
+	for name, sink := range closing {
+		if err := sink.Close(); err != nil {
+			log.Printf("[logger] Error closing sink %s: %v", name, err)
+		}
+	}
+
+	return err
+}
+
+// replaceSinks swaps in the sinks for sinksConfig and returns the sinks it
+// replaced or removed, which the caller closes.
+func (m *Manager) replaceSinks(sinksConfig map[string]map[string]interface{}) (map[string]Sink, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		return fmt.Errorf("logger manager is closed")
+		return nil, fmt.Errorf("logger manager is closed")
 	}
 
-	// Track which sinks are in the new config
-	newSinkNames := make(map[string]bool)
-	for name := range sinksConfig {
-		newSinkNames[name] = true
-	}
+	closing := make(map[string]Sink)
 
 	// Remove sinks that are no longer in the config
 	for name, sink := range m.sinks {
-		if !newSinkNames[name] {
+		if _, exists := sinksConfig[name]; !exists {
 			log.Printf("[logger] Removing sink: %s", name)
-			if err := sink.Close(); err != nil {
-				log.Printf("[logger] Error closing sink %s: %v", name, err)
-			}
+			closing[name] = sink
 			delete(m.sinks, name)
 			delete(m.sinkConfigs, name)
 		}
@@ -111,13 +120,13 @@ func (m *Manager) UpdateSinks(sinksConfig map[string]map[string]interface{}) err
 				continue
 			}
 
-			// Config changed, close the old sink
+			// Config changed, replace the old sink
 			log.Printf("[logger] Sink %s config changed, recreating", name)
 			if oldSink, exists := m.sinks[name]; exists {
-				if err := oldSink.Close(); err != nil {
-					log.Printf("[logger] Error closing old sink %s: %v", name, err)
-				}
+				closing[name] = oldSink
 			}
+			delete(m.sinks, name)
+			delete(m.sinkConfigs, name)
 		}
 
 		// Create new sink
@@ -133,7 +142,7 @@ func (m *Manager) UpdateSinks(sinksConfig map[string]map[string]interface{}) err
 		log.Printf("[logger] Sink %s created/updated successfully", name)
 	}
 
-	return nil
+	return closing, nil
 }
 
 // Close closes all sinks and releases resources
