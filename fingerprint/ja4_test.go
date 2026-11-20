@@ -61,28 +61,28 @@ func TestStoreTakeReturnsTheFingerprintOnce(t *testing.T) {
 	}
 }
 
-func TestStoreDropsNewFingerprintsWhenFull(t *testing.T) {
+func TestStoreReplacesAnEntryWhenFull(t *testing.T) {
 	store := NewStore()
 	for i := range storeMaxEntries {
-		store.Set("127.0.0.1:443", fmt.Sprintf("192.0.2.1:%d", i), "ja4")
+		store.Set("127.0.0.1:443", fmt.Sprintf("192.0.2.1:%d", i), "flood")
 	}
 
 	store.Set("127.0.0.1:443", "198.51.100.1:443", "ja4")
-	if got := store.Take("127.0.0.1:443", "198.51.100.1:443"); got != "" {
-		t.Fatal("expected a new fingerprint to be dropped while the store is full")
-	}
 	if len(store.entries) != storeMaxEntries {
 		t.Fatalf("store holds %d entries, want %d", len(store.entries), storeMaxEntries)
 	}
+	if got := store.Take("127.0.0.1:443", "198.51.100.1:443"); got != "ja4" {
+		t.Fatal("expected a new fingerprint to replace an entry while the store is full")
+	}
 
-	// Expired entries are cleaned up to make room.
+	// Expired entries are cleaned up first.
 	for k, entry := range store.entries {
 		entry.expiresAt = time.Now().Add(-time.Second)
 		store.entries[k] = entry
 	}
 	store.lastCleanup = time.Time{}
-	store.Set("127.0.0.1:443", "198.51.100.1:443", "ja4")
-	if got := store.Take("127.0.0.1:443", "198.51.100.1:443"); got != "ja4" {
-		t.Fatal("expected expired entries to make room for a new fingerprint")
+	store.Set("127.0.0.1:443", "198.51.100.2:443", "ja4")
+	if len(store.entries) != 1 {
+		t.Fatalf("store holds %d entries, want only the new one after expired entries were cleaned up", len(store.entries))
 	}
 }

@@ -7,8 +7,9 @@ import (
 
 const (
 	// storeTTL is how long a fingerprint waits for its connection to finish
-	// the handshake and take it. It is well above the QUIC handshake timeout.
-	storeTTL = 30 * time.Second
+	// the handshake and take it. It is above the 5 second QUIC handshake
+	// timeout.
+	storeTTL = 10 * time.Second
 
 	// storeMaxEntries caps the fingerprints of handshakes in progress, so a
 	// flood of handshakes that never finish cannot grow the store unbounded.
@@ -34,8 +35,10 @@ func NewStore() *Store {
 	}
 }
 
-// Set stores a fingerprint. When the store is full of unexpired entries, the
-// fingerprint is dropped.
+// Set stores a fingerprint. When the store is full of unexpired entries, it
+// replaces an arbitrary one. Dropping new fingerprints instead would let a
+// flood of handshakes that never finish keep real ones out; replacing a random
+// entry rarely hits a real one in the moment before its connection takes it.
 func (s *Store) Set(localAddr, remoteAddr, value string) {
 	if s == nil || localAddr == "" || remoteAddr == "" || value == "" {
 		return
@@ -54,7 +57,10 @@ func (s *Store) Set(localAddr, remoteAddr, value string) {
 		full = len(s.entries) >= storeMaxEntries
 	}
 	if _, exists := s.entries[k]; full && !exists {
-		return
+		for evicted := range s.entries {
+			delete(s.entries, evicted)
+			break
+		}
 	}
 
 	s.entries[k] = storeEntry{
