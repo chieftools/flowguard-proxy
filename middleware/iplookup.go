@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.chief.tools/flowguard-proxy/config"
@@ -96,6 +97,7 @@ type IPLookupMiddleware struct {
 	asnDB     *maxminddb.Reader
 	dbPath    string
 	dbFile    os.FileInfo // The file asnDB was opened from, to notice when it is replaced
+	asnCache  *asnRecordCache
 	mu        sync.RWMutex
 	stopChan  chan struct{}
 	stopped   bool
@@ -156,6 +158,7 @@ func (m *IPLookupMiddleware) openASNDatabase(dbPath string) error {
 	m.mu.Lock()
 	oldDB := m.asnDB
 	m.asnDB = db
+	m.asnCache = &asnRecordCache{}
 	m.dbPath = dbPath
 	m.dbFile = info
 	m.mu.Unlock()
@@ -394,20 +397,59 @@ func (m *IPLookupMiddleware) lookupASN(ipStr string) *ASNInfo {
 		return nil
 	}
 
-	// Lookup ASN information
-	var asn ASNInfo
-	err := m.asnDB.Lookup(ip, &asn)
-	if err != nil {
+	// Find the record, then decode it unless it was decoded before. Many
+	// addresses share a record, so most lookups skip decoding.
+	offset, err := m.asnDB.LookupOffset(ip)
+	if err != nil || offset == maxminddb.NotFound {
 		// Silently ignore lookup errors (IP might not be in database)
+		return nil
+	}
+	if asn, ok := m.asnCache.get(offset); ok {
+		return asn
+	}
+
+	var record ASNInfo
+	if err := m.asnDB.Decode(offset, &record); err != nil {
 		return nil
 	}
 
 	// Return nil if no ASN found
-	if asn.ASN == "" {
-		return nil
+	var asn *ASNInfo
+	if record.ASN != "" {
+		asn = &record
 	}
+	m.asnCache.add(offset, asn)
+	return asn
+}
 
-	return &asn
+// asnRecordCacheSize caps how many decoded records are kept per database.
+const asnRecordCacheSize = 65_536
+
+// asnRecordCache keeps decoded database records by their offset. The records
+// are shared between requests, so they must not be modified.
+type asnRecordCache struct {
+	records sync.Map // offset -> *ASNInfo, nil for records without an ASN
+	size    atomic.Int64
+}
+
+func (c *asnRecordCache) get(offset uintptr) (*ASNInfo, bool) {
+	if c == nil {
+		return nil, false
+	}
+	asn, ok := c.records.Load(offset)
+	if !ok {
+		return nil, false
+	}
+	return asn.(*ASNInfo), true
+}
+
+func (c *asnRecordCache) add(offset uintptr, asn *ASNInfo) {
+	if c == nil || c.size.Load() >= asnRecordCacheSize {
+		return
+	}
+	if _, loaded := c.records.LoadOrStore(offset, asn); !loaded {
+		c.size.Add(1)
+	}
 }
 
 // ReloadDatabase reloads the ASN database (useful for periodic updates)

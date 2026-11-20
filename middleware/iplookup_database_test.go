@@ -45,6 +45,32 @@ func TestIPLookupReloadsADatabaseReplacedAtTheSamePath(t *testing.T) {
 	}
 }
 
+func TestIPLookupCachesRecordsWithAndWithoutAnASN(t *testing.T) {
+	for _, test := range []struct {
+		asn  string
+		want string
+	}{{asn: "AS64500", want: "AS64500"}, {asn: "", want: ""}} {
+		dbPath := filepath.Join(t.TempDir(), "ip.mmdb")
+		writeTestASNDatabase(t, dbPath, test.asn)
+		m := &IPLookupMiddleware{}
+		if err := m.openASNDatabase(dbPath); err != nil {
+			t.Fatalf("open database: %v", err)
+		}
+
+		first, second := m.lookupASN("192.0.2.1"), m.lookupASN("198.51.100.1")
+		m.asnDB.Close()
+		if test.want == "" {
+			if first != nil || second != nil {
+				t.Fatalf("lookups = %+v, %+v; want nil for a record without an ASN", first, second)
+			}
+			continue
+		}
+		if first == nil || first.ASN != test.want || second != first {
+			t.Fatalf("lookups = %+v, %+v; want the same cached %s record", first, second, test.want)
+		}
+	}
+}
+
 // writeTestASNDatabase writes a minimal IPv4 MaxMind DB in which every
 // address maps to one record with the given ASN.
 func writeTestASNDatabase(t *testing.T, path, asn string) {
