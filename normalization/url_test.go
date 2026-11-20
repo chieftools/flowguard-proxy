@@ -1,6 +1,7 @@
 package normalization
 
 import (
+	"math/rand/v2"
 	"testing"
 )
 
@@ -458,6 +459,26 @@ func BenchmarkNormalizePath(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		for _, path := range testPaths {
 			_ = NormalizePath(path)
+		}
+	}
+}
+
+func TestNormalizePathShortcutMatchesEveryStep(t *testing.T) {
+	alphabet := []byte("/./%\\a7eF~")
+	random := rand.New(rand.NewPCG(1, 2))
+	for range 200_000 {
+		path := make([]byte, random.IntN(12))
+		for i := range path {
+			path[i] = alphabet[random.IntN(len(alphabet))]
+		}
+		if got, want := NormalizePath(string(path)), normalizePathSteps(string(path)); got != want {
+			t.Fatalf("NormalizePath(%q) = %q, want %q", path, got, want)
+		}
+	}
+
+	for _, path := range []string{"/", "/api/v1/users", "/a.b/c-d_e~f/", "/wp-content/themes/main.min.css"} {
+		if !isNormalizedPath(path) {
+			t.Errorf("expected %q to take the shortcut", path)
 		}
 	}
 }

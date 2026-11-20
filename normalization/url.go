@@ -21,6 +21,15 @@ func NormalizeURL(rawURL string) string {
 
 // NormalizePath performs path-only normalization
 func NormalizePath(path string) string {
+	if isNormalizedPath(path) {
+		return path
+	}
+
+	return normalizePathSteps(path)
+}
+
+// normalizePathSteps applies every normalization step to path.
+func normalizePathSteps(path string) string {
 	// Step 1: Convert backslashes to forward slashes
 	normalizedPath := strings.ReplaceAll(path, "\\", "/")
 
@@ -37,6 +46,27 @@ func NormalizePath(path string) string {
 	normalizedPath = uppercasePercentEncoding(normalizedPath)
 
 	return normalizedPath
+}
+
+// isNormalizedPath reports whether NormalizePath would return path unchanged:
+// an absolute path without backslashes, percent encoding, successive slashes
+// or segments starting with a dot. Most request paths are, so this skips the
+// normalization steps and their allocations.
+func isNormalizedPath(path string) bool {
+	if path == "" || path[0] != '/' {
+		return false
+	}
+	for i := 0; i < len(path); i++ {
+		switch path[i] {
+		case '\\', '%':
+			return false
+		case '/':
+			if i+1 < len(path) && (path[i+1] == '/' || path[i+1] == '.') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // mergeSuccessiveSlashes merges multiple consecutive slashes into a single slash
