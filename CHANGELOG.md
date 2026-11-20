@@ -37,7 +37,7 @@ release.
 
 - Fixed `rule.took_us` in request logs always being 0. It recorded the end of the middleware before any of it ran; it now holds the time from when FlowGuard received the request until it passed it to the web server, and is left out for requests FlowGuard answered itself, such as blocked ones.
 - Fixed FlowGuard never loading a refreshed IP database. A refreshed download replaces the file at the same path, which FlowGuard took to mean nothing changed, so it kept using the ASN and country data it loaded at startup until it restarted, and kept the replaced file on disk.
-- Fixed FlowGuard accepting a resumed TLS session for a hostname whose certificate was removed, for up to 7 days. A browser that had visited the site, such as a tenant deleted in Ploi, got a `Bad Gateway` error from FlowGuard instead of the connection error it gets from the web server. FlowGuard now rejects the connection the same way it rejects one for a hostname it never had a certificate for.
+- Fixed FlowGuard accepting a resumed TLS session for a hostname whose certificate was removed, for up to 7 days. A browser that had visited the site, such as a tenant deleted in Ploi, got a `Bad Gateway` error from FlowGuard instead of the connection error it gets from the web server. FlowGuard now rejects the connection the same way it rejects one for a hostname it never had a certificate for. On a server with a default hostname, it serves the default certificate in a new TLS session instead.
 
 ## [0.33.5]
 

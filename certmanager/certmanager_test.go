@@ -303,6 +303,45 @@ func TestGetTLSConfigRejectsSessionResumptionAfterCertificateRemoval(t *testing.
 	}
 }
 
+func TestGetTLSConfigServesTheDefaultCertificateWithoutResumptionAfterCertificateRemoval(t *testing.T) {
+	certDir := t.TempDir()
+	tenantFile := filepath.Join(certDir, "tenant.test.pem")
+	writeCombinedPEM(t, tenantFile, createSelfSignedRSACert(t, "tenant.test", time.Now().Add(time.Hour)))
+	writeCombinedPEM(t, filepath.Join(certDir, "default.test.pem"), createSelfSignedRSACert(t, "default.test", time.Now().Add(time.Hour)))
+
+	manager := &Manager{config: Config{CertPath: certDir, DefaultHostname: "default.test"}}
+	manager.loadAllCertificates(false)
+	serverConfig := manager.GetTlsConfig()
+	clientConfig := &tls.Config{
+		ClientSessionCache: tls.NewLRUClientSessionCache(1),
+		InsecureSkipVerify: true,
+		ServerName:         "tenant.test",
+	}
+
+	if _, err := performLoopbackTLSHandshake(t, serverConfig, clientConfig); err != nil {
+		t.Fatalf("first handshake: %v", err)
+	}
+	if state, err := performLoopbackTLSHandshake(t, serverConfig, clientConfig); err != nil || !state.DidResume {
+		t.Fatalf("second handshake: resumed %v, error %v; want a resumed session", state.DidResume, err)
+	}
+
+	if err := os.Remove(tenantFile); err != nil {
+		t.Fatalf("remove certificate: %v", err)
+	}
+	manager.loadAllCertificates(false)
+
+	state, err := performLoopbackTLSHandshake(t, serverConfig, clientConfig)
+	if err != nil {
+		t.Fatalf("handshake after certificate removal: %v", err)
+	}
+	if state.DidResume {
+		t.Fatal("expected the session not to be resumed after the certificate was removed")
+	}
+	if len(state.PeerCertificates) == 0 || state.PeerCertificates[0].Subject.CommonName != "default.test" {
+		t.Fatal("expected the default certificate after the certificate was removed")
+	}
+}
+
 // performLoopbackTLSHandshake completes a handshake over TCP and reads one
 // byte from the server, so the client also processes TLS 1.3 session tickets.
 func performLoopbackTLSHandshake(t *testing.T, serverConfig, clientConfig *tls.Config) (tls.ConnectionState, error) {

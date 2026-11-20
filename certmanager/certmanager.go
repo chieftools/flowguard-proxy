@@ -113,10 +113,9 @@ func (cm *Manager) NginxConfigLoaded() bool {
 
 // GetTlsConfig returns the tls configuration for use in servers
 func (cm *Manager) GetTlsConfig() *tls.Config {
-	return &tls.Config{
-		GetCertificate:     cm.getCertificate,
-		GetConfigForClient: cm.rejectHostnameWithoutCertificate,
-		MinVersion:         tls.VersionTLS12,
+	config := &tls.Config{
+		GetCertificate: cm.getCertificate,
+		MinVersion:     tls.VersionTLS12,
 		// NCSC TLS Security Guidelines 2025-05 classify CBC as phase out and
 		// SHA-1 as insufficient. TLS 1.3 cipher suites remain managed by Go.
 		CipherSuites: []uint16{
@@ -129,6 +128,10 @@ func (cm *Manager) GetTlsConfig() *tls.Config {
 		},
 		NextProtos: cm.nextProtos(),
 	}
+	config.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		return cm.configForClient(config, hello)
+	}
+	return config
 }
 
 func (cm *Manager) nextProtos() []string {
@@ -146,6 +149,35 @@ func (cm *Manager) GetCertificateForHostname(hostname string) *tls.Certificate {
 	cm.cacheMutex.RLock()
 	defer cm.cacheMutex.RUnlock()
 
+	if cert := cm.matchingCertificateLocked(hostname); cert != nil {
+		return cert
+	}
+
+	// Finally, try to find any default certificate in cache if we were given a default hostname
+	if cm.config.DefaultHostname != "" {
+		if candidates, exists := cm.hostnameCache[cm.config.DefaultHostname]; exists {
+			if cert := selectBestCertificate(candidates); cert != nil {
+				return cert
+			}
+		}
+	}
+
+	return nil
+}
+
+// hasCertificateForHostname reports whether a valid certificate names
+// hostname, exactly or by wildcard, not counting the default certificate.
+func (cm *Manager) hasCertificateForHostname(hostname string) bool {
+	hostname = normalizeHostname(hostname)
+
+	cm.cacheMutex.RLock()
+	defer cm.cacheMutex.RUnlock()
+	return cm.matchingCertificateLocked(hostname) != nil
+}
+
+// matchingCertificateLocked returns the best valid certificate that names
+// hostname exactly or by wildcard. The caller holds cacheMutex.
+func (cm *Manager) matchingCertificateLocked(hostname string) *tls.Certificate {
 	// Gather all matching certificates from both exact and wildcard matches
 	var allCandidates []*certificateWithMetadata
 	seenPaths := make(map[string]bool)
@@ -170,24 +202,8 @@ func (cm *Manager) GetCertificateForHostname(hostname string) *tls.Certificate {
 		}
 	}
 
-	// If we have candidates, select the best valid one. If every matching
-	// certificate has expired, continue to the configured default certificate.
-	if len(allCandidates) > 0 {
-		if cert := selectBestCertificate(allCandidates); cert != nil {
-			return cert
-		}
-	}
-
-	// Finally, try to find any default certificate in cache if we were given a default hostname
-	if cm.config.DefaultHostname != "" {
-		if candidates, exists := cm.hostnameCache[cm.config.DefaultHostname]; exists {
-			if cert := selectBestCertificate(candidates); cert != nil {
-				return cert
-			}
-		}
-	}
-
-	return nil
+	// Select the best valid candidate; nil when every one has expired
+	return selectBestCertificate(allCandidates)
 }
 
 // ShowCertificatesForHostname displays all certificates for a hostname and which will be served
@@ -1070,16 +1086,26 @@ func (cm *Manager) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate,
 	return nil, fmt.Errorf("no certificate found for %s", hello.ServerName)
 }
 
-// rejectHostnameWithoutCertificate fails the handshake when no certificate
-// covers the requested hostname. It runs before session resumption, which
-// skips GetCertificate, so a client cannot resume a session for a hostname
-// whose certificate has since been removed.
-func (cm *Manager) rejectHostnameWithoutCertificate(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+// configForClient runs before session resumption, which skips
+// GetCertificate, so a client cannot resume a session for a hostname whose
+// certificate has since been removed. Without any certificate to serve, the
+// handshake fails. A hostname served the default certificate gets a full
+// handshake with it instead of resuming a session made with its own.
+func (cm *Manager) configForClient(config *tls.Config, hello *tls.ClientHelloInfo) (*tls.Config, error) {
+	if hello.ServerName != "" && cm.hasCertificateForHostname(hello.ServerName) {
+		return nil, nil
+	}
 	if cm.GetCertificateForHostname(hello.ServerName) == nil {
 		return nil, fmt.Errorf("no certificate found for %s", hello.ServerName)
 	}
+	if hello.ServerName == "" {
+		return nil, nil
+	}
 
-	return nil, nil
+	withoutResumption := config.Clone()
+	withoutResumption.GetConfigForClient = nil
+	withoutResumption.SessionTicketsDisabled = true
+	return withoutResumption, nil
 }
 
 func (cm *Manager) watchCertificates() {
