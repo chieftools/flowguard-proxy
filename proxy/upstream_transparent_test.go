@@ -601,6 +601,16 @@ func TestTransparentTransportPoolEvictsByLastUse(t *testing.T) {
 	}
 }
 
+func TestTransparentTransportsKeepTheConfiguredIdleConnections(t *testing.T) {
+	pool := newTransparentTransportPool(10, time.Minute, 1)
+	pool.maxIdleConnsPerHost = 12
+
+	transport := pool.transportWithDialer(transparentTestKey("192.0.2.1"), nil, false)
+	if transport.MaxIdleConnsPerHost != 12 || transport.MaxIdleConns != 24 {
+		t.Fatalf("idle connections = %d per host, %d in total; want 12 and 24", transport.MaxIdleConnsPerHost, transport.MaxIdleConns)
+	}
+}
+
 func transparentTestKey(source string) transparentTransportKey {
 	addr, _ := netip.ParseAddr(source)
 	return transparentTransportKey{

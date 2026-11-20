@@ -14,15 +14,21 @@ const (
 	DefaultTransparentRulePriority    = uint32(17991)
 	DefaultTransparentMaxClientPools  = 4096
 	DefaultTransparentPoolIdleSeconds = 90
+
+	// DefaultTransparentMaxIdleConnsPerClient lets a client's burst of
+	// parallel requests, such as a page load over HTTP/2, reuse its
+	// connections to the web server on the next burst.
+	DefaultTransparentMaxIdleConnsPerClient = 8
 )
 
 type TransparentUpstreamSettings struct {
-	FWMark          uint32
-	RouteTable      uint32
-	RulePriority    uint32
-	MaxClientPools  int
-	PoolIdleSeconds int
-	AddressPairs    []AddressPair
+	FWMark                uint32
+	RouteTable            uint32
+	RulePriority          uint32
+	MaxClientPools        int
+	PoolIdleSeconds       int
+	MaxIdleConnsPerClient int
+	AddressPairs          []AddressPair
 }
 
 // UpstreamHeaderSettings controls the informational headers added to requests
@@ -67,11 +73,12 @@ func (c *Config) UpstreamClientIPMode() string {
 
 func (c *Config) TransparentUpstreamSettings() TransparentUpstreamSettings {
 	settings := TransparentUpstreamSettings{
-		FWMark:          DefaultTransparentFWMark,
-		RouteTable:      DefaultTransparentRouteTable,
-		RulePriority:    DefaultTransparentRulePriority,
-		MaxClientPools:  DefaultTransparentMaxClientPools,
-		PoolIdleSeconds: DefaultTransparentPoolIdleSeconds,
+		FWMark:                DefaultTransparentFWMark,
+		RouteTable:            DefaultTransparentRouteTable,
+		RulePriority:          DefaultTransparentRulePriority,
+		MaxClientPools:        DefaultTransparentMaxClientPools,
+		PoolIdleSeconds:       DefaultTransparentPoolIdleSeconds,
+		MaxIdleConnsPerClient: DefaultTransparentMaxIdleConnsPerClient,
 	}
 	if c == nil || c.Server == nil || c.Server.Upstream == nil || c.Server.Upstream.Transparent == nil {
 		return settings
@@ -92,6 +99,9 @@ func (c *Config) TransparentUpstreamSettings() TransparentUpstreamSettings {
 	}
 	if transparent.PoolIdleSeconds != 0 {
 		settings.PoolIdleSeconds = transparent.PoolIdleSeconds
+	}
+	if transparent.MaxIdleConnsPerClient != 0 {
+		settings.MaxIdleConnsPerClient = transparent.MaxIdleConnsPerClient
 	}
 	settings.AddressPairs = append([]AddressPair(nil), transparent.AddressPairs...)
 	return settings
@@ -117,6 +127,9 @@ func validateUpstreamConfig(cfg *Config) error {
 	}
 	if transparent.PoolIdleSeconds < 0 {
 		return fmt.Errorf("server.upstream.transparent.pool_idle_seconds must be greater than zero")
+	}
+	if transparent.MaxIdleConnsPerClient < 0 {
+		return fmt.Errorf("server.upstream.transparent.max_idle_conns_per_client must be greater than zero")
 	}
 	if transparent.RouteTable >= 253 && transparent.RouteTable <= 255 {
 		return fmt.Errorf("server.upstream.transparent.route_table must not use a reserved routing table (253-255)")

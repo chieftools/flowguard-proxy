@@ -440,7 +440,8 @@ sudo flowguard run --upstream-client-ip-mode transparent --bind 192.0.2.10
         "route_table": 17991,
         "rule_priority": 17991,
         "max_client_pools": 4096,
-        "pool_idle_seconds": 90
+        "pool_idle_seconds": 90,
+        "max_idle_conns_per_client": 8
       }
     }
   }
@@ -476,6 +477,10 @@ Transparent mode:
   failed transparent dial or route does not fall back to headers.
 - Limits per-client connection pools with an LRU. Overflow requests use
   non-persistent connections.
+- Keeps up to `max_idle_conns_per_client` idle connections per site in each
+  client's pool, 8 by default, so a burst of parallel requests reuses them on
+  the next burst. The web server's own keep-alive timeout still closes idle
+  connections.
 - Treats upstream mode, mark, table, pool, and address-pair settings as
   startup-only. Restart FlowGuard after changing them.
 

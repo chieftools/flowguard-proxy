@@ -16,7 +16,8 @@ func TestTransparentUpstreamSettingsDefaults(t *testing.T) {
 		settings.RouteTable != DefaultTransparentRouteTable ||
 		settings.RulePriority != DefaultTransparentRulePriority ||
 		settings.MaxClientPools != DefaultTransparentMaxClientPools ||
-		settings.PoolIdleSeconds != DefaultTransparentPoolIdleSeconds {
+		settings.PoolIdleSeconds != DefaultTransparentPoolIdleSeconds ||
+		settings.MaxIdleConnsPerClient != DefaultTransparentMaxIdleConnsPerClient {
 		t.Fatalf("unexpected transparent defaults: %#v", settings)
 	}
 }
@@ -25,11 +26,12 @@ func TestTransparentUpstreamSettingsOverrides(t *testing.T) {
 	cfg := &Config{Server: &ServerConfig{Upstream: &UpstreamConfig{
 		ClientIPMode: UpstreamClientIPModeTransparent,
 		Transparent: &TransparentUpstreamConfig{
-			FWMark:          100,
-			RouteTable:      101,
-			RulePriority:    102,
-			MaxClientPools:  103,
-			PoolIdleSeconds: 104,
+			FWMark:                100,
+			RouteTable:            101,
+			RulePriority:          102,
+			MaxClientPools:        103,
+			PoolIdleSeconds:       104,
+			MaxIdleConnsPerClient: 105,
 			AddressPairs: []AddressPair{{
 				IPv4: "192.0.2.10",
 				IPv6: "2001:db8::10",
@@ -43,7 +45,7 @@ func TestTransparentUpstreamSettingsOverrides(t *testing.T) {
 	settings := cfg.TransparentUpstreamSettings()
 	if settings.FWMark != 100 || settings.RouteTable != 101 ||
 		settings.RulePriority != 102 || settings.MaxClientPools != 103 ||
-		settings.PoolIdleSeconds != 104 || len(settings.AddressPairs) != 1 {
+		settings.PoolIdleSeconds != 104 || settings.MaxIdleConnsPerClient != 105 || len(settings.AddressPairs) != 1 {
 		t.Fatalf("unexpected settings: %#v", settings)
 	}
 }
@@ -79,6 +81,13 @@ func TestValidateUpstreamConfig(t *testing.T) {
 			name:     "unknown mode",
 			upstream: &UpstreamConfig{ClientIPMode: "automatic"},
 			wantErr:  "client_ip_mode",
+		},
+		{
+			name: "negative idle connections per client",
+			upstream: &UpstreamConfig{Transparent: &TransparentUpstreamConfig{
+				MaxIdleConnsPerClient: -1,
+			}},
+			wantErr: "max_idle_conns_per_client",
 		},
 		{
 			name: "reserved route table",

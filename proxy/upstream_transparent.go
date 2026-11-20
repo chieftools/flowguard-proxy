@@ -12,13 +12,12 @@ import (
 	"sync"
 	"time"
 
+	"go.chief.tools/flowguard-proxy/config"
 	"go.chief.tools/flowguard-proxy/middleware"
 )
 
 const (
-	transparentMaxIdleConnsPerPool = 4
-	transparentMaxIdleConnsPerHost = 2
-	upstreamPolicyProbeTimeout     = 250 * time.Millisecond
+	upstreamPolicyProbeTimeout = 250 * time.Millisecond
 )
 
 type transparentTransportKey struct {
@@ -49,6 +48,10 @@ type transparentTransportPool struct {
 	closed       bool
 	newTransport func(transparentTransportKey, bool) (*http.Transport, error)
 	tlsSessions  tls.ClientSessionCache // Shared by all transports, so a new client resumes TLS with the backend
+
+	// maxIdleConnsPerHost is how many idle connections to each site a
+	// client's transport keeps.
+	maxIdleConnsPerHost int
 }
 
 func newTransparentTransportPool(maxEntries int, idleTimeout time.Duration, fwmark uint32) *transparentTransportPool {
@@ -59,6 +62,8 @@ func newTransparentTransportPool(maxEntries int, idleTimeout time.Duration, fwma
 		idleTimeout: idleTimeout,
 		fwmark:      fwmark,
 		tlsSessions: tls.NewLRUClientSessionCache(upstreamTLSSessionCacheSize),
+
+		maxIdleConnsPerHost: config.DefaultTransparentMaxIdleConnsPerClient,
 	}
 }
 
@@ -185,8 +190,8 @@ func (p *transparentTransportPool) transportWithDialer(key transparentTransportK
 		DisableKeepAlives:     disableKeepAlives,
 		ForceAttemptHTTP2:     upstreamForceAttemptH2,
 		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
-		MaxIdleConns:          transparentMaxIdleConnsPerPool,
-		MaxIdleConnsPerHost:   transparentMaxIdleConnsPerHost,
+		MaxIdleConns:          2 * p.maxIdleConnsPerHost,
+		MaxIdleConnsPerHost:   p.maxIdleConnsPerHost,
 		IdleConnTimeout:       upstreamIdleConnTimeout,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: time.Second,

@@ -153,6 +153,7 @@ func NewManager(configMgr *config.Manager, cfg *Config) (*Manager, error) {
 			time.Duration(upstreamSettings.PoolIdleSeconds)*time.Second,
 			upstreamSettings.FWMark,
 		)
+		transparentPool.maxIdleConnsPerHost = upstreamSettings.MaxIdleConnsPerClient
 		transparentNet = newTransparentNetworkManager(upstreamSettings, cfg.BindAddrs)
 	}
 

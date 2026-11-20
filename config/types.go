@@ -65,12 +65,15 @@ type UpstreamHeadersConfig struct {
 }
 
 type TransparentUpstreamConfig struct {
-	FWMark          uint32        `json:"fwmark,omitempty"`
-	RouteTable      uint32        `json:"route_table,omitempty"`
-	RulePriority    uint32        `json:"rule_priority,omitempty"`
-	MaxClientPools  int           `json:"max_client_pools,omitempty"`
-	PoolIdleSeconds int           `json:"pool_idle_seconds,omitempty"`
-	AddressPairs    []AddressPair `json:"address_pairs,omitempty"`
+	FWMark          uint32 `json:"fwmark,omitempty"`
+	RouteTable      uint32 `json:"route_table,omitempty"`
+	RulePriority    uint32 `json:"rule_priority,omitempty"`
+	MaxClientPools  int    `json:"max_client_pools,omitempty"`
+	PoolIdleSeconds int    `json:"pool_idle_seconds,omitempty"`
+	// MaxIdleConnsPerClient is how many idle connections to each site a
+	// client's pool keeps open to the web server.
+	MaxIdleConnsPerClient int           `json:"max_idle_conns_per_client,omitempty"`
+	AddressPairs          []AddressPair `json:"address_pairs,omitempty"`
 }
 
 // AddressPair maps an IPv4 bind address to the IPv6 bind address that reaches

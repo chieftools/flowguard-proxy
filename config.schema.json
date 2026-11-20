@@ -225,6 +225,12 @@
                     "minimum": 1,
                     "default": 90
                 },
+                "max_idle_conns_per_client": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 8,
+                    "description": "Idle connections to each site that a client's pool keeps open to the web server"
+                },
                 "address_pairs": {
                     "type": "array",
                     "items": {
