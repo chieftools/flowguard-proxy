@@ -138,23 +138,19 @@ func (s *LokiSink) sendBatch(ctx context.Context, entries []*LogEntry) error {
 	// Build Loki push request
 	values := make([][]string, 0, len(entries))
 	for _, entry := range entries {
-		// Flatten and convert log entry to JSON string for the log line
-		flattened, err := entry.Flatten(".")
+		// Flatten the log entry into the JSON log line
+		logLine, rawTimestamp, err := entry.flattenedJSON(".", "timestamp")
 		if err != nil {
 			return fmt.Errorf("failed to flatten entry: %w", err)
 		}
 
 		// Extract timestamp from entry, default to now if not present
 		timestamp := time.Now()
-		if ts, ok := flattened["timestamp"].(string); ok {
+		var ts string
+		if rawTimestamp != nil && json.Unmarshal(rawTimestamp, &ts) == nil {
 			if parsedTime, err := time.Parse(time.RFC3339Nano, ts); err == nil {
 				timestamp = parsedTime
 			}
-		}
-
-		logLine, err := json.Marshal(flattened)
-		if err != nil {
-			return fmt.Errorf("failed to marshal entry: %w", err)
 		}
 
 		// Loki expects [timestamp_ns, log_line]

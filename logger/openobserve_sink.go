@@ -124,23 +124,20 @@ func (s *OpenObserveSink) sendBatch(ctx context.Context, entries []*LogEntry) er
 		return nil
 	}
 
-	// Flatten and convert entries to array of flattened objects
-	flattenedEntries := make([]map[string]interface{}, 0, len(entries))
-	for _, entry := range entries {
-		// Flatten the entry using the LogEntry.Flatten() method
-		flattened, err := entry.Flatten("__")
+	// Build the request: OpenObserve expects an array of flattened JSON objects
+	requestBody := []byte{'['}
+	for i, entry := range entries {
+		flattened, _, err := entry.flattenedJSON("__", "")
 		if err != nil {
 			return fmt.Errorf("failed to flatten entry: %w", err)
 		}
 
-		flattenedEntries = append(flattenedEntries, flattened)
+		if i > 0 {
+			requestBody = append(requestBody, ',')
+		}
+		requestBody = append(requestBody, flattened...)
 	}
-
-	// Marshal request (OpenObserve expects an array of JSON objects)
-	requestBody, err := json.Marshal(flattenedEntries)
-	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
-	}
+	requestBody = append(requestBody, ']')
 
 	// Build the ingestion URL
 	// OpenObserve API: /api/{org}/{stream}/_json

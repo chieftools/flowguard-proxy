@@ -93,40 +93,29 @@ func (e *LogEntry) jsonBytes() ([]byte, error) {
 // {"client.ip": "1.2.3.4", "client.as.num": 123}
 // This is useful for systems that don't support nested JSON structures or require flattened schemas for querying.
 func (e *LogEntry) Flatten(seperator string) (map[string]interface{}, error) {
-	jsonBytes, err := e.jsonBytes()
+	flattenedJSON, _, err := e.flattenedJSON(seperator, "")
 	if err != nil {
 		return nil, err
 	}
 
-	var normalizedData map[string]interface{}
-	if err := json.Unmarshal(jsonBytes, &normalizedData); err != nil {
+	flattened := make(map[string]interface{})
+	if err := json.Unmarshal(flattenedJSON, &flattened); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal entry: %w", err)
 	}
-
-	// Flatten the normalized data
-	flattened := make(map[string]interface{})
-	flattenMap(normalizedData, "", seperator, flattened)
 
 	return flattened, nil
 }
 
-// flattenMap recursively flattens nested maps with dot-separated keys
-func flattenMap(data map[string]interface{}, prefix string, seperator string, result map[string]interface{}) {
-	for key, value := range data {
-		// Build the full key path
-		fullKey := key
-		if prefix != "" {
-			fullKey = prefix + seperator + key
-		}
-
-		// If the value is a map, recurse
-		if nestedMap, ok := value.(map[string]interface{}); ok {
-			flattenMap(nestedMap, fullKey, seperator, result)
-		} else {
-			// Otherwise, add to result
-			result[fullKey] = value
-		}
+// flattenedJSON returns the entry as a JSON object with nested objects
+// flattened into keys joined by separator (see Flatten), and the raw JSON
+// value of the top-level captureKey when it is set.
+func (e *LogEntry) flattenedJSON(separator, captureKey string) ([]byte, []byte, error) {
+	jsonBytes, err := e.jsonBytes()
+	if err != nil {
+		return nil, nil, err
 	}
+
+	return flattenJSON(jsonBytes, separator, captureKey)
 }
 
 // SinkConfig represents the configuration for a sink
