@@ -639,8 +639,32 @@ func TestServerRecordsQUICJA4Fingerprint(t *testing.T) {
 		t.Fatalf("GetConfigForClient: %v", err)
 	}
 
-	if got := server.fingerprints.Get(localAddr.String(), remoteAddr.String()); got != "q13i0101h3_0f2cb44170f4_b9a491fefe05" {
+	if got := server.fingerprints.Take(localAddr.String(), remoteAddr.String()); got != "q13i0101h3_0f2cb44170f4_b9a491fefe05" {
 		t.Fatalf("unexpected JA4 fingerprint: %q", got)
+	}
+}
+
+func TestServerDoesNotRecordFingerprintsOfRejectedHandshakes(t *testing.T) {
+	server := NewServer(&ServerConfig{scheme: "https", bindAddr: "127.0.0.1", bindPort: "443", middleware: middleware.NewChain()})
+	localAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 443}
+	remoteAddr := &net.UDPAddr{IP: net.ParseIP("192.0.2.10"), Port: 51515}
+
+	tlsConfig := server.tlsConfigWithJA4(&tls.Config{
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			return nil, errors.New("no certificate")
+		},
+	}, "q")
+	if _, err := tlsConfig.GetConfigForClient(&tls.ClientHelloInfo{
+		Conn:              fakeConn{localAddr: localAddr, remoteAddr: remoteAddr},
+		CipherSuites:      []uint16{tls.TLS_AES_128_GCM_SHA256},
+		SupportedVersions: []uint16{tls.VersionTLS13},
+		ServerName:        "unknown.example",
+	}); err == nil {
+		t.Fatal("expected the handshake to be rejected")
+	}
+
+	if got := server.fingerprints.Take(localAddr.String(), remoteAddr.String()); got != "" {
+		t.Fatalf("recorded fingerprint %q for a rejected handshake", got)
 	}
 }
 

@@ -181,15 +181,8 @@ func (s *Server) withJA4Fingerprint(r *http.Request) *http.Request {
 		}
 	}
 
-	localAddr, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
-	if localAddr == nil {
-		return r
-	}
-
-	if ja4 := s.fingerprints.Get(localAddr.String(), r.RemoteAddr); ja4 != "" {
-		return middleware.WithJA4Fingerprint(r, ja4)
-	}
-
+	// HTTP/3 connections carry their fingerprint in the connection context
+	// (see http3ConnContext), and plain HTTP has none.
 	return r
 }
 
@@ -510,11 +503,17 @@ func (s *Server) tlsConfigWithJA4(tlsConfig *tls.Config, transport string) *tls.
 	cfg := tlsConfig.Clone()
 	getConfigForClient := cfg.GetConfigForClient
 	cfg.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
-		s.recordJA4Fingerprint(hello, transport)
-		if getConfigForClient == nil {
-			return nil, nil
+		var config *tls.Config
+		if getConfigForClient != nil {
+			var err error
+			config, err = getConfigForClient(hello)
+			if err != nil {
+				// The handshake fails, so no request needs its fingerprint.
+				return nil, err
+			}
 		}
-		return getConfigForClient(hello)
+		s.recordJA4Fingerprint(hello, transport)
+		return config, nil
 	}
 
 	return cfg
@@ -573,15 +572,10 @@ func (s *Server) http3ConnContext(ctx context.Context, conn *quic.Conn) context.
 
 	localAddr := conn.LocalAddr().String()
 	remoteAddr := conn.RemoteAddr().String()
-	ja4 := s.fingerprints.Get(localAddr, remoteAddr)
+	ja4 := s.fingerprints.Take(localAddr, remoteAddr)
 	if ja4 == "" {
 		return ctx
 	}
-
-	go func() {
-		<-conn.Context().Done()
-		s.fingerprints.Delete(localAddr, remoteAddr)
-	}()
 
 	return middleware.ContextWithJA4Fingerprint(ctx, ja4)
 }

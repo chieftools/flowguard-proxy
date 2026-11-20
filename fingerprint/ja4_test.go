@@ -2,7 +2,9 @@ package fingerprint
 
 import (
 	"crypto/tls"
+	"fmt"
 	"testing"
+	"time"
 )
 
 func TestJA4FromClientHello(t *testing.T) {
@@ -47,17 +49,40 @@ func TestJA4FromClientHelloEmptyLists(t *testing.T) {
 	}
 }
 
-func TestStoreDelete(t *testing.T) {
+func TestStoreTakeReturnsTheFingerprintOnce(t *testing.T) {
 	store := NewStore()
 	store.Set("127.0.0.1:443", "192.0.2.1:51515", "ja4")
 
-	if got := store.Get("127.0.0.1:443", "192.0.2.1:51515"); got != "ja4" {
+	if got := store.Take("127.0.0.1:443", "192.0.2.1:51515"); got != "ja4" {
 		t.Fatalf("unexpected stored value: %q", got)
 	}
+	if got := store.Take("127.0.0.1:443", "192.0.2.1:51515"); got != "" {
+		t.Fatalf("expected the value to be taken, got %q", got)
+	}
+}
 
-	store.Delete("127.0.0.1:443", "192.0.2.1:51515")
+func TestStoreDropsNewFingerprintsWhenFull(t *testing.T) {
+	store := NewStore()
+	for i := range storeMaxEntries {
+		store.Set("127.0.0.1:443", fmt.Sprintf("192.0.2.1:%d", i), "ja4")
+	}
 
-	if got := store.Get("127.0.0.1:443", "192.0.2.1:51515"); got != "" {
-		t.Fatalf("expected deleted value, got %q", got)
+	store.Set("127.0.0.1:443", "198.51.100.1:443", "ja4")
+	if got := store.Take("127.0.0.1:443", "198.51.100.1:443"); got != "" {
+		t.Fatal("expected a new fingerprint to be dropped while the store is full")
+	}
+	if len(store.entries) != storeMaxEntries {
+		t.Fatalf("store holds %d entries, want %d", len(store.entries), storeMaxEntries)
+	}
+
+	// Expired entries are cleaned up to make room.
+	for k, entry := range store.entries {
+		entry.expiresAt = time.Now().Add(-time.Second)
+		store.entries[k] = entry
+	}
+	store.lastCleanup = time.Time{}
+	store.Set("127.0.0.1:443", "198.51.100.1:443", "ja4")
+	if got := store.Take("127.0.0.1:443", "198.51.100.1:443"); got != "ja4" {
+		t.Fatal("expected expired entries to make room for a new fingerprint")
 	}
 }

@@ -5,8 +5,18 @@ import (
 	"time"
 )
 
-const storeTTL = 10 * time.Minute
+const (
+	// storeTTL is how long a fingerprint waits for its connection to finish
+	// the handshake and take it. It is well above the QUIC handshake timeout.
+	storeTTL = 30 * time.Second
 
+	// storeMaxEntries caps the fingerprints of handshakes in progress, so a
+	// flood of handshakes that never finish cannot grow the store unbounded.
+	storeMaxEntries = 100_000
+)
+
+// Store holds the fingerprints of QUIC handshakes until their connection
+// takes them.
 type Store struct {
 	mu          sync.Mutex
 	entries     map[string]storeEntry
@@ -24,56 +34,56 @@ func NewStore() *Store {
 	}
 }
 
+// Set stores a fingerprint. When the store is full of unexpired entries, the
+// fingerprint is dropped.
 func (s *Store) Set(localAddr, remoteAddr, value string) {
 	if s == nil || localAddr == "" || remoteAddr == "" || value == "" {
 		return
 	}
 
 	now := time.Now()
+	k := key(localAddr, remoteAddr)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.entries[key(localAddr, remoteAddr)] = storeEntry{
+	// Clean up once a minute, or once a second while the store is full.
+	full := len(s.entries) >= storeMaxEntries
+	if since := now.Sub(s.lastCleanup); since > time.Minute || (full && since > time.Second) {
+		s.cleanupLocked(now)
+		full = len(s.entries) >= storeMaxEntries
+	}
+	if _, exists := s.entries[k]; full && !exists {
+		return
+	}
+
+	s.entries[k] = storeEntry{
 		value:     value,
 		expiresAt: now.Add(storeTTL),
 	}
-
-	if now.Sub(s.lastCleanup) > time.Minute {
-		s.cleanupLocked(now)
-	}
 }
 
-func (s *Store) Get(localAddr, remoteAddr string) string {
+// Take returns a stored fingerprint and removes it from the store.
+func (s *Store) Take(localAddr, remoteAddr string) string {
 	if s == nil || localAddr == "" || remoteAddr == "" {
 		return ""
 	}
 
 	now := time.Now()
+	k := key(localAddr, remoteAddr)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	entry, ok := s.entries[key(localAddr, remoteAddr)]
-	if !ok || now.After(entry.expiresAt) {
-		delete(s.entries, key(localAddr, remoteAddr))
+	entry, ok := s.entries[k]
+	if !ok {
 		return ""
 	}
-
-	entry.expiresAt = now.Add(storeTTL)
-	s.entries[key(localAddr, remoteAddr)] = entry
-	return entry.value
-}
-
-func (s *Store) Delete(localAddr, remoteAddr string) {
-	if s == nil || localAddr == "" || remoteAddr == "" {
-		return
+	delete(s.entries, k)
+	if now.After(entry.expiresAt) {
+		return ""
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	delete(s.entries, key(localAddr, remoteAddr))
+	return entry.value
 }
 
 func (s *Store) cleanupLocked(now time.Time) {
