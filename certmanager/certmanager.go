@@ -3,6 +3,7 @@ package certmanager
 import (
 	"crypto/ecdsa"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -52,6 +53,10 @@ type Manager struct {
 	nginxCertFiles    []string                              // List of certificate files referenced in NGINX config
 	nginxConfigFiles  []string                              // List of NGINX config files to watch
 	nginxConfigLoaded bool                                  // True when the configured NGINX config was read successfully
+
+	// parsedCertificates holds the certificates parsed by the last load, by
+	// the SHA-256 of their PEM data, so a reload parses only changed files.
+	parsedCertificates map[[sha256.Size]byte]*tls.Certificate
 }
 
 // New creates a new certificate manager
@@ -712,6 +717,11 @@ func (cm *Manager) parseCombinedPEM(pemData []byte) (*tls.Certificate, error) {
 func (cm *Manager) loadAllCertificates(verbose bool) {
 	// Load into temporary map
 	tempHostnameCache := make(map[string][]*certificateWithMetadata)
+	parser := certificateParser{
+		manager:  cm,
+		previous: cm.parsedCertificates,
+		current:  make(map[[sha256.Size]byte]*tls.Certificate),
+	}
 
 	successCount := 0
 	fromDir := 0
@@ -725,7 +735,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	// certificate directory if provided
 	if cm.config.CertPath != "" && IsDirectAdminRoot(cm.config.CertPath) {
 		for _, pair := range directAdminCertificates(cm.config.CertPath) {
-			metadata, hostnames := cm.loadCertificatePair(pair, verbose)
+			metadata, hostnames := cm.loadCertificatePair(&parser, pair, verbose)
 			if metadata == nil {
 				continue
 			}
@@ -737,7 +747,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 		}
 	} else if cm.config.CertPath != "" && IsCertbotRoot(cm.config.CertPath) {
 		for _, pair := range certbotCertificates(cm.config.CertPath) {
-			metadata, hostnames := cm.loadCertificatePair(pair, verbose)
+			metadata, hostnames := cm.loadCertificatePair(&parser, pair, verbose)
 			if metadata == nil {
 				continue
 			}
@@ -766,7 +776,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 					continue
 				}
 
-				cert, err := cm.parseCombinedPEM(pemData)
+				cert, err := parser.parse(pemData)
 				if err != nil {
 					if verbose {
 						log.Printf("[cert_manager] Failed to parse certificate %s: %v", certFile, err)
@@ -848,7 +858,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 			cm.nginxCertFiles = certFiles
 
 			for _, pair := range pairs {
-				metadata, hostnames := cm.loadCertificatePair(pair, verbose)
+				metadata, hostnames := cm.loadCertificatePair(&parser, pair, verbose)
 				if metadata == nil {
 					continue
 				}
@@ -867,6 +877,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	cm.acmeCertificates = acmeCertificates
 	cm.nginxConfigLoaded = nginxConfigLoaded
 	cm.cacheMutex.Unlock()
+	cm.parsedCertificates = parser.current
 
 	// Build status message
 	var sources []string
@@ -895,7 +906,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 
 // loadCertificatePair reads and parses a certificate pair. It returns nil when
 // the pair cannot be read or parsed, is expired, or names no valid hostname.
-func (cm *Manager) loadCertificatePair(pair Certificate, verbose bool) (*certificateWithMetadata, []string) {
+func (cm *Manager) loadCertificatePair(parser *certificateParser, pair Certificate, verbose bool) (*certificateWithMetadata, []string) {
 	combinedPEM, err := readCertificatePair(pair)
 	if err != nil {
 		if verbose {
@@ -904,7 +915,7 @@ func (cm *Manager) loadCertificatePair(pair Certificate, verbose bool) (*certifi
 		return nil, nil
 	}
 
-	cert, err := cm.parseCombinedPEM(combinedPEM)
+	cert, err := parser.parse(combinedPEM)
 	if err != nil {
 		if verbose {
 			log.Printf("[cert_manager] Failed to parse certificate pair %s + %s: %v", pair.CertPath, pair.KeyPath, err)
@@ -928,6 +939,30 @@ func (cm *Manager) loadCertificatePair(pair Certificate, verbose bool) (*certifi
 	}
 
 	return cm.extractCertificateMetadata(cert, pair.CertPath, hostnames), hostnames
+}
+
+// certificateParser parses certificates for one load, reusing the result of
+// the previous load for PEM data that did not change.
+type certificateParser struct {
+	manager  *Manager
+	previous map[[sha256.Size]byte]*tls.Certificate
+	current  map[[sha256.Size]byte]*tls.Certificate
+}
+
+func (p *certificateParser) parse(pemData []byte) (*tls.Certificate, error) {
+	key := sha256.Sum256(pemData)
+	if cert, ok := p.current[key]; ok {
+		return cert, nil
+	}
+	cert, ok := p.previous[key]
+	if !ok {
+		var err error
+		if cert, err = p.manager.parseCombinedPEM(pemData); err != nil {
+			return nil, err
+		}
+	}
+	p.current[key] = cert
+	return cert, nil
 }
 
 func (cm *Manager) getCertificateHostnames(cert *x509.Certificate) []string {

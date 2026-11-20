@@ -859,3 +859,34 @@ func TestSelectBestCertificate(t *testing.T) {
 		})
 	}
 }
+
+func TestReloadParsesOnlyChangedCertificates(t *testing.T) {
+	dir := t.TempDir()
+	keptPath := filepath.Join(dir, "kept.test.pem")
+	changedPath := filepath.Join(dir, "changed.test.pem")
+	removedPath := filepath.Join(dir, "removed.test.pem")
+	writeCombinedPEM(t, keptPath, createSelfSignedRSACert(t, "kept.test", time.Now().Add(time.Hour)))
+	writeCombinedPEM(t, changedPath, createSelfSignedRSACert(t, "changed.test", time.Now().Add(time.Hour)))
+	writeCombinedPEM(t, removedPath, createSelfSignedRSACert(t, "removed.test", time.Now().Add(time.Hour)))
+
+	manager := &Manager{config: Config{CertPath: dir}}
+	manager.loadAllCertificates(false)
+	kept := manager.GetCertificateForHostname("kept.test")
+	changed := manager.GetCertificateForHostname("changed.test")
+
+	writeCombinedPEM(t, changedPath, createSelfSignedRSACert(t, "changed.test", time.Now().Add(2*time.Hour)))
+	if err := os.Remove(removedPath); err != nil {
+		t.Fatalf("remove certificate: %v", err)
+	}
+	manager.loadAllCertificates(false)
+
+	if manager.GetCertificateForHostname("kept.test") != kept {
+		t.Fatal("expected the unchanged certificate to be reused")
+	}
+	if renewed := manager.GetCertificateForHostname("changed.test"); renewed == nil || renewed == changed {
+		t.Fatal("expected the replaced certificate to be parsed again")
+	}
+	if manager.GetCertificateForHostname("removed.test") != nil || len(manager.parsedCertificates) != 2 {
+		t.Fatalf("parsed certificates = %d, want the removed certificate dropped", len(manager.parsedCertificates))
+	}
+}
