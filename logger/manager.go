@@ -19,6 +19,7 @@ type Manager struct {
 	diagnostics *sinkDiagnostics
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
+	closing     sync.WaitGroup // Replaced sinks that are still flushing
 	closed      bool
 }
 
@@ -83,6 +84,7 @@ func (m *Manager) UpdateSinks(sinksConfig map[string]map[string]interface{}) err
 		if err := sink.Close(); err != nil {
 			log.Printf("[logger] Error closing sink %s: %v", name, err)
 		}
+		m.closing.Done()
 	}
 
 	return err
@@ -142,6 +144,8 @@ func (m *Manager) replaceSinks(sinksConfig map[string]map[string]interface{}) (m
 		log.Printf("[logger] Sink %s created/updated successfully", name)
 	}
 
+	// Close waits for these sinks to finish flushing
+	m.closing.Add(len(closing))
 	return closing, nil
 }
 
@@ -167,6 +171,9 @@ func (m *Manager) Close() error {
 	m.sinks = make(map[string]Sink)
 	m.sinkConfigs = make(map[string]string)
 	m.mu.Unlock()
+
+	// Wait for sinks a configuration change replaced to finish flushing
+	m.closing.Wait()
 
 	m.cancel()
 	m.wg.Wait()

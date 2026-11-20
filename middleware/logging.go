@@ -364,12 +364,6 @@ func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
 
 	loggingCfg := cfg.Logging
 
-	// Update sinks in the logger manager
-	// The manager will intelligently detect which sinks have actually changed
-	if err := lm.loggerManager.UpdateSinks(loggingCfg.Sinks); err != nil {
-		return err
-	}
-
 	hostInfo := &RequestLogEntryHostInfo{
 		Version: lm.version,
 	}
@@ -382,12 +376,23 @@ func (lm *LoggingMiddleware) updateLogOutput(cfg *config.Config) error {
 			Version:  lm.version,
 		}
 	}
+
+	// Apply what entries contain before installing new sinks, so a new sink
+	// never receives entries built with the previous header whitelist.
+	lm.mu.Lock()
+	lm.hostInfo = hostInfo
+	lm.headerWhitelist = loggingCfg.HeaderWhitelist
+	lm.mu.Unlock()
+
+	// Update sinks in the logger manager
+	// The manager will intelligently detect which sinks have actually changed
+	if err := lm.loggerManager.UpdateSinks(loggingCfg.Sinks); err != nil {
+		return err
+	}
 	enabled := lm.loggerManager.HasSinks()
 
 	lm.mu.Lock()
 	lm.enabled = enabled
-	lm.hostInfo = hostInfo
-	lm.headerWhitelist = loggingCfg.HeaderWhitelist
 	lm.mu.Unlock()
 
 	if enabled {

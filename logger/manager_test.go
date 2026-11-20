@@ -1,9 +1,12 @@
 package logger
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -310,5 +313,45 @@ func TestManagerRejectsUnsupportedSinkType(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "unknown sink type 'unsupported'") {
 		t.Fatalf("expected unknown sink type error, got: %v", err)
+	}
+}
+
+func TestManagerCloseWaitsForReplacedSinksToFlush(t *testing.T) {
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseBackend := func() { releaseOnce.Do(func() { close(release) }) }
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer backend.Close()
+	defer releaseBackend()
+
+	manager := NewManager("FlowGuard/test")
+	if err := manager.UpdateSinks(map[string]map[string]interface{}{"blocked": {"type": "loki", "url": backend.URL}}); err != nil {
+		t.Fatalf("add sink: %v", err)
+	}
+	manager.Write(&LogEntry{Data: map[string]interface{}{"message": "last entry"}})
+
+	// Removing the sink waits for the blocked backend while it flushes.
+	go func() { _ = manager.UpdateSinks(nil) }()
+	time.Sleep(50 * time.Millisecond)
+
+	closed := make(chan struct{})
+	go func() {
+		manager.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while a replaced sink was still flushing")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	releaseBackend()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return after the replaced sink finished flushing")
 	}
 }

@@ -17,13 +17,15 @@ func TestLoggingMiddlewareServesRequestsWhileARemovedSinkFlushes(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer backend.Close()
-	defer close(release)
 
 	lm := &LoggingMiddleware{
 		loggerManager: logger.NewManager("FlowGuard/test"),
 		version:       "test",
 	}
 	defer lm.loggerManager.Close()
+	// Release the backend before closing the manager, which waits for the
+	// removed sink to flush.
+	defer close(release)
 	if err := lm.updateLogOutput(&config.Config{Logging: &config.LoggingConfig{
 		Sinks: map[string]map[string]interface{}{"blocked": {"type": "loki", "url": backend.URL}},
 	}}); err != nil {
