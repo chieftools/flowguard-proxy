@@ -49,6 +49,7 @@ type Manager struct {
 	cacheMutex        sync.RWMutex
 	watchedDirs       map[string]bool                       // Track which directories we're watching
 	hostnameCache     map[string][]*certificateWithMetadata // Maps hostname to array of certificates
+	expiredCache      map[string][]*certificateWithMetadata // Certificates already expired when loaded, by hostname
 	acmeCertificates  []*certificateWithMetadata            // Last successfully parsed Traefik ACME certificates
 	nginxCertFiles    []string                              // List of certificate files referenced in NGINX config
 	nginxConfigFiles  []string                              // List of NGINX config files to watch
@@ -71,6 +72,7 @@ func New(config Config) *Manager {
 	cm := &Manager{
 		config:           config,
 		hostnameCache:    make(map[string][]*certificateWithMetadata),
+		expiredCache:     make(map[string][]*certificateWithMetadata),
 		watcher:          watcher,
 		stopChan:         make(chan struct{}),
 		nginxConfigFiles: make([]string, 0),
@@ -142,7 +144,16 @@ func (cm *Manager) nextProtos() []string {
 	return []string{"h2", "http/1.1"}
 }
 
-// GetCertificateForHostname retrieves the best matching certificate for a given hostname
+// GetCertificateForHostname retrieves the best matching certificate for a
+// given hostname: a valid certificate that names it, else a valid default
+// certificate, else an expired certificate that names it, else an expired
+// default certificate.
+//
+// Expired certificates are a last resort so a TLS handshake still completes
+// when a certificate has lapsed, as it does on a web server serving the same
+// file. Without one, the handshake fails, and an ACME HTTP-01 challenge that
+// the web server redirects to HTTPS can never renew the certificate. Let's
+// Encrypt does not validate the certificate after such a redirect.
 func (cm *Manager) GetCertificateForHostname(hostname string) *tls.Certificate {
 	hostname = normalizeHostname(hostname)
 
@@ -153,12 +164,23 @@ func (cm *Manager) GetCertificateForHostname(hostname string) *tls.Certificate {
 		return cert
 	}
 
-	// Finally, try to find any default certificate in cache if we were given a default hostname
+	// Next, try to find any default certificate in cache if we were given a default hostname
 	if cm.config.DefaultHostname != "" {
 		if candidates, exists := cm.hostnameCache[cm.config.DefaultHostname]; exists {
 			if cert := selectBestCertificate(candidates); cert != nil {
 				return cert
 			}
+		}
+	}
+
+	// Finally, serve an expired certificate rather than fail the handshake
+	if cert := selectLatestExpiredCertificate(cm.matchingCandidatesLocked(hostname)); cert != nil {
+		return cert
+	}
+	if cm.config.DefaultHostname != "" {
+		candidates := append(slices.Clone(cm.hostnameCache[cm.config.DefaultHostname]), cm.expiredCache[cm.config.DefaultHostname]...)
+		if cert := selectLatestExpiredCertificate(candidates); cert != nil {
+			return cert
 		}
 	}
 
@@ -178,32 +200,38 @@ func (cm *Manager) hasCertificateForHostname(hostname string) bool {
 // matchingCertificateLocked returns the best valid certificate that names
 // hostname exactly or by wildcard. The caller holds cacheMutex.
 func (cm *Manager) matchingCertificateLocked(hostname string) *tls.Certificate {
-	// Gather all matching certificates from both exact and wildcard matches
+	// Select the best valid candidate; nil when every one has expired
+	return selectBestCertificate(cm.matchingCandidatesLocked(hostname, cm.hostnameCache))
+}
+
+// matchingCandidatesLocked gathers the certificates in caches that name
+// hostname exactly or by wildcard, once each. Without caches it searches both
+// the valid and the expired certificates. The caller holds cacheMutex.
+func (cm *Manager) matchingCandidatesLocked(hostname string, caches ...map[string][]*certificateWithMetadata) []*certificateWithMetadata {
+	if len(caches) == 0 {
+		caches = []map[string][]*certificateWithMetadata{cm.hostnameCache, cm.expiredCache}
+	}
+
+	names := []string{hostname}
+	// A wildcard match, such as "*.example.com" for "www.example.com"
+	if pattern, ok := wildcardHostname(hostname); ok {
+		names = append(names, pattern)
+	}
+
 	var allCandidates []*certificateWithMetadata
 	seenPaths := make(map[string]bool)
-
-	// Check for exact hostname match
-	if candidates, exists := cm.hostnameCache[hostname]; exists {
-		for _, candidate := range candidates {
-			if !seenPaths[candidate.filePath] {
-				allCandidates = append(allCandidates, candidate)
-				seenPaths[candidate.filePath] = true
+	for _, name := range names {
+		for _, cache := range caches {
+			for _, candidate := range cache[name] {
+				if !seenPaths[candidate.filePath] {
+					allCandidates = append(allCandidates, candidate)
+					seenPaths[candidate.filePath] = true
+				}
 			}
 		}
 	}
 
-	// Check for a wildcard match, such as "*.example.com" for "www.example.com"
-	if pattern, ok := wildcardHostname(hostname); ok {
-		for _, candidate := range cm.hostnameCache[pattern] {
-			if !seenPaths[candidate.filePath] {
-				allCandidates = append(allCandidates, candidate)
-				seenPaths[candidate.filePath] = true
-			}
-		}
-	}
-
-	// Select the best valid candidate; nil when every one has expired
-	return selectBestCertificate(allCandidates)
+	return allCandidates
 }
 
 // ShowCertificatesForHostname displays all certificates for a hostname and which will be served
@@ -222,20 +250,18 @@ func (cm *Manager) ShowCertificatesForHostname(hostname string) {
 	uniqueCandidates := make(map[string]*candidateWithMatch)
 
 	// Check for exact match
-	if candidates, exists := cm.hostnameCache[hostname]; exists {
-		for _, meta := range candidates {
-			if _, exists := uniqueCandidates[meta.filePath]; !exists {
-				uniqueCandidates[meta.filePath] = &candidateWithMatch{
-					meta:      meta,
-					matchType: "exact",
-				}
+	for _, meta := range append(slices.Clone(cm.hostnameCache[hostname]), cm.expiredCache[hostname]...) {
+		if _, exists := uniqueCandidates[meta.filePath]; !exists {
+			uniqueCandidates[meta.filePath] = &candidateWithMatch{
+				meta:      meta,
+				matchType: "exact",
 			}
 		}
 	}
 
 	// Check for a wildcard match
 	if pattern, ok := wildcardHostname(hostname); ok {
-		for _, meta := range cm.hostnameCache[pattern] {
+		for _, meta := range append(slices.Clone(cm.hostnameCache[pattern]), cm.expiredCache[pattern]...) {
 			if _, exists := uniqueCandidates[meta.filePath]; !exists {
 				uniqueCandidates[meta.filePath] = &candidateWithMatch{
 					meta:      meta,
@@ -352,6 +378,7 @@ func (cm *Manager) ShowCertificatesForHostname(hostname string) {
 		fmt.Printf("  3. Wildcard over exact match\n")
 		fmt.Printf("  4. ECDSA over RSA\n")
 		fmt.Printf("  5. Longer validity period\n")
+		fmt.Printf("  Without a valid certificate or default certificate, the most recently expired one\n")
 		fmt.Println()
 	}
 }
@@ -731,8 +758,24 @@ func (cm *Manager) parseCombinedPEM(pemData []byte) (*tls.Certificate, error) {
 }
 
 func (cm *Manager) loadAllCertificates(verbose bool) {
-	// Load into temporary map
+	// Load into temporary maps. Certificates that have already expired go to
+	// their own map, so they are served only when no valid certificate matches.
 	tempHostnameCache := make(map[string][]*certificateWithMetadata)
+	tempExpiredCache := make(map[string][]*certificateWithMetadata)
+	now := time.Now()
+	expiredCount := 0
+	add := func(metadata *certificateWithMetadata, hostnames []string) bool {
+		cache := tempHostnameCache
+		valid := metadata.notAfter.After(now)
+		if !valid {
+			cache = tempExpiredCache
+			expiredCount++
+		}
+		for _, name := range hostnames {
+			cache[name] = append(cache[name], metadata)
+		}
+		return valid
+	}
 	parser := certificateParser{
 		manager:  cm,
 		previous: cm.parsedCertificates,
@@ -752,11 +795,8 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	if cm.config.CertPath != "" && IsDirectAdminRoot(cm.config.CertPath) {
 		for _, pair := range directAdminCertificates(cm.config.CertPath) {
 			metadata, hostnames := cm.loadCertificatePair(&parser, pair, verbose)
-			if metadata == nil {
+			if metadata == nil || !add(metadata, hostnames) {
 				continue
-			}
-			for _, name := range hostnames {
-				tempHostnameCache[name] = append(tempHostnameCache[name], metadata)
 			}
 			successCount++
 			fromDirectAdmin++
@@ -764,11 +804,8 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	} else if cm.config.CertPath != "" && IsCertbotRoot(cm.config.CertPath) {
 		for _, pair := range certbotCertificates(cm.config.CertPath) {
 			metadata, hostnames := cm.loadCertificatePair(&parser, pair, verbose)
-			if metadata == nil {
+			if metadata == nil || !add(metadata, hostnames) {
 				continue
-			}
-			for _, name := range hostnames {
-				tempHostnameCache[name] = append(tempHostnameCache[name], metadata)
 			}
 			successCount++
 			fromCertbot++
@@ -800,23 +837,13 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 					continue
 				}
 
-				// Check if certificate is expired
-				if cert.Leaf != nil && time.Now().After(cert.Leaf.NotAfter) {
-					if verbose {
-						log.Printf("[cert_manager] Skipping expired certificate %s (expired %s)", certFile, cert.Leaf.NotAfter.Format("2006-01-02"))
-					}
-					continue
-				}
-
 				// Map the certificate to all its valid hostnames
 				if cert.Leaf != nil {
+					logExpiredCertificate(verbose, certFile, cert.Leaf)
 					hostnames := cm.getCertificateHostnames(cert.Leaf)
 					if len(hostnames) > 0 {
 						metadata := cm.extractCertificateMetadata(cert, certFile, hostnames)
-						if metadata != nil {
-							for _, name := range hostnames {
-								tempHostnameCache[name] = append(tempHostnameCache[name], metadata)
-							}
+						if metadata != nil && add(metadata, hostnames) {
 							successCount++
 							fromDir++
 						}
@@ -844,8 +871,8 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 			if metadata == nil || metadata.cert == nil || metadata.cert.Leaf == nil {
 				continue
 			}
-			for _, name := range cm.getCertificateHostnames(metadata.cert.Leaf) {
-				tempHostnameCache[name] = append(tempHostnameCache[name], metadata)
+			if !add(metadata, cm.getCertificateHostnames(metadata.cert.Leaf)) {
+				continue
 			}
 			successCount++
 			fromACME++
@@ -875,11 +902,8 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 
 			for _, pair := range pairs {
 				metadata, hostnames := cm.loadCertificatePair(&parser, pair, verbose)
-				if metadata == nil {
+				if metadata == nil || !add(metadata, hostnames) {
 					continue
-				}
-				for _, name := range hostnames {
-					tempHostnameCache[name] = append(tempHostnameCache[name], metadata)
 				}
 				successCount++
 				fromNginx++
@@ -890,6 +914,7 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	// Atomically swap the cache
 	cm.cacheMutex.Lock()
 	cm.hostnameCache = tempHostnameCache
+	cm.expiredCache = tempExpiredCache
 	cm.acmeCertificates = acmeCertificates
 	cm.nginxConfigLoaded = nginxConfigLoaded
 	cm.cacheMutex.Unlock()
@@ -918,10 +943,14 @@ func (cm *Manager) loadAllCertificates(verbose bool) {
 	}
 
 	log.Printf("[cert_manager] Loaded %d certificates (%s) covering %d hostnames", successCount, sourceMsg, len(tempHostnameCache))
+	if expiredCount > 0 {
+		log.Printf("[cert_manager] Loaded %d expired certificates covering %d hostnames, served only when no valid certificate matches", expiredCount, len(tempExpiredCache))
+	}
 }
 
 // loadCertificatePair reads and parses a certificate pair. It returns nil when
-// the pair cannot be read or parsed, is expired, or names no valid hostname.
+// the pair cannot be read or parsed or names no valid hostname. An expired
+// certificate is returned too, to serve when no valid certificate matches.
 func (cm *Manager) loadCertificatePair(parser *certificateParser, pair Certificate, verbose bool) (*certificateWithMetadata, []string) {
 	combinedPEM, err := readCertificatePair(pair)
 	if err != nil {
@@ -942,12 +971,7 @@ func (cm *Manager) loadCertificatePair(parser *certificateParser, pair Certifica
 		return nil, nil
 	}
 
-	if time.Now().After(cert.Leaf.NotAfter) {
-		if verbose {
-			log.Printf("[cert_manager] Skipping expired certificate %s (expired %s)", pair.CertPath, cert.Leaf.NotAfter.Format("2006-01-02"))
-		}
-		return nil, nil
-	}
+	logExpiredCertificate(verbose, pair.CertPath, cert.Leaf)
 
 	hostnames := cm.getCertificateHostnames(cert.Leaf)
 	if len(hostnames) == 0 {
@@ -955,6 +979,14 @@ func (cm *Manager) loadCertificatePair(parser *certificateParser, pair Certifica
 	}
 
 	return cm.extractCertificateMetadata(cert, pair.CertPath, hostnames), hostnames
+}
+
+// logExpiredCertificate notes in verbose mode that an expired certificate is
+// kept only to serve when no valid certificate matches.
+func logExpiredCertificate(verbose bool, source string, leaf *x509.Certificate) {
+	if verbose && time.Now().After(leaf.NotAfter) {
+		log.Printf("[cert_manager] Certificate %s expired %s; serving it only when no valid certificate matches", source, leaf.NotAfter.Format("2006-01-02"))
+	}
 }
 
 // certificateParser parses certificates for one load, reusing the result of
@@ -1274,4 +1306,26 @@ func selectBestCertificate(candidates []*certificateWithMetadata) *tls.Certifica
 	})
 
 	return valid[0].cert
+}
+
+// selectLatestExpiredCertificate selects the expired candidate that expired
+// last, preferring a trusted one when two expired at the same time. It
+// returns nil when no candidate has expired.
+func selectLatestExpiredCertificate(candidates []*certificateWithMetadata) *tls.Certificate {
+	now := time.Now()
+	var latest *certificateWithMetadata
+	for _, candidate := range candidates {
+		if candidate.notAfter.After(now) {
+			continue
+		}
+		if latest == nil || candidate.notAfter.After(latest.notAfter) ||
+			(candidate.notAfter.Equal(latest.notAfter) && candidate.isTrusted && !latest.isTrusted) {
+			latest = candidate
+		}
+	}
+	if latest == nil {
+		return nil
+	}
+
+	return latest.cert
 }

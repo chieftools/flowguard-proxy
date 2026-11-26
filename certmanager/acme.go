@@ -132,7 +132,6 @@ func (cm *Manager) loadTraefikACMECertificates(path string, verbose bool) ([]*ce
 		return nil, err
 	}
 
-	now := time.Now()
 	certificates := make([]*certificateWithMetadata, 0, len(entries))
 	for _, entry := range entries {
 		sourceID := traefikACMESourceID(path, entry)
@@ -149,12 +148,7 @@ func (cm *Manager) loadTraefikACMECertificates(path string, verbose bool) ([]*ce
 			}
 			continue
 		}
-		if now.After(cert.Leaf.NotAfter) {
-			if verbose {
-				log.Printf("[cert_manager] Skipping expired Traefik ACME certificate %s (expired %s)", sourceID, cert.Leaf.NotAfter.Format("2006-01-02"))
-			}
-			continue
-		}
+		logExpiredCertificate(verbose, sourceID, cert.Leaf)
 
 		hostnames := cm.getCertificateHostnames(cert.Leaf)
 		if len(hostnames) == 0 {

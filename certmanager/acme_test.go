@@ -270,8 +270,8 @@ func TestTraefikACMELoadsResolversAndSkipsInvalidEntries(t *testing.T) {
 	if manager.GetCertificateForHostname("wrong.example.com") != nil {
 		t.Fatal("expected JSON domain metadata to be ignored")
 	}
-	if manager.GetCertificateForHostname("expired.example.com") != nil {
-		t.Fatal("expected expired certificate to be skipped")
+	if manager.GetCertificateForHostname("expired.example.com") == nil {
+		t.Fatal("expected expired certificate to be served without a valid one")
 	}
 	if got := manager.HostnameCount(); got != 2 {
 		t.Fatalf("expected 2 loaded hostnames, got %d", got)

@@ -342,6 +342,49 @@ func TestGetTLSConfigServesTheDefaultCertificateWithoutResumptionAfterCertificat
 	}
 }
 
+// An ACME HTTP-01 challenge that the web server redirects to HTTPS needs the
+// handshake to complete with the expired certificate, or the certificate can
+// never be renewed. Let's Encrypt does not validate it after a redirect.
+func TestGetTLSConfigServesAnExpiredCertificateUntilItIsRenewed(t *testing.T) {
+	certDir := t.TempDir()
+	certFile := filepath.Join(certDir, "tenant.test.pem")
+	expired := createSelfSignedRSACert(t, "tenant.test", time.Now().Add(-24*time.Hour))
+	writeCombinedPEM(t, certFile, expired)
+
+	manager := &Manager{config: Config{CertPath: certDir}}
+	manager.loadAllCertificates(false)
+	if got := manager.HostnameCount(); got != 0 {
+		t.Fatalf("HostnameCount() = %d, want expired certificates not counted", got)
+	}
+	serverConfig := manager.GetTlsConfig()
+	clientConfig := &tls.Config{InsecureSkipVerify: true, ServerName: "tenant.test"}
+
+	state, err := performLoopbackTLSHandshake(t, serverConfig, clientConfig)
+	if err != nil {
+		t.Fatalf("handshake with only an expired certificate: %v", err)
+	}
+	if len(state.PeerCertificates) == 0 || !state.PeerCertificates[0].NotAfter.Equal(expired.Leaf.NotAfter) {
+		t.Fatal("expected the expired certificate to be served")
+	}
+
+	renewed := createSelfSignedRSACert(t, "tenant.test", time.Now().Add(90*24*time.Hour))
+	writeCombinedPEM(t, certFile, renewed)
+	manager.loadAllCertificates(false)
+
+	state, err = performLoopbackTLSHandshake(t, serverConfig, clientConfig)
+	if err != nil {
+		t.Fatalf("handshake after renewal: %v", err)
+	}
+	if len(state.PeerCertificates) == 0 || !state.PeerCertificates[0].NotAfter.Equal(renewed.Leaf.NotAfter) {
+		t.Fatal("expected the renewed certificate to be served")
+	}
+
+	clientConfig.ServerName = "other.test"
+	if _, err := performLoopbackTLSHandshake(t, serverConfig, clientConfig); err == nil {
+		t.Fatal("expected a handshake for a hostname without any certificate to fail")
+	}
+}
+
 // performLoopbackTLSHandshake completes a handshake over TCP and reads one
 // byte from the server, so the client also processes TLS 1.3 session tickets.
 func performLoopbackTLSHandshake(t *testing.T, serverConfig, clientConfig *tls.Config) (tls.ConnectionState, error) {
@@ -559,6 +602,7 @@ func TestGetCertificateForHostnameFallsBackWhenMatchesAreExpired(t *testing.T) {
 	expiredWildcardCert := createWildcardCert(t, "legacy.test", now.Add(-time.Hour), true)
 	validExactCert := createSelfSignedRSACert(t, "active.test", now.Add(24*time.Hour))
 	expiredDefaultCert := createSelfSignedRSACert(t, "expired-fallback.test", now.Add(-time.Hour))
+	recentlyExpiredCert := createSelfSignedRSACert(t, "retired.test", now.Add(-time.Minute))
 
 	metadata := func(cert *tls.Certificate, path string) *certificateWithMetadata {
 		return &certificateWithMetadata{
@@ -575,6 +619,7 @@ func TestGetCertificateForHostnameFallsBackWhenMatchesAreExpired(t *testing.T) {
 		hostname        string
 		defaultHostname string
 		hostnameCache   map[string][]*certificateWithMetadata
+		expiredCache    map[string][]*certificateWithMetadata
 		want            *tls.Certificate
 	}{
 		{
@@ -608,12 +653,68 @@ func TestGetCertificateForHostnameFallsBackWhenMatchesAreExpired(t *testing.T) {
 			want: validExactCert,
 		},
 		{
-			name:            "expired match and expired default return nil",
+			name:            "expired match is preferred over expired default",
 			hostname:        "retired.test",
 			defaultHostname: "expired-fallback.test",
 			hostnameCache: map[string][]*certificateWithMetadata{
 				"retired.test":          {metadata(expiredExactCert, "/certs/retired.pem")},
 				"expired-fallback.test": {metadata(expiredDefaultCert, "/certs/expired-fallback.pem")},
+			},
+			want: expiredExactCert,
+		},
+		{
+			name:     "expired match is served without a default",
+			hostname: "retired.test",
+			expiredCache: map[string][]*certificateWithMetadata{
+				"retired.test": {metadata(expiredExactCert, "/certs/retired.pem")},
+			},
+			want: expiredExactCert,
+		},
+		{
+			name:     "expired wildcard match is served without a default",
+			hostname: "app.legacy.test",
+			expiredCache: map[string][]*certificateWithMetadata{
+				"*.legacy.test": {metadata(expiredWildcardCert, "/certs/legacy.pem")},
+			},
+			want: expiredWildcardCert,
+		},
+		{
+			name:            "expired default is served for an unknown hostname",
+			hostname:        "unknown.test",
+			defaultHostname: "expired-fallback.test",
+			expiredCache: map[string][]*certificateWithMetadata{
+				"expired-fallback.test": {metadata(expiredDefaultCert, "/certs/expired-fallback.pem")},
+			},
+			want: expiredDefaultCert,
+		},
+		{
+			name:            "valid default is preferred over expired match",
+			hostname:        "retired.test",
+			defaultHostname: "fallback.test",
+			hostnameCache: map[string][]*certificateWithMetadata{
+				"fallback.test": {metadata(defaultCert, "/certs/fallback.pem")},
+			},
+			expiredCache: map[string][]*certificateWithMetadata{
+				"retired.test": {metadata(expiredExactCert, "/certs/retired.pem")},
+			},
+			want: defaultCert,
+		},
+		{
+			name:     "most recently expired match is served",
+			hostname: "retired.test",
+			hostnameCache: map[string][]*certificateWithMetadata{
+				"retired.test": {metadata(recentlyExpiredCert, "/certs/retired-recent.pem")},
+			},
+			expiredCache: map[string][]*certificateWithMetadata{
+				"retired.test": {metadata(expiredExactCert, "/certs/retired.pem")},
+			},
+			want: recentlyExpiredCert,
+		},
+		{
+			name:     "unknown hostname without a default returns nil",
+			hostname: "unknown.test",
+			expiredCache: map[string][]*certificateWithMetadata{
+				"retired.test": {metadata(expiredExactCert, "/certs/retired.pem")},
 			},
 			want: nil,
 		},
@@ -624,6 +725,7 @@ func TestGetCertificateForHostnameFallsBackWhenMatchesAreExpired(t *testing.T) {
 			manager := &Manager{
 				config:        Config{DefaultHostname: tt.defaultHostname},
 				hostnameCache: tt.hostnameCache,
+				expiredCache:  tt.expiredCache,
 			}
 
 			if got := manager.GetCertificateForHostname(tt.hostname); got != tt.want {

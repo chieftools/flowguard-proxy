@@ -121,8 +121,9 @@ func ProbeTraefikACMEFileSummary(path string) (ProbeSummary, error) {
 	}
 
 	hostnames := make(map[string]bool)
+	now := time.Now()
 	for _, certificate := range certificates {
-		if certificate == nil || certificate.cert == nil || certificate.cert.Leaf == nil {
+		if certificate == nil || certificate.cert == nil || certificate.cert.Leaf == nil || !certificate.notAfter.After(now) {
 			continue
 		}
 		summary.CertificateCount++
